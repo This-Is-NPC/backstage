@@ -52,9 +52,10 @@ from Conventional Commit messages:
 - `docs:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:`, and `perf:` do not
   force a version bump unless release-please includes them in changelog context.
 
-The manifest starts at `0.0.0` so the first releasable `feat:` commit opens the
-initial `v0.1.0` release PR. After that release PR merges, release-please updates
-the manifest to the published version and owns future bumps.
+The manifest starts at `0.0.0`, and `release-please-config.json` sets
+`initial-version` to `0.1.0`, so the first releasable commit opens the initial
+`v0.1.0` release PR. After that release PR merges, release-please updates the
+manifest to the published version and owns future bumps.
 
 Do not tag releases manually. Merge the release-please PR and the workflow will
 create the GitHub release, tag it as `vX.Y.Z`, and attach GoReleaser binaries.
