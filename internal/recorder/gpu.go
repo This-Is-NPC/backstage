@@ -121,7 +121,7 @@ func unexpectedWait(err error) error {
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		if status, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus); ok {
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 			if status.Signaled() && status.Signal() == syscall.SIGINT {
 				return nil
 			}
