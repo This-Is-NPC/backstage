@@ -75,10 +75,16 @@ repeatable build output.
 
 ## Quickstart
 
-Install:
+Install on Linux, macOS, or WSL:
 
 ```bash
-go install github.com/This-Is-NPC/backstage/cmd/backstage@latest
+curl -fsSL https://raw.githubusercontent.com/This-Is-NPC/backstage/master/install.sh | bash
+```
+
+Install on Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/This-Is-NPC/backstage/master/install.ps1 | iex
 ```
 
 Record a scene:
