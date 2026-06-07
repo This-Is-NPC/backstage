@@ -1,0 +1,21 @@
+[tools]
+go = "1.24"
+
+# Install target: override with BACKSTAGE_PREFIX (default ~/.local/bin).
+[env]
+BACKSTAGE_PREFIX = "{{ env.HOME }}/.local/bin"
+
+[tasks.install]
+description = "Build and install backstage to BACKSTAGE_PREFIX (~/.local/bin)"
+run = [
+  "go build -o bin/backstage ./cmd/backstage",
+  "install -Dm755 bin/backstage \"$BACKSTAGE_PREFIX/backstage\"",
+  "echo \"installed -> $BACKSTAGE_PREFIX/backstage\"",
+]
+
+[tasks.uninstall]
+description = "Remove the installed backstage binary"
+run = [
+  "rm -f \"$BACKSTAGE_PREFIX/backstage\"",
+  "echo \"removed -> $BACKSTAGE_PREFIX/backstage\"",
+]

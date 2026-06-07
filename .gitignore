@@ -1,0 +1,11 @@
+# User content (backstage projects: configs, scenes, hooks, demo state, recordings).
+# The generic tool is tracked; what you record with it is yours and stays local.
+/projects/
+
+__pycache__/
+*.pyc
+
+# Go build artifacts
+/bin/
+*.test
+*.out
