@@ -1,17 +1,51 @@
 [tools]
 go = "1.24"
+golangci-lint = "latest"
+"go:golang.org/x/vuln/cmd/govulncheck" = "latest"
 
 # Install target: override with BACKSTAGE_PREFIX (default ~/.local/bin).
 [env]
 BACKSTAGE_PREFIX = "{{ env.HOME }}/.local/bin"
 
+[tasks.fmt]
+description = "Format Go sources"
+run = "gofmt -w ."
+
+[tasks.build]
+description = "Build backstage into bin/ with the current git version"
+run = '''
+mkdir -p bin
+version="$(git describe --tags --always --dirty 2>/dev/null || printf dev)"
+go build -ldflags "-X main.version=${version}" -o bin/backstage ./cmd/backstage
+'''
+
+[tasks.test]
+description = "Run Go tests"
+run = "go test ./..."
+
+[tasks.vet]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.lint]
+description = "Run Go linter"
+run = "golangci-lint run"
+
+[tasks.vuln]
+description = "Run Go vulnerability scan"
+run = "govulncheck ./..."
+
+[tasks.check]
+description = "Run the full verification suite"
+run = "./scripts/check.sh"
+
 [tasks.install]
 description = "Build and install backstage to BACKSTAGE_PREFIX (~/.local/bin)"
-run = [
-  "go build -o bin/backstage ./cmd/backstage",
-  "install -Dm755 bin/backstage \"$BACKSTAGE_PREFIX/backstage\"",
-  "echo \"installed -> $BACKSTAGE_PREFIX/backstage\"",
-]
+depends = ["build"]
+run = '''
+install -Dm755 bin/backstage "$BACKSTAGE_PREFIX/backstage"
+echo "installed -> $BACKSTAGE_PREFIX/backstage"
+'''
 
 [tasks.uninstall]
 description = "Remove the installed backstage binary"

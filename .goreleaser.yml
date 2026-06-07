@@ -1,0 +1,51 @@
+version: 2
+
+project_name: backstage
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: backstage
+    main: ./cmd/backstage
+    binary: backstage
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: backstage
+    ids: [backstage]
+    name_template: 'backstage_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  disable: true
+
+release:
+  mode: append
+  draft: false
+  prerelease: auto

@@ -21,4 +21,5 @@ New here? **Getting started** → **Concepts** → **Writing scenes**. Reach for
 Design and direction, for contributors:
 
 - **[Architecture](internal/ARCHITECTURE.md)** — Go core, drivers, the road to a desktop app.
+- **[Development guide](internal/dev-guide.md)** — local checks, branch protection, and releases.
 - **[Requirements](internal/requirements.md)** — what Backstage must do, and scope.
