@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/This-Is-NPC/backstage/compare/v0.1.0...v0.2.0) (2026-06-15)
+
+
+### Features
+
+* live transitions in prompter style with interrupt-safe recording ([608e334](https://github.com/This-Is-NPC/backstage/commit/608e334c5e0e12b34c144ceecfe7fd44458b9310))
+* live transitions in prompter style with interrupt-safe recording ([7833589](https://github.com/This-Is-NPC/backstage/commit/7833589bb302a10afd4aad0f9e1dbe4ea81c9f85))
+
 ## 0.1.0 (2026-06-07)
 
 
