@@ -39,6 +39,7 @@ For the project config the scene runs under, see [Configuration](configuration.m
 | `type` | `target`, `value` | type `value` literally (no Enter) in the target pane |
 | `keys` | `target`, `commands` | send named keys / literals to the target pane |
 | `prop` | `value`, `args` | run an external script (any tool: browser, RPA, setup) |
+| `transition` | `value`, `args` | run a configured live transition as an in-scene overlay |
 | `wait` | — | just pause |
 
 Optional on any step: `delay-before`, `delay-after` (seconds), `key-delay`
@@ -53,11 +54,35 @@ the first pane.
 {"action": "prop", "value": "props/click.py", "args": ["--btn", "ok"]}
 ```
 
-The path is taken as-is if absolute, otherwise relative to the project root. The
-script runs with the project `env` and the project root as its working dir,
+The path must be relative to the project root; absolute paths and project escapes
+are rejected. The script runs with the project `env` and the project root as its
+working dir,
 blocks until it exits, and a non-zero exit is reported. This is how a scene
 reaches beyond the terminal: drive a browser, run an e2e suite, automate a
 desktop app. Whatever it puts on screen is recorded.
+
+### transition: reuse a live transition inside a scene
+
+```json
+{"action": "transition", "value": "chapter-browser", "args": ["--subtitle", "Anything visible can be recorded"]}
+```
+
+`value` names a transition from `backstage.json`. The transition must define
+`live.prop`; offline-only `cmd` transitions are valid for productions, but cannot
+run inside a scene. Backstage runs the live prop from the project root, appends
+the step `args` after the transition's configured `live.args`, substitutes the
+in-scene placeholders `{{w}}`/`{{h}}`/`{{fps}}`, blocks until the prop exits, and
+records whatever it showed on screen as part of the current scene. Use this for
+HTML/CSS chapter cards, animated overlays, or other visuals that need more
+control than the short built-in Prompter.
+
+`{{from}}`, `{{to}}`, and `{{out}}` are **not** available in-scene. `{{from}}`/
+`{{to}}` are production-only: they name the surrounding scenes of a transition
+segment, and an in-scene step has no neighbouring scenes, so they would only ever
+substitute to empty here. `{{out}}` is omitted because the recorder owns the clip
+file. (As in a production segment, `{{fps}}` falls back to `record.fps`, and when
+`render.w`/`render.h` are unset `{{w}}`/`{{h}}` substitute to `0`, meaning "monitor
+native" — the prop must treat `0` as native.)
 
 ### Aliases
 
