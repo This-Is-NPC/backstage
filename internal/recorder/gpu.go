@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -14,16 +15,23 @@ import (
 // gpuBinary is omarchy's hardware screen recorder (the Alt+PrintScreen tool).
 const gpuBinary = "gpu-screen-recorder"
 
+var (
+	recorderStopGrace = 5 * time.Second
+	recorderKillWait  = 2 * time.Second
+)
+
 // GPU records a whole monitor with gpu-screen-recorder: hardware-encoded, CFR,
 // no interactive region picker. Ports rec.sh.
 type GPU struct {
 	Monitor string
 	FPS     int
 
-	cmd  *exec.Cmd
-	out  string
-	done chan error
-	wait error
+	mu            sync.Mutex
+	cmd           *exec.Cmd
+	out           string
+	done          chan struct{}
+	wait          error
+	stopRequested bool
 }
 
 // NewGPU returns a recorder targeting the given monitor at fps.
@@ -49,22 +57,44 @@ func (g *GPU) Start(outPath string) error {
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
 		return err
 	}
+	cmd := exec.Command(gpuBinary, g.args(outPath)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	done := make(chan struct{})
+
+	g.mu.Lock()
+	if g.stopRequested {
+		g.mu.Unlock()
+		return fmt.Errorf("%s start cancelled", gpuBinary)
+	}
 	g.out = outPath
-	g.cmd = exec.Command(gpuBinary, g.args(outPath)...)
-	if err := g.cmd.Start(); err != nil {
+	g.cmd = cmd
+	g.done = done
+	g.wait = nil
+	g.stopRequested = false
+	if err := cmd.Start(); err != nil {
+		g.cmd = nil
+		g.done = nil
+		g.mu.Unlock()
 		return fmt.Errorf("start %s: %w", gpuBinary, err)
 	}
-	g.done = make(chan error, 1)
-	g.wait = nil
-	go func() { g.done <- g.cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		g.mu.Lock()
+		g.wait = err
+		close(done)
+		g.mu.Unlock()
+	}()
+	g.mu.Unlock()
 	for i := 0; i < 50; i++ { // ~10s
 		if _, err := os.Stat(outPath); err == nil {
 			return nil
 		}
 		select {
-		case err := <-g.done:
-			g.done = nil
-			g.wait = err
+		case <-done:
+			if _, err := os.Stat(outPath); err == nil {
+				return nil
+			}
+			err := g.waitErr()
 			if err == nil {
 				return fmt.Errorf("%s exited before creating %s", gpuBinary, outPath)
 			}
@@ -76,54 +106,113 @@ func (g *GPU) Start(outPath string) error {
 	return fmt.Errorf("%s did not create %s within 10s", gpuBinary, outPath)
 }
 
-// Stop SIGINTs the recorder so the mp4 is finalized, then waits for it to exit.
+// Stop SIGINTs the recorder so the mp4 is finalized, then waits with a bounded
+// SIGKILL fallback so interrupt cleanup cannot hang forever.
 func (g *GPU) Stop() (string, error) {
-	if g.cmd == nil || g.cmd.Process == nil {
+	g.mu.Lock()
+	out := g.out
+	cmd := g.cmd
+	if cmd == nil {
+		g.stopRequested = true
+	}
+	g.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
 		return "", nil
 	}
 	err := g.stopProcess()
 	if err != nil {
-		return g.out, err
+		return out, err
 	}
-	fi, err := os.Stat(g.out)
+	fi, err := os.Stat(out)
 	if err != nil {
-		return g.out, fmt.Errorf("recording output missing: %w", err)
+		return out, fmt.Errorf("recording output missing: %w", err)
 	}
 	if fi.Size() == 0 {
-		return g.out, fmt.Errorf("recording output is empty: %s", g.out)
+		return out, fmt.Errorf("recording output is empty: %s", out)
 	}
-	return g.out, nil
+	return out, nil
 }
 
 func (g *GPU) stopProcess() error {
-	if g.done == nil {
-		return unexpectedWait(g.wait)
+	g.mu.Lock()
+	cmd := g.cmd
+	done := g.done
+	wait := g.wait
+	g.mu.Unlock()
+	if cmd == nil || cmd.Process == nil || done == nil {
+		return unexpectedWait(wait)
 	}
 	select {
-	case err := <-g.done:
-		g.done = nil
-		g.wait = err
-		return unexpectedWait(err)
+	case <-done:
+		return unexpectedWait(g.waitErr())
 	default:
 	}
-	if err := g.cmd.Process.Signal(syscall.SIGINT); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := signalRecorder(cmd, syscall.SIGINT); err != nil {
 		return fmt.Errorf("stop %s: %w", gpuBinary, err)
 	}
-	err := <-g.done
-	g.done = nil
-	g.wait = err
-	return unexpectedWait(err)
+	select {
+	case <-done:
+		return unexpectedWait(g.waitErr())
+	case <-time.After(recorderStopGrace):
+	}
+
+	timeoutErr := fmt.Errorf("stop %s: did not exit within %s after SIGINT; sent SIGKILL", gpuBinary, recorderStopGrace)
+	if err := signalRecorder(cmd, syscall.SIGKILL); err != nil {
+		return errors.Join(timeoutErr, fmt.Errorf("kill %s: %w", gpuBinary, err))
+	}
+	select {
+	case <-done:
+		if err := expectedWait(g.waitErr(), syscall.SIGINT, syscall.SIGKILL); err != nil {
+			return errors.Join(timeoutErr, err)
+		}
+		return timeoutErr
+	case <-time.After(recorderKillWait):
+		return errors.Join(timeoutErr, fmt.Errorf("%s did not exit after SIGKILL", gpuBinary))
+	}
+}
+
+func signalRecorder(cmd *exec.Cmd, sig syscall.Signal) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	pid := cmd.Process.Pid
+	if pid <= 0 {
+		return nil
+	}
+	if err := syscall.Kill(-pid, sig); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if sigErr := cmd.Process.Signal(sig); sigErr != nil && !errors.Is(sigErr, os.ErrProcessDone) {
+			return errors.Join(err, sigErr)
+		}
+	}
+	return nil
+}
+
+func (g *GPU) waitErr() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.wait
 }
 
 func unexpectedWait(err error) error {
+	return expectedWait(err, syscall.SIGINT)
+}
+
+func expectedWait(err error, signals ...syscall.Signal) error {
 	if err == nil {
 		return nil
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-			if status.Signaled() && status.Signal() == syscall.SIGINT {
-				return nil
+			if status.Signaled() {
+				for _, sig := range signals {
+					if status.Signal() == sig {
+						return nil
+					}
+				}
 			}
 		}
 	}

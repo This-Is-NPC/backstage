@@ -4,6 +4,7 @@
 package production
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/This-Is-NPC/backstage/internal/engine"
+	"github.com/This-Is-NPC/backstage/internal/prompter"
+	"github.com/This-Is-NPC/backstage/internal/recorder"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 	"github.com/This-Is-NPC/backstage/internal/stage"
 	"github.com/This-Is-NPC/backstage/internal/transition"
@@ -32,6 +35,15 @@ type segment struct {
 	kind     string // "scene" | "transition"
 	name     string // scene name, or transition (Use) name
 	from, to string // surrounding scenes (transitions only)
+}
+
+type interruptGuard interface {
+	Stop() error
+	Release()
+}
+
+var newInterruptGuard = func(stop func() error, onInterrupt func()) interruptGuard {
+	return engine.NewInterruptGuard(stop, onInterrupt)
 }
 
 // plan flattens a production into an ordered list of scene/transition segments.
@@ -88,10 +100,9 @@ func Run(opts Options) (string, error) {
 	if speed <= 0 {
 		speed = 1
 	}
-	fps := p.Render.FPS
-	if fps == 0 {
-		fps = p.Record.FPS
-	}
+	// fps/w/h share the in-scene resolver so the two paths can't drift; production
+	// then probes a recorded clip below to turn native (0) w/h into real pixels.
+	fps, _, _ := p.ResolveRenderDims()
 
 	segDir, err := os.MkdirTemp("", "backstage-prod-*")
 	if err != nil {
@@ -102,8 +113,13 @@ func Run(opts Options) (string, error) {
 	} else {
 		fmt.Printf(">> segments: %s\n", segDir)
 	}
+	cleanupSegmentsOnInterrupt := func() {
+		if !opts.KeepSegments {
+			_ = os.RemoveAll(segDir)
+		}
+	}
 
-	env := append(os.Environ(), projectEnv(p)...)
+	env := p.PropEnv()
 
 	// 1. resolve target geometry. If config omitted either dimension, record the
 	// first scene clip early so transitions can receive real {{w}}/{{h}} values.
@@ -126,6 +142,7 @@ func Run(opts Options) (string, error) {
 		fmt.Printf(">> scene %q → clip\n", sg.name)
 		runErr := engine.New(p).Run(s, engine.Options{
 			Record: true, OutPath: clip, ShowStaging: opts.ShowStaging, Speed: speed,
+			OnInterrupt: cleanupSegmentsOnInterrupt,
 		})
 		teardownErr := (&stage.Hypr{}).Teardown()
 		if runErr != nil {
@@ -184,11 +201,18 @@ func Run(opts Options) (string, error) {
 			}
 		} else {
 			clip := filepath.Join(segDir, fmt.Sprintf("%03d-%s.mp4", i, sg.kind))
-			fmt.Printf(">> transition %q (%s → %s) → clip\n", sg.name, sg.from, sg.to)
 			t := p.Transitions[sg.name]
 			v := transition.Vars{Out: clip, W: w, H: h, FPS: fps, From: sg.from, To: sg.to}
-			if err := transition.Render(t.Cmd, v, env, p.Dir); err != nil {
-				return "", err
+			if t.RenderMode() == scene.RenderLive {
+				fmt.Printf(">> live transition %q (%s → %s) → clip\n", sg.name, sg.from, sg.to)
+				if err := recordLiveTransition(p, t, v, clip, cleanupSegmentsOnInterrupt); err != nil {
+					return "", err
+				}
+			} else {
+				fmt.Printf(">> transition %q (%s → %s) → clip\n", sg.name, sg.from, sg.to)
+				if err := renderOfflineTransition(t.Cmd, v, env, p.Dir, cleanupSegmentsOnInterrupt); err != nil {
+					return "", err
+				}
 			}
 			raw[i] = clip
 		}
@@ -201,7 +225,7 @@ func Run(opts Options) (string, error) {
 			return "", fmt.Errorf("segment %d produced no clip", i)
 		}
 		n := filepath.Join(segDir, fmt.Sprintf("n%03d.mp4", i))
-		if err := normalize(c, n, w, h, fps); err != nil {
+		if err := normalize(c, n, w, h, fps, cleanupSegmentsOnInterrupt); err != nil {
 			return "", err
 		}
 		norm = append(norm, n)
@@ -218,18 +242,125 @@ func Run(opts Options) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
 		return "", err
 	}
-	if err := concat(norm, out, segDir); err != nil {
+	if err := concatFinal(norm, out, segDir, cleanupSegmentsOnInterrupt); err != nil {
 		return "", err
 	}
 	return out, nil
 }
 
-func projectEnv(p *scene.Project) []string {
-	var env []string
-	for k, v := range p.Env {
-		env = append(env, k+"="+v)
+func renderOfflineTransition(cmdText string, v transition.Vars, env []string, dir string, onInterrupt func()) error {
+	cmd := transition.BuildCommand(cmdText, v, env, dir)
+	if err := runProductionCommand(cmd, onInterrupt); err != nil {
+		return fmt.Errorf("transition command failed: %w", err)
 	}
-	return env
+	return transition.VerifyOutput(v.Out)
+}
+
+func runProductionCommand(cmd *exec.Cmd, onInterrupt func()) error {
+	scene.SetProcessGroup(cmd)
+	cmdGuard := &engine.CommandGuard{}
+	guard := newInterruptGuard(func() error {
+		cmdGuard.Interrupt()
+		return nil
+	}, func() {
+		if onInterrupt != nil {
+			onInterrupt()
+		}
+	})
+	defer guard.Release()
+
+	if err := cmdGuard.Start(cmd); err != nil {
+		return err
+	}
+	defer cmdGuard.Done(cmd)
+	return cmd.Wait()
+}
+
+// recordLiveTransition records the screen while a live prop drives the overlay,
+// then verifies a non-empty mp4 landed at clip. SIGINT/SIGTERM during the prop
+// kills the prop, stops the recorder (exactly once), removes the temp clip, runs
+// onInterrupt (cleans the production temp dir so it doesn't leak on Ctrl-C), and
+// exits. The recorder-stop guard and signal handling are shared with engine.Run
+// via engine.InterruptGuard so the two paths can't drift.
+func recordLiveTransition(p *scene.Project, t scene.Transition, v transition.Vars, clip string, onInterrupt func()) error {
+	// Readiness preflight before recording: a missing hyprctl must fail fast, not
+	// finalize an overlay-less segment. A live transition segment records a prop
+	// over the compositor overlay and does NOT use the prompter terminal, so only
+	// hyprctl is required here (PreflightHypr), not the configured terminal.
+	if err := (&prompter.Hypr{}).PreflightHypr(); err != nil {
+		return err
+	}
+	// A live prop does NOT own the clip file; the recorder writes {{out}}. Omit
+	// {{out}} from the live substitution so the prop can't clobber the recording.
+	cmd, err := p.PropCommand(t.Live.Prop, transition.SubstituteLiveArgs(t.Live.Args, v))
+	if err != nil {
+		return err
+	}
+	propGuard := &engine.CommandGuard{}
+
+	rec := recorder.NewGPU(p.Record.Monitor, p.Record.FPS)
+
+	// Arm the guard before starting the recorder, mirroring engine.Run. rec.Start
+	// blocks up to ~10s waiting for the output file; if no guard were installed
+	// during that wait, a SIGINT/SIGTERM would orphan the gpu-screen-recorder child
+	// (GPU encoder held, file written forever). The guard's stop path cancels future
+	// prop starts before stopping the recorder, so a signal during recorder warmup
+	// cannot let the prop start in the main goroutine before os.Exit runs.
+	//
+	// The guard owns prop cancellation and recorder shutdown before running
+	// onInterrupt, so onInterrupt only does temp teardown and never references the
+	// guard. Interrupt order: cancel/kill prop, stop recorder (bounded on signal),
+	// remove the clip, then onInterrupt (clean the production temp dir so it doesn't
+	// leak on Ctrl-C).
+	guard := newInterruptGuard(
+		func() error {
+			propGuard.Interrupt()
+			_, err := rec.Stop()
+			return err
+		},
+		func() {
+			// Recorder cleanup is owned by the guard.
+			_ = os.Remove(clip)
+			if onInterrupt != nil {
+				onInterrupt()
+			}
+		},
+	)
+	defer guard.Release()
+
+	if err := rec.Start(clip); err != nil {
+		// Guard armed but the prop never started. GPU.Start owns cleanup for any
+		// recorder child it spawned; Release only removes the signal handler.
+		guard.Release()
+		return err
+	}
+
+	if err := propGuard.Start(cmd); err != nil {
+		stopErr := guard.Stop()
+		guard.Release()
+		return errors.Join(fmt.Errorf("live transition %s: %w", t.Live.Prop, err), stopErr)
+	}
+
+	runErr := cmd.Wait()
+	propGuard.Done(cmd)
+	stopErr := guard.Stop()
+	guard.Release()
+	if runErr != nil {
+		return errors.Join(fmt.Errorf("live transition %s: %w", t.Live.Prop, runErr), stopErr)
+	}
+	if stopErr != nil {
+		return stopErr
+	}
+	// Verify a non-empty clip landed, mirroring the offline transition.Render
+	// invariant: a prop that exits 0 with no/short recording must not pass silently.
+	fi, err := os.Stat(clip)
+	if err != nil {
+		return fmt.Errorf("live transition %s wrote no output at %s: %w", t.Live.Prop, clip, err)
+	}
+	if fi.Size() == 0 {
+		return fmt.Errorf("live transition %s output is empty: %s", t.Live.Prop, clip)
+	}
+	return nil
 }
 
 // probeDims returns a video's width and height via ffprobe.
@@ -259,21 +390,49 @@ func probeDims(path string) (int, int, error) {
 }
 
 // normalize re-encodes a clip to a fixed geometry/fps/pixfmt (audio dropped).
-func normalize(in, out string, w, h, fps int) error {
+func normalize(in, out string, w, h, fps int, onInterrupt func()) error {
 	vf := fmt.Sprintf(
 		"scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%d",
 		w, h, w, h, fps)
 	cmd := exec.Command("ffmpeg", "-y", "-i", in, "-vf", vf,
 		"-pix_fmt", "yuv420p", "-c:v", "libx264", "-an", out)
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := runProductionCommand(cmd, onInterrupt); err != nil {
 		return fmt.Errorf("normalize %s: %w", in, err)
 	}
 	return nil
 }
 
+func concatFinal(clips []string, out, workDir string, onInterrupt func()) error {
+	outDir := filepath.Dir(out)
+	tmp, err := os.CreateTemp(outDir, ".production-*.mp4")
+	if err != nil {
+		return err
+	}
+	tmpOut := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpOut)
+		return err
+	}
+	cleanupConcatOnInterrupt := func() {
+		if onInterrupt != nil {
+			onInterrupt()
+		}
+		_ = os.Remove(tmpOut)
+	}
+	if err := concat(clips, tmpOut, workDir, cleanupConcatOnInterrupt); err != nil {
+		_ = os.Remove(tmpOut)
+		return err
+	}
+	if err := os.Rename(tmpOut, out); err != nil {
+		_ = os.Remove(tmpOut)
+		return err
+	}
+	return nil
+}
+
 // concat joins normalized clips (same codec/geometry) via the concat demuxer.
-func concat(clips []string, out, workDir string) error {
+func concat(clips []string, out, workDir string, onInterrupt func()) error {
 	list := filepath.Join(workDir, "concat.txt")
 	var b strings.Builder
 	for _, c := range clips {
@@ -289,7 +448,7 @@ func concat(clips []string, out, workDir string) error {
 	cmd := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0",
 		"-i", list, "-c", "copy", out)
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := runProductionCommand(cmd, onInterrupt); err != nil {
 		return fmt.Errorf("concat: %w", err)
 	}
 	return nil

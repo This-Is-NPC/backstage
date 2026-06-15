@@ -205,10 +205,30 @@ func killCmd() *cobra.Command {
 		Use:   "kill",
 		Short: "Tear down the stage and dismiss any popup",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			_ = (&prompter.Hypr{}).Close()
+			// Resolve the configured popup class tolerantly: even if the rest of
+			// the config no longer validates, a custom-class popup must still be
+			// dismissible. Fall back to the default class only if no config is found.
+			class := prompter.DefaultClass
+			if cfgPath, err := findConfigFrom(projectFlag); err == nil {
+				class = scene.PopupClassFor(cfgPath)
+			}
+			_ = (&prompter.Hypr{}).CloseClass(class)
 			return (&stage.Hypr{}).Teardown()
 		},
 	}
+}
+
+// findConfigFrom locates the project config from an explicit dir or by searching
+// up from the current directory, without loading/validating it.
+func findConfigFrom(dir string) (string, error) {
+	if dir == "" {
+		var err error
+		if dir, err = os.Getwd(); err != nil {
+			return "", err
+		}
+	}
+	cfgPath, _, err := scene.FindConfig(filepath.Join(dir, "_"))
+	return cfgPath, err
 }
 
 // runScene loads the scene + its project, validates, and runs it.

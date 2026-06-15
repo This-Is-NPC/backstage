@@ -71,11 +71,70 @@ type RenderCfg struct {
 	FPS int `json:"fps,omitempty"`
 }
 
-// Transition is a clip rendered between two scenes by a full user command. The
-// command must write an mp4 to {{out}}; Backstage also substitutes {{w}} {{h}}
-// {{fps}} {{from}} {{to}}. Everything else is the user's (any tool, any params).
+// ResolveRenderDims returns the (fps, w, h) a transition should target, applying
+// the same config fallbacks the production pipeline uses so an in-scene live
+// transition and a production segment can't drift. fps falls back to record.fps
+// when render.fps is unset. w/h are 0 when render.w/h are unset: that means
+// "monitor native", whose true pixel size is only knowable by probing a recorded
+// clip — which the production pipeline does, but an in-scene step cannot without
+// itself recording. Callers that need concrete pixels (production) probe; the
+// in-scene path passes 0 through to the prop, which should treat 0 as native.
+func (p *Project) ResolveRenderDims() (fps, w, h int) {
+	fps = p.Render.FPS
+	if fps == 0 {
+		fps = p.Record.FPS
+	}
+	return fps, p.Render.W, p.Render.H
+}
+
+// Transition is a reusable production visual. It can be rendered offline by a
+// command that writes an mp4 to {{out}}, or recorded live by running a prop while
+// the recorder captures the screen.
 type Transition struct {
-	Cmd string `json:"cmd"`
+	Cmd  string         `json:"cmd,omitempty"`
+	Live LiveTransition `json:"live,omitempty"`
+	// Live transitions run a blocking project-relative prop. The prop owns its
+	// visual lifecycle: open the overlay/window, wait for animation, close, exit.
+}
+
+// HasLive reports whether this transition should be recorded from the screen.
+func (t Transition) HasLive() bool { return t.Live.Prop != "" }
+
+// HasOffline reports whether this transition can render an mp4 without staging.
+func (t Transition) HasOffline() bool { return t.Cmd != "" }
+
+// RenderMode is how a transition produces its clip. It is the single source of
+// truth for the precedence shared by production, in-scene steps, and validation.
+type RenderMode int
+
+const (
+	// RenderNone means the transition defines neither a live prop nor an offline cmd.
+	RenderNone RenderMode = iota
+	// RenderLive records the screen while a live prop drives the overlay.
+	RenderLive
+	// RenderOffline runs a command that writes the clip to {{out}}.
+	RenderOffline
+)
+
+// RenderMode reports how this transition should be rendered. A live prop takes
+// precedence over an offline cmd when both are present, so production and
+// in-scene steps agree on which path runs.
+func (t Transition) RenderMode() RenderMode {
+	switch {
+	case t.HasLive():
+		return RenderLive
+	case t.HasOffline():
+		return RenderOffline
+	default:
+		return RenderNone
+	}
+}
+
+// LiveTransition configures a transition-as-prop, either as a production segment
+// or as an in-scene overlay step.
+type LiveTransition struct {
+	Prop string   `json:"prop,omitempty"`
+	Args []string `json:"args,omitempty"`
 }
 
 // TransitionUse places a transition after a named scene in a production.
@@ -102,10 +161,22 @@ type RecordCfg struct {
 	Out     string `json:"out,omitempty"`
 }
 
-// PopupCfg sizes the instruction popup and sets its typing speed.
+// PopupCfg sizes the instruction popup, sets its typing speed, and optionally
+// styles the current Hyprland terminal Prompter.
 type PopupCfg struct {
-	Size []int `json:"size,omitempty"` // [w, h]
-	CPS  int   `json:"cps,omitempty"`  // characters per second
+	Size  []int         `json:"size,omitempty"` // [w, h]
+	CPS   int           `json:"cps,omitempty"`  // characters per second
+	Style PopupStyleCfg `json:"style,omitempty"`
+}
+
+// PopupStyleCfg keeps the built-in Prompter intentionally small. Complex HTML,
+// animation, and multi-box overlays belong to live transitions.
+type PopupStyleCfg struct {
+	FontSize int    `json:"fontSize,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Header   string `json:"header,omitempty"`
+	Chrome   string `json:"chrome,omitempty"` // default|minimal|none
+	Class    string `json:"class,omitempty"`
 }
 
 // Hooks are user scripts (project-relative) the runner calls but never inspects.
