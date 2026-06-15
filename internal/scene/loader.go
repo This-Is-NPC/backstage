@@ -6,18 +6,28 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/This-Is-NPC/backstage/internal/prompter"
 )
 
 // configName is the project config filename.
 const configName = "backstage.json"
 
-// Defaults mirror core.sh so a sparse config still works.
+// Defaults mirror core.sh so a sparse config still works. Popup-style and CPS
+// defaults are owned by the prompter package (the single source of truth) so
+// config defaulting and the popup driver can't drift.
 const (
 	defMonitor = "eDP-1"
 	defFPS     = 30
 	defOut     = "recordings"
-	defCPS     = 32
-	defTerm    = "ghostty"
+	defCPS     = prompter.DefaultCPS
+	defTerm    = prompter.DefaultTerm
+
+	defPopupFontSize = prompter.DefaultFontSize
+	defPopupTitle    = prompter.DefaultTitle
+	defPopupHeader   = prompter.DefaultHeader
+	defPopupChrome   = prompter.DefaultChrome
+	defPopupClass    = prompter.DefaultClass
 )
 
 var defPopupSize = []int{1200, 560}
@@ -73,7 +83,15 @@ func LoadProject(cfgPath string) (*Project, error) {
 		return nil, fmt.Errorf("config %s: %w", cfgPath, err)
 	}
 	p.Dir = filepath.Dir(cfgPath)
+	// Validate the raw fontSize before defaulting: applyDefaults coerces 0 → the
+	// default, so a negative value is the only invalid raw input to reject here.
+	if p.Popup.Style.FontSize < 0 {
+		return nil, fmt.Errorf("popup.style.fontSize must not be negative")
+	}
 	p.applyDefaults()
+	if err := p.ValidateConfig(); err != nil {
+		return nil, err
+	}
 	for k, v := range p.Env {
 		if err := ValidateEnvKey(k); err != nil {
 			return nil, err
@@ -99,6 +117,21 @@ func (p *Project) applyDefaults() {
 	if p.Popup.CPS == 0 {
 		p.Popup.CPS = defCPS
 	}
+	if p.Popup.Style.FontSize == 0 {
+		p.Popup.Style.FontSize = defPopupFontSize
+	}
+	if p.Popup.Style.Title == "" {
+		p.Popup.Style.Title = defPopupTitle
+	}
+	if p.Popup.Style.Header == "" {
+		p.Popup.Style.Header = defPopupHeader
+	}
+	if p.Popup.Style.Chrome == "" {
+		p.Popup.Style.Chrome = defPopupChrome
+	}
+	if p.Popup.Style.Class == "" {
+		p.Popup.Style.Class = defPopupClass
+	}
 	if p.Term == "" {
 		p.Term = defTerm
 	}
@@ -106,6 +139,29 @@ func (p *Project) applyDefaults() {
 	if p.Render.FPS == 0 {
 		p.Render.FPS = p.Record.FPS
 	}
+}
+
+// PopupClassFor returns the configured popup window class for a project config,
+// tolerating an otherwise-invalid config. The kill/close path uses it so a popup
+// opened with a custom class is reliably dismissible even when the rest of the
+// config no longer validates. Returns the default class if the config can't be
+// read, names no class, or names a class that fails the same validation
+// ValidateConfig applies (popupClassRE) — so a class with spaces or shell
+// metacharacters is never handed to hyprctl, even on this tolerant path.
+func PopupClassFor(cfgPath string) string {
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return defPopupClass
+	}
+	var p Project
+	if err := json.Unmarshal(b, &p); err != nil {
+		return defPopupClass
+	}
+	class := p.Popup.Style.Class
+	if class == "" || !popupClassRE.MatchString(class) {
+		return defPopupClass
+	}
+	return class
 }
 
 // Expand replaces ${PROJECT} and $PROJECT with the project root directory.

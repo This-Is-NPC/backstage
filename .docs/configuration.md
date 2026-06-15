@@ -8,7 +8,9 @@ A project is a folder containing `backstage.json` plus `scenes/` and (optionally
 ```json
 {
   "record":  { "monitor": "eDP-1", "fps": 30, "out": "recordings" },
-  "popup":   { "size": [1200, 560], "cps": 32 },
+  "popup":   { "size": [1200, 560], "cps": 32,
+    "style": { "fontSize": 20, "chrome": "minimal" }
+  },
   "term":    "ghostty",
   "env":     { "APP_HOME": "${PROJECT}/.state" },
   "hooks":   { "setup": "hooks/setup.sh", "reset": "hooks/reset.sh" },
@@ -30,14 +32,53 @@ A project is a folder containing `backstage.json` plus `scenes/` and (optionally
 | `record.out` | output dir, relative to the project | `recordings` |
 | `popup.size` | `[width, height]` of the instruction box | `[1200, 560]` |
 | `popup.cps` | typing speed of the box (chars/sec) | `32` |
+| `popup.style.fontSize` | terminal font size for the built-in Prompter | `18` |
+| `popup.style.title` | popup terminal window title | `instruction.md` |
+| `popup.style.header` | text shown in the Prompter header | `instruction.md` |
+| `popup.style.chrome` | header treatment: `default`, `minimal`, or `none` | `default` |
+| `popup.style.class` | Hyprland window class for popup rules/closing | `backstage.popup` |
 | `term` | terminal command used for the stage and popup | `ghostty` |
-| `env` | map exported to panes, hooks, recorder, popup | — |
+| `env` | map exported to panes, hooks, props, and offline transitions | — |
 | `hooks.setup` | script run when a scene is `"fresh"` | — |
 | `hooks.reset` | script run before every other take | — |
 | `aliases` | custom action names → `{action, target}` | — |
 | `layouts` | named stage layouts (see below) | — |
 
 The video is written to `<project>/<record.out>/<scene-name>.mp4`.
+
+## Popup style
+
+The built-in Prompter is intentionally small: a Hyprland floating terminal that
+types short narration. Use `popup.style` for basic project branding:
+
+```jsonc
+"popup": {
+  "size": [1280, 420],
+  "cps": 60,
+  "style": {
+    "fontSize": 22,
+    "title": "backstage.prompt",
+    "header": "backstage@demo:~$",
+    "chrome": "minimal",
+    "class": "backstage.demo.popup"
+  }
+}
+```
+
+`chrome` controls only the header:
+
+| Value | Effect |
+|-------|--------|
+| `default` | dim framed header, matching the original `instruction.md` look |
+| `minimal` | plain header text |
+| `none` | no header; only typed text |
+
+Complex HTML/CSS animation, multiple boxes, fullscreen chapter cards, or
+transparent overlays belong in **live transitions** (below), not in the built-in
+Prompter.
+
+The current popup driver targets Hyprland and the configured terminal. macOS,
+Windows, and non-Hyprland popup backends are out of scope for this driver.
 
 ## Trust boundary
 
@@ -108,6 +149,7 @@ between them into one video. Three pieces in `backstage.json`:
 
   "transitions": {
     "to-deploy": { "cmd": "node slide.js --title Deploy --out {{out}} --size {{w}}x{{h}}" },
+    "to-browser": { "live": { "prop": "transitions/browser-card.sh", "args": ["--title", "Browser"] } },
     "to-guards": { "cmd": "node slide.js --title Guards --out {{out}} --size {{w}}x{{h}}" }
   },
 
@@ -136,8 +178,10 @@ The target geometry every clip is normalized to before concatenation.
 
 ### transitions
 
-A transition is **a full command you write** — any tool, any language. Backstage
-substitutes placeholders and then expects a clip:
+Transitions have two render modes.
+
+An **offline transition** is a full command you write. Backstage substitutes
+placeholders and expects the command to write an mp4 to `{{out}}`:
 
 | Placeholder | Becomes |
 |-------------|---------|
@@ -149,6 +193,36 @@ Reuse one script across transitions by varying its arguments (e.g. a `slide`
 script called with different `--title`). The command runs with the project `env`
 and the project root as its working dir, and must leave a non-empty mp4 at
 `{{out}}` (Backstage normalizes it to the render geometry/fps).
+
+Placeholder values are inserted verbatim into this trusted project shell command.
+Quote placeholders in `backstage.json` when you need shell word boundaries or
+literal handling, for example `--title '{{from}}'`.
+
+A **live transition** runs a blocking project-relative prop while Backstage records
+the screen. The prop owns its visual lifecycle: open the overlay/window, wait for
+animation, close it, then exit.
+
+```jsonc
+"transitions": {
+  "chapter-browser": {
+    "live": {
+      "prop": "transitions/chapter.sh",
+      "args": ["--title", "Browser", "--duration", "2.2"]
+    }
+  }
+}
+```
+
+When a production reaches a live transition, Backstage records that prop as its
+own transition segment and stitches it between scene clips. If both `live` and
+`cmd` are present, `live` takes precedence (the shared render-mode rule used by
+productions, in-scene steps, and validation); `cmd` remains a fallback-compatible
+offline definition for projects that choose it.
+
+A live prop's `args` support the same placeholders as an offline `cmd`
+(`{{w}}`, `{{h}}`, `{{fps}}`, `{{from}}`, `{{to}}`) **except `{{out}}`**: the
+recorder owns the clip file, so `{{out}}` is substituted to an empty string for
+live props — never hand a live prop the recording path.
 
 ### productions
 

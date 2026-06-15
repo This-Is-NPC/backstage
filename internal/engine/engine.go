@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"sync"
-	"syscall"
 
 	"github.com/This-Is-NPC/backstage/internal/pane"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
@@ -29,6 +27,9 @@ type Options struct {
 	// montage appears in the video. Default (false) starts after the stage is
 	// ready, hiding the setup.
 	ShowStaging bool
+	// OnInterrupt runs after recorder/popup/stage cleanup but before the interrupt
+	// handler exits. Production uses this to remove its segment work directory.
+	OnInterrupt func()
 }
 
 // Engine runs a scene over the stage/recorder/prompter/pane drivers.
@@ -38,8 +39,10 @@ type Engine struct {
 	Rec     recorder.Recorder
 	Prompt  prompter.Prompter
 
-	Speed float64
-	pane  pane.Driver
+	Speed      float64
+	pane       pane.Driver
+	rehearsing bool
+	cmdGuard   *CommandGuard
 }
 
 // New builds an Engine with the default Hyprland/gpu drivers for a project.
@@ -60,11 +63,83 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	if e.Speed <= 0 {
 		e.Speed = 1
 	}
+	prevRehearsing := e.rehearsing
+	e.rehearsing = !opts.Record
+	defer func() { e.rehearsing = prevRehearsing }()
 
 	layout, ok := e.Project.Layouts[s.LayoutName()]
 	if !ok {
 		return fmt.Errorf("layout %q not in config", s.LayoutName())
 	}
+
+	// Preflight the prompter/host before any recording. Any run that WILL record a
+	// Hypr-driven overlay must fail fast, not finalize an overlay-less video. The
+	// readiness check matches what the scene actually needs:
+	//   - a dialog step opens the prompter terminal → needs hyprctl AND the terminal
+	//     (full Preflight);
+	//   - a live transition step records a prop over the compositor overlay but never
+	//     opens the terminal → needs hyprctl only (PreflightHypr), so it must not
+	//     fail on a host missing the terminal.
+	// Only fail-fast when actually recording: a rehearse/dry-run (Record==false)
+	// produces no video, so it must not require hyprctl/terminal on a non-Hypr host.
+	if opts.Record && e.Prompt != nil {
+		switch {
+		case e.hasDialogStep(s):
+			if err := e.Prompt.Preflight(e.Project.Term); err != nil {
+				return err
+			}
+		case e.recordsHyprOverlay(s):
+			if err := e.Prompt.PreflightHypr(); err != nil {
+				return err
+			}
+		}
+	}
+
+	var recMu sync.Mutex
+	recArmed := false
+	recStopped := false
+	stopRec := func() error {
+		recMu.Lock()
+		if !opts.Record || !recArmed || recStopped {
+			recMu.Unlock()
+			return nil
+		}
+		recStopped = true
+		recMu.Unlock()
+		fmt.Println(">> stop recording")
+		_, err := e.Rec.Stop()
+		return err
+	}
+	// Cancel active command starts, stop the recorder, and tear down overlays on
+	// interrupt, then exit.
+	// Shared with production.recordLiveTransition via InterruptGuard so the
+	// command-cancel + recorder-stop-once + signal-exit pattern can't drift between
+	// the two sites.
+	// (recArmed/recStopped stay under recMu here because startRec sets them
+	// concurrently; the guard provides the signal handling and exit.)
+	//
+	// The guard owns command cancellation and recorder Stop before running this
+	// onInterrupt, so the closure must not touch the recorder or the guard itself --
+	// it only does overlay and caller cleanup. Not referencing the outer guard also
+	// removes the construction-window nil-deref the closure used to risk.
+	prevCmdGuard := e.cmdGuard
+	cmdGuard := &CommandGuard{}
+	e.cmdGuard = cmdGuard
+	defer func() { e.cmdGuard = prevCmdGuard }()
+
+	guard := newInterruptGuard(
+		func() error {
+			cmdGuard.Interrupt()
+			return stopRec()
+		},
+		func() { e.cleanupOnInterrupt(opts.OnInterrupt) },
+	)
+	defer func() {
+		if err := guard.Stop(); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+		guard.Release()
+	}()
 
 	if err := e.runHooks(s); err != nil {
 		return err
@@ -81,58 +156,22 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 			return err
 		}
 	}
-	var recMu sync.Mutex
-	recStarted := false
-	recStopped := false
-	stopRec := func() error {
-		recMu.Lock()
-		defer recMu.Unlock()
-		if !opts.Record || !recStarted || recStopped {
-			return nil
-		}
-		recStopped = true
-		fmt.Println(">> stop recording")
-		_, err := e.Rec.Stop()
-		return err
-	}
-	sigCh := make(chan os.Signal, 1)
-	done := make(chan struct{})
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	defer func() {
-		signal.Stop(sigCh)
-		close(done)
-		if err := stopRec(); err != nil {
-			runErr = errors.Join(runErr, err)
-		}
-	}()
-	go func() {
-		select {
-		case <-sigCh:
-			_ = stopRec()
-			if e.Prompt != nil {
-				_ = e.Prompt.Close()
-			}
-			if e.Stager != nil {
-				_ = e.Stager.Teardown()
-			}
-			os.Exit(130)
-		case <-done:
-		}
-	}()
 	startRec := func() error {
 		if !opts.Record {
 			return nil
 		}
+		recMu.Lock()
+		recArmed = true
+		recStopped = false
+		recMu.Unlock()
 		fmt.Println(">> start recording")
 		if err := e.Rec.Start(out); err != nil {
 			return err
 		}
-		recMu.Lock()
-		recStarted = true
-		recStopped = false
-		recMu.Unlock()
 		return nil
 	}
+
+	usesStage := len(layout.Panes) > 0
 
 	// ShowStaging: capture the stage montage too (record before staging).
 	if opts.ShowStaging {
@@ -141,13 +180,18 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		}
 	}
 
-	fmt.Printf(">> stage layout: %s\n", s.LayoutName())
-	m, err := e.Stager.Setup(layout, e.Project)
-	if err != nil {
-		return err
+	if usesStage {
+		fmt.Printf(">> stage layout: %s\n", s.LayoutName())
+		m, err := e.Stager.Setup(layout, e.Project)
+		if err != nil {
+			return err
+		}
+		e.pane = pane.NewTmux(m)
+		e.sleep(stageWarm)
+	} else {
+		fmt.Printf(">> stage layout: %s (none)\n", s.LayoutName())
+		e.pane = nil
 	}
-	e.pane = pane.NewTmux(m)
-	e.sleep(stageWarm)
 
 	// Default: start after the stage is ready, hiding the setup.
 	if !opts.ShowStaging {
@@ -156,6 +200,9 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		}
 	}
 
+	// Continue-on-error is intentional: for a live recorder a partial take beats
+	// a discarded one, so a failed step is logged and joined into runErr (surfaced
+	// to the caller) rather than aborting the remaining steps.
 	for i, st := range s.Steps {
 		if err := e.runStep(i, st); err != nil {
 			fmt.Fprintf(os.Stderr, "   !! step %d: %v\n", i+1, err)
@@ -173,6 +220,60 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		fmt.Println(">> rehearsal done (no recording).  (stage open — backstage kill)")
 	}
 	return runErr
+}
+
+func (e *Engine) cleanupOnInterrupt(extra func()) {
+	// Primary recorder/command cleanup is owned by the guard; repeat the command
+	// interrupt here so direct cleanupOnInterrupt tests and future callers stay safe.
+	e.interruptActiveCommand()
+	if e.Prompt != nil {
+		_ = e.Prompt.Close()
+	}
+	if e.Stager != nil {
+		_ = e.Stager.Teardown()
+	}
+	if extra != nil {
+		extra()
+	}
+}
+
+func (e *Engine) interruptActiveCommand() {
+	if e.cmdGuard != nil {
+		e.cmdGuard.Interrupt()
+	}
+}
+
+// hasDialogStep reports whether the scene has a dialog step, which opens the
+// prompter terminal and so requires the full hyprctl+terminal preflight. Aliases
+// are resolved so an aliased dialog step is still detected.
+func (e *Engine) hasDialogStep(s *scene.Scene) bool {
+	for _, st := range s.Steps {
+		if action, _ := e.resolve(st); action == "dialog" {
+			return true
+		}
+	}
+	return false
+}
+
+// recordsHyprOverlay reports whether the scene will record any Hypr-driven
+// overlay — a dialog step (popup) or a live transition step (recorded prop) —
+// so the host-readiness preflight runs before recording for every such path.
+// Aliases are resolved so an aliased dialog/transition step is still detected.
+func (e *Engine) recordsHyprOverlay(s *scene.Scene) bool {
+	for _, st := range s.Steps {
+		action, _ := e.resolve(st)
+		switch action {
+		case "dialog":
+			return true
+		case "transition":
+			// Only a live transition records a Hypr overlay; an offline-cmd
+			// transition used as a step is rejected by validation, but guard here.
+			if t, ok := e.Project.Transitions[st.Value]; ok && t.RenderMode() == scene.RenderLive {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // runHooks runs the setup hook for a fresh scene, else the reset hook.
@@ -198,18 +299,46 @@ func (e *Engine) runScript(rel string) error {
 	}
 	cmd := exec.Command(path)
 	cmd.Dir = e.Project.Dir
-	cmd.Env = e.env()
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("hook %s: %w", rel, err)
+	cmd.Env = e.Project.PropEnv()
+	scene.SetProcessGroup(cmd)
+	var runErr error
+	if e.cmdGuard != nil {
+		runErr = e.runCommand(cmd)
+	} else {
+		runErr = runInterruptibleCommand(cmd)
+	}
+	if runErr != nil {
+		return fmt.Errorf("hook %s: %w", rel, runErr)
 	}
 	return nil
 }
 
-// env is the process environment plus the project's exported env block.
-func (e *Engine) env() []string {
-	env := os.Environ()
-	for k, v := range e.Project.Env {
-		env = append(env, k+"="+v)
+func (e *Engine) runCommand(cmd *exec.Cmd) error {
+	g := e.cmdGuard
+	if g == nil {
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		return cmd.Wait()
 	}
-	return env
+	if err := g.Start(cmd); err != nil {
+		return err
+	}
+	defer g.Done(cmd)
+	return cmd.Wait()
+}
+
+func runInterruptibleCommand(cmd *exec.Cmd) error {
+	cmdGuard := &CommandGuard{}
+	guard := newInterruptGuard(func() error {
+		cmdGuard.Interrupt()
+		return nil
+	}, nil)
+	defer guard.Release()
+
+	if err := cmdGuard.Start(cmd); err != nil {
+		return err
+	}
+	defer cmdGuard.Done(cmd)
+	return cmd.Wait()
 }

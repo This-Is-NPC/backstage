@@ -18,6 +18,7 @@ scenes/NN.json + backstage.json (project)
       │     type    → tmux send-keys (literal text) in the target pane
       │     keys    → tmux send-keys (named keys) in the target pane
       │     prop    → run an external script (any tool), blocking
+      │     transition → run a configured live transition prop as an overlay
       │     wait    → just pause
       │
       └─► stop recording ──► <project>/<out>/NN.mp4
@@ -33,6 +34,7 @@ scenes/NN.json + backstage.json (project)
 | `internal/stage` | builds the stage (tmux + Hyprland fullscreen) |
 | `internal/recorder` | start/stop the screen recorder |
 | `internal/prompter` | floating box + typewriter (char-by-char) |
+| `internal/transition` | offline transition rendering + placeholder substitution |
 | `internal/pane` | target a pane by name (tmux send-keys) + keymap |
 
 Nothing in the core names a specific tool — tool specifics live in `projects/`.
