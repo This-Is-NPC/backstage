@@ -18,8 +18,6 @@ builds:
       - -s -w -X main.version={{.Version}}
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -29,14 +27,10 @@ archives:
     ids: [backstage]
     name_template: 'backstage_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
     formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     files:
       - LICENSE
       - README.md
       - install.sh
-      - install.ps1
 
 checksum:
   name_template: checksums.txt
