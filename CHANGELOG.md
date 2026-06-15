@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/This-Is-NPC/backstage/compare/v0.2.0...v0.2.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* **release:** cut Linux-only release ([29f85ea](https://github.com/This-Is-NPC/backstage/commit/29f85eac9c75da28ecafa9186013c9ab6e7c537b))
+* **release:** cut Linux-only release ([3a91ade](https://github.com/This-Is-NPC/backstage/commit/3a91ade85ac8bb6b86006bdf00291692465f0337))
+
 ## [0.2.0](https://github.com/This-Is-NPC/backstage/compare/v0.1.0...v0.2.0) (2026-06-15)
 
 
