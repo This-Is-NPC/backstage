@@ -75,17 +75,14 @@ repeatable build output.
 
 ## Quickstart
 
-Install on Linux, macOS, or WSL:
+Install on Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/This-Is-NPC/backstage/master/install.sh | bash
 ```
 
-Install on Windows PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/This-Is-NPC/backstage/master/install.ps1 | iex
-```
+Backstage is built for Hyprland and ships Linux-only builds. See the note below
+for dependencies.
 
 Record a scene:
 
