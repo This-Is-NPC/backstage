@@ -25,9 +25,19 @@ type Step struct {
 type Scene struct {
 	Name   string `json:"name,omitempty"`
 	Layout string `json:"layout"`
-	Fresh  bool   `json:"fresh,omitempty"`
-	Reset  *bool  `json:"reset,omitempty"`
-	Steps  []Step `json:"steps"`
+	// VM names an entry in the project's `vms` and moves the whole take onto
+	// that computer: the steps are typed on its own keyboard and its screen is
+	// recorded from inside it. Empty is the ordinary stage, a tmux layout in a
+	// window on this machine.
+	//
+	// One scene, one computer. Two computers are two scenes, composed
+	// afterwards -- which is what keeps a take from having to keep two
+	// recorders in step, and what lets the same footage be laid out more than
+	// one way later.
+	VM    string `json:"vm,omitempty"`
+	Fresh bool   `json:"fresh,omitempty"`
+	Reset *bool  `json:"reset,omitempty"`
+	Steps []Step `json:"steps"`
 }
 
 // LayoutName returns the layout to stage.
@@ -50,6 +60,8 @@ type Project struct {
 	Hooks   Hooks             `json:"hooks,omitempty"`
 	Aliases map[string]Alias  `json:"aliases,omitempty"`
 	Layouts map[string]Layout `json:"layouts"`
+	// VMs are the Omarchy guests a scene can be staged on, by name.
+	VMs map[string]VMCfg `json:"vms,omitempty"`
 
 	// Render targets the final video when stitching a production (concat needs a
 	// consistent size/fps across clips).
@@ -61,6 +73,26 @@ type Project struct {
 
 	// Dir is the project root (directory holding the config). Set by LoadProject.
 	Dir string `json:"-"`
+}
+
+// VMCfg is one Omarchy guest a scene can run on.
+//
+// **Omarchy is a requirement and not a default.** The stage installs its tools
+// out of Omarchy's repository, records through its Hyprland's wlr-screencopy --
+// which is the only way a guest with no render node can capture its own screen
+// -- puts a keyboard on its single seat, and drives its shell's own verbs for
+// idle, notifications and restart. A guest that is not Omarchy is refused when
+// the stage opens rather than failing later as something else.
+type VMCfg struct {
+	// Domain is the libvirt domain name.
+	Domain string `json:"domain"`
+	// User is the account whose session is filmed. It is also the account ssh
+	// connects as, so it needs a key and sudo.
+	User string `json:"user"`
+	// Key is the ssh private key, `~` expanded. Empty uses ssh's own default.
+	Key string `json:"key,omitempty"`
+	// URI is the libvirt connection; empty means qemu:///system.
+	URI string `json:"uri,omitempty"`
 }
 
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the

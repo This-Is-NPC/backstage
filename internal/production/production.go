@@ -140,7 +140,11 @@ func Run(opts Options) (string, error) {
 			return err
 		}
 		fmt.Printf(">> scene %q → clip\n", sg.name)
-		runErr := engine.New(p).Run(s, engine.Options{
+		eng, err := engine.NewForScene(p, s)
+		if err != nil {
+			return err
+		}
+		runErr := eng.Run(s, engine.Options{
 			Record: true, OutPath: clip, ShowStaging: opts.ShowStaging, Speed: speed,
 			OnInterrupt: cleanupSegmentsOnInterrupt,
 		})

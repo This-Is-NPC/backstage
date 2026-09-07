@@ -248,7 +248,11 @@ func runScene(scenePath string, opts engine.Options) error {
 	if err := s.Validate(p); err != nil {
 		return err
 	}
-	return engine.New(p).Run(s, opts)
+	eng, err := engine.NewForScene(p, s)
+	if err != nil {
+		return err
+	}
+	return eng.Run(s, opts)
 }
 
 // loadProjectFrom resolves a project config from an explicit dir or by searching
