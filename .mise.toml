@@ -53,3 +53,60 @@ run = [
   "rm -f \"$BACKSTAGE_PREFIX/backstage\"",
   "echo \"removed -> $BACKSTAGE_PREFIX/backstage\"",
 ]
+
+# The agent skill, in the one place every agent reads.
+#
+# `~/.agents/skills/` and nothing vendor-specific: the skill is the same text
+# whichever agent loads it, and a copy per vendor is a copy that goes stale
+# somewhere nobody is looking.
+#
+# A symlink rather than a copy, so editing the skill in this checkout is
+# editing the skill the agent reads. That is also what makes uninstalling safe:
+# the link tells us it is ours.
+[tasks."install:skill"]
+description = "Link the backstage agent skill into ~/.agents/skills"
+run = '''
+source="{{config_root}}/agents/skills/backstage"
+target="$HOME/.agents/skills/backstage"
+
+for page in SKILL.md scenes.md vm-stage.md producing.md; do
+  test -f "$source/$page" || { echo "the skill is missing $page" >&2; exit 1; }
+done
+
+if [ -L "$target" ] && [ "$(readlink -f "$target")" = "$(readlink -f "$source")" ]; then
+  echo "already linked -> $target"
+  exit 0
+fi
+# Anything else at that path belongs to somebody. Refuse rather than replace:
+# a skill silently overwritten is an agent quietly taught something else.
+if [ -e "$target" ] || [ -L "$target" ]; then
+  echo "$target already exists and is not this skill" >&2
+  exit 1
+fi
+
+mkdir -p "$HOME/.agents/skills"
+ln -s "$source" "$target"
+echo "linked -> $target"
+echo "restart your agent to load the backstage skill"
+'''
+
+[tasks."uninstall:skill"]
+description = "Remove the backstage agent skill from ~/.agents/skills"
+run = '''
+source="{{config_root}}/agents/skills/backstage"
+target="$HOME/.agents/skills/backstage"
+
+if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+  echo "nothing at $target"
+  exit 0
+fi
+# Only what this checkout linked. A directory somebody wrote by hand at that
+# path is theirs, and removing it would be this task deleting somebody's work
+# because the names happened to match.
+if [ ! -L "$target" ] || [ "$(readlink -f "$target")" != "$(readlink -f "$source")" ]; then
+  echo "$target is not a link to this checkout; leaving it alone" >&2
+  exit 1
+fi
+rm -f "$target"
+echo "removed -> $target"
+'''

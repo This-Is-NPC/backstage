@@ -41,37 +41,37 @@ func TestValidateProduction(t *testing.T) {
 		"bad":   {Cmd: "render --no-output-placeholder"},
 	}
 
-	ok := Production{Scenes: []string{"a", "b"}, Transitions: []TransitionUse{{After: "a", Use: "slide"}}}
+	ok := Production{Scenes: refs("a", "b"), Transitions: []TransitionUse{{After: "a", Use: "slide"}}}
 	if err := p.ValidateProduction(ok); err != nil {
 		t.Errorf("valid production rejected: %v", err)
 	}
 
-	missingScene := Production{Scenes: []string{"a", "missing"}}
+	missingScene := Production{Scenes: refs("a", "missing")}
 	if err := p.ValidateProduction(missingScene); err == nil {
 		t.Error("expected missing-scene error")
 	}
 
-	unknownUse := Production{Scenes: []string{"a", "b"}, Transitions: []TransitionUse{{After: "a", Use: "nope"}}}
+	unknownUse := Production{Scenes: refs("a", "b"), Transitions: []TransitionUse{{After: "a", Use: "nope"}}}
 	if err := p.ValidateProduction(unknownUse); err == nil {
 		t.Error("expected unknown-transition error")
 	}
 
-	noOut := Production{Scenes: []string{"a", "b"}, Transitions: []TransitionUse{{After: "a", Use: "bad"}}}
+	noOut := Production{Scenes: refs("a", "b"), Transitions: []TransitionUse{{After: "a", Use: "bad"}}}
 	if err := p.ValidateProduction(noOut); err == nil {
 		t.Error("expected missing-{{out}} error")
 	}
 
-	afterNotInSeq := Production{Scenes: []string{"a", "b"}, Transitions: []TransitionUse{{After: "z", Use: "slide"}}}
+	afterNotInSeq := Production{Scenes: refs("a", "b"), Transitions: []TransitionUse{{After: "z", Use: "slide"}}}
 	if err := p.ValidateProduction(afterNotInSeq); err == nil {
 		t.Error("expected after-not-in-sequence error")
 	}
 
-	duplicateAfter := Production{Scenes: []string{"a", "b"}, Transitions: []TransitionUse{{After: "a", Use: "slide"}, {After: "a", Use: "slide"}}}
+	duplicateAfter := Production{Scenes: refs("a", "b"), Transitions: []TransitionUse{{After: "a", Use: "slide"}, {After: "a", Use: "slide"}}}
 	if err := p.ValidateProduction(duplicateAfter); err == nil {
 		t.Error("expected duplicate-transition error")
 	}
 
-	duplicateIntro := Production{Scenes: []string{"a", "b"}, Transitions: []TransitionUse{{After: "", Use: "slide"}, {After: "", Use: "slide"}}}
+	duplicateIntro := Production{Scenes: refs("a", "b"), Transitions: []TransitionUse{{After: "", Use: "slide"}, {After: "", Use: "slide"}}}
 	if err := p.ValidateProduction(duplicateIntro); err == nil {
 		t.Error("expected duplicate-intro error")
 	}
@@ -83,7 +83,7 @@ func TestValidateProduction(t *testing.T) {
 }
 
 func TestProductionLookup(t *testing.T) {
-	p := &Project{Productions: map[string]Production{"tour": {Scenes: []string{"a"}}}}
+	p := &Project{Productions: map[string]Production{"tour": {Scenes: refs("a")}}}
 	if _, err := p.Production("tour"); err != nil {
 		t.Errorf("lookup tour: %v", err)
 	}
@@ -95,8 +95,18 @@ func TestProductionLookup(t *testing.T) {
 func TestValidateIntroTransition(t *testing.T) {
 	p := projectWithScenes(t, "a", "b")
 	p.Transitions = map[string]Transition{"intro": {Cmd: "r --out {{out}}"}}
-	prod := Production{Scenes: []string{"a", "b"}, Transitions: []TransitionUse{{After: "", Use: "intro"}}}
+	prod := Production{Scenes: refs("a", "b"), Transitions: []TransitionUse{{After: "", Use: "intro"}}}
 	if err := p.ValidateProduction(prod); err != nil {
 		t.Errorf("intro transition (after empty) should be valid: %v", err)
 	}
+}
+
+// refs turns names into scene references, for cases written before a
+// production could say how to present a take.
+func refs(names ...string) []SceneRef {
+	out := make([]SceneRef, 0, len(names))
+	for _, name := range names {
+		out = append(out, SceneRef{Scene: name})
+	}
+	return out
 }

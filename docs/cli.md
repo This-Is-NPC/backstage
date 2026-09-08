@@ -67,7 +67,7 @@ concatenates everything into one video at `<project>/<record.out>/production.mp4
 | `--transition NAME` | transition inserted between every ad-hoc pair |
 | `--show-staging` | include the stage montage in the video (default hides it) |
 | `--keep-segments` | keep the intermediate clips for debugging |
-| `--speed N` | scene timing multiplier (`1` = real time, smaller = faster) |
+| `--speed N` | shortens the delays **while** each scene is performed. The machine gets less time, so a budget that runs on the clock is not spent. To publish a take faster, give the production a `speed`. |
 | `--out FILE` | output path for the final video |
 
 ## setup

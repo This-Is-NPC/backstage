@@ -15,7 +15,7 @@ import (
 
 func TestPlanOrder(t *testing.T) {
 	prod := scene.Production{
-		Scenes: []string{"a", "b", "c"},
+		Scenes: refs("a", "b", "c"),
 		Transitions: []scene.TransitionUse{
 			{After: "a", Use: "fade"},
 			{After: "b", Use: "wipe"},
@@ -39,7 +39,7 @@ func TestPlanOrder(t *testing.T) {
 func TestPlanNoTrailingTransition(t *testing.T) {
 	// a transition after the last scene has no "next" → dropped.
 	prod := scene.Production{
-		Scenes:      []string{"a", "b"},
+		Scenes: refs("a", "b"),
 		Transitions: []scene.TransitionUse{{After: "b", Use: "fade"}},
 	}
 	segs := plan(prod)
@@ -82,7 +82,7 @@ func TestTransitionRenderModeSelection(t *testing.T) {
 
 func TestPlanIntroTransition(t *testing.T) {
 	prod := scene.Production{
-		Scenes:      []string{"a", "b"},
+		Scenes: refs("a", "b"),
 		Transitions: []scene.TransitionUse{{After: "", Use: "intro"}, {After: "a", Use: "fade"}},
 	}
 	segs := plan(prod)
@@ -413,4 +413,14 @@ func waitForFile(t *testing.T, path string) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+// refs turns names into scene references, for cases written before a
+// production could say how to present a take.
+func refs(names ...string) []scene.SceneRef {
+	out := make([]scene.SceneRef, 0, len(names))
+	for _, name := range names {
+		out = append(out, scene.SceneRef{Scene: name})
+	}
+	return out
 }

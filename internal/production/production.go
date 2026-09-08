@@ -35,6 +35,8 @@ type segment struct {
 	kind     string // "scene" | "transition"
 	name     string // scene name, or transition (Use) name
 	from, to string // surrounding scenes (transitions only)
+	// speed is how to present this take. Empty is real time.
+	speed []scene.Segment
 }
 
 type interruptGuard interface {
@@ -62,15 +64,16 @@ func plan(prod scene.Production) []segment {
 	}
 	var segs []segment
 	if intro != nil && len(prod.Scenes) > 0 {
-		segs = append(segs, segment{kind: "transition", name: intro.Use, to: prod.Scenes[0]})
+		segs = append(segs, segment{kind: "transition", name: intro.Use, to: prod.Scenes[0].Scene})
 	}
-	for i, sc := range prod.Scenes {
-		segs = append(segs, segment{kind: "scene", name: sc})
+	for i, ref := range prod.Scenes {
+		sc := ref.Scene
+		segs = append(segs, segment{kind: "scene", name: sc, speed: ref.Speed})
 		if i < len(prod.Scenes)-1 {
 			if tu, ok := after[sc]; ok {
 				segs = append(segs, segment{
 					kind: "transition", name: tu.Use,
-					from: sc, to: prod.Scenes[i+1],
+					from: sc, to: prod.Scenes[i+1].Scene,
 				})
 			}
 		}
@@ -81,7 +84,11 @@ func plan(prod scene.Production) []segment {
 // AdHoc builds a production from a scene-name list, optionally inserting the same
 // transition between every consecutive pair.
 func AdHoc(scenes []string, trans string) scene.Production {
-	p := scene.Production{Scenes: scenes}
+	refs := make([]scene.SceneRef, 0, len(scenes))
+	for _, name := range scenes {
+		refs = append(refs, scene.SceneRef{Scene: name})
+	}
+	p := scene.Production{Scenes: refs}
 	if trans != "" {
 		for i := 0; i < len(scenes)-1; i++ {
 			p.Transitions = append(p.Transitions, scene.TransitionUse{After: scenes[i], Use: trans})
@@ -140,7 +147,11 @@ func Run(opts Options) (string, error) {
 			return err
 		}
 		fmt.Printf(">> scene %q → clip\n", sg.name)
-		runErr := engine.New(p).Run(s, engine.Options{
+		eng, err := engine.NewForScene(p, s)
+		if err != nil {
+			return err
+		}
+		runErr := eng.Run(s, engine.Options{
 			Record: true, OutPath: clip, ShowStaging: opts.ShowStaging, Speed: speed,
 			OnInterrupt: cleanupSegmentsOnInterrupt,
 		})
@@ -154,9 +165,23 @@ func Run(opts Options) (string, error) {
 		if teardownErr != nil {
 			return fmt.Errorf("teardown after scene %q: %w", sg.name, teardownErr)
 		}
-		raw[i] = clip
+		// And then how to present it. The take on disk keeps the time it
+		// really took; what goes into the production is a retimed copy.
+		//
+		// After the recording and never during it: a scene played fast is a
+		// machine given less time, and the whole point of a long take is that
+		// the machine had every second of it.
+		shown := clip
+		if len(sg.speed) > 0 {
+			fmt.Printf(">> scene %q → retimed\n", sg.name)
+			shown, err = Retime(clip, sg.speed, "")
+			if err != nil {
+				return err
+			}
+		}
+		raw[i] = shown
 		if firstSceneClip == "" {
-			firstSceneClip = clip
+			firstSceneClip = shown
 		}
 		return nil
 	}

@@ -25,9 +25,23 @@ type Step struct {
 type Scene struct {
 	Name   string `json:"name,omitempty"`
 	Layout string `json:"layout"`
-	Fresh  bool   `json:"fresh,omitempty"`
-	Reset  *bool  `json:"reset,omitempty"`
-	Steps  []Step `json:"steps"`
+	// VM names an entry in the project's `vms` and moves the whole take onto
+	// that computer: the steps are typed on its own keyboard and its screen is
+	// recorded from inside it. Empty is the ordinary stage, a tmux layout in a
+	// window on this machine.
+	//
+	// One scene, one computer. Two computers are two scenes, composed
+	// afterwards -- which is what keeps a take from having to keep two
+	// recorders in step, and what lets the same footage be laid out more than
+	// one way later.
+	VM string `json:"vm,omitempty"`
+	// Recorder overrides the vm's, for a scene that needs the other one.
+	// A scene ending in a logout, a reboot or a greeter has to be filmed
+	// from outside the session it is about to end.
+	Recorder string `json:"recorder,omitempty"`
+	Fresh    bool   `json:"fresh,omitempty"`
+	Reset    *bool  `json:"reset,omitempty"`
+	Steps    []Step `json:"steps"`
 }
 
 // LayoutName returns the layout to stage.
@@ -50,6 +64,8 @@ type Project struct {
 	Hooks   Hooks             `json:"hooks,omitempty"`
 	Aliases map[string]Alias  `json:"aliases,omitempty"`
 	Layouts map[string]Layout `json:"layouts"`
+	// VMs are the Omarchy guests a scene can be staged on, by name.
+	VMs map[string]VMCfg `json:"vms,omitempty"`
 
 	// Render targets the final video when stitching a production (concat needs a
 	// consistent size/fps across clips).
@@ -61,6 +77,52 @@ type Project struct {
 
 	// Dir is the project root (directory holding the config). Set by LoadProject.
 	Dir string `json:"-"`
+}
+
+// VMCfg is one Omarchy guest a scene can run on.
+//
+// **Omarchy is a requirement and not a default.** The stage installs its tools
+// out of Omarchy's repository, records through its Hyprland's wlr-screencopy --
+// which is the only way a guest with no render node can capture its own screen
+// -- puts a keyboard on its single seat, and drives its shell's own verbs for
+// idle, notifications and restart. A guest that is not Omarchy is refused when
+// the stage opens rather than failing later as something else.
+type VMCfg struct {
+	// Domain is the libvirt domain name.
+	Domain string `json:"domain"`
+	// User is the account whose session is filmed.
+	User string `json:"user"`
+	// Admin is the account ssh connects as; it needs the key and sudo. Empty
+	// means the filmed account is also the administrator.
+	//
+	// Two fields because they are two people. A household is worth filming
+	// precisely because whoever is at the keyboard has no privilege, and
+	// handing the filmed account a key and passwordless sudo so a recorder
+	// could reach it would be filming a machine nobody described.
+	Admin string `json:"admin,omitempty"`
+	// Key is the ssh private key, `~` expanded. Empty uses ssh's own default.
+	Key string `json:"key,omitempty"`
+	// URI is the libvirt connection; empty means qemu:///system.
+	URI string `json:"uri,omitempty"`
+	// Open is what the stage leaves on the desktop for the scene to drive.
+	// Empty opens a terminal, which is what most scenes type into.
+	//
+	// A showcase of a program with a window should be showing that window, so
+	// this names it: `omahouse-studio` puts the product's own face on screen
+	// and keeps the terminal for the steps that genuinely have no other way.
+	Open string `json:"open,omitempty"`
+	// Language is the locale the opened program runs under, like
+	// `C.UTF-8` or `en_US.UTF-8`. A film whose captions are in one
+	// language and whose package manager is in another reads as two
+	// recordings spliced together.
+	Language string `json:"language,omitempty"`
+	// Recorder is `inside` (the default) or `framebuffer`.
+	//
+	// `inside` records the guest's own screen from within its session, which is
+	// smooth and is right for almost everything. `framebuffer` photographs the
+	// screen from outside through libvirt: coarser, and the only thing that
+	// survives the session it is filming being killed.
+	Recorder string `json:"recorder,omitempty"`
 }
 
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the
@@ -145,7 +207,9 @@ type TransitionUse struct {
 
 // Production is an ordered list of scene names plus the transitions between them.
 type Production struct {
-	Scenes      []string        `json:"scenes"`
+	// Scenes are the takes in order. Each is a bare name, or an object
+	// that also says how to present it. See SceneRef.
+	Scenes      []SceneRef      `json:"scenes"`
 	Transitions []TransitionUse `json:"transitions,omitempty"`
 }
 

@@ -19,3 +19,6 @@ if [ -n "$hits" ]; then
   exit 1
 fi
 echo "OK: core is tool-agnostic"
+
+echo ">> agent skill"
+./scripts/check-skill.sh

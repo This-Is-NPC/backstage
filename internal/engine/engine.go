@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"sync"
 
+	"github.com/This-Is-NPC/backstage/internal/guest"
 	"github.com/This-Is-NPC/backstage/internal/pane"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 	"github.com/This-Is-NPC/backstage/internal/recorder"
@@ -39,7 +40,10 @@ type Engine struct {
 	Rec     recorder.Recorder
 	Prompt  prompter.Prompter
 
-	Speed      float64
+	Speed float64
+	// PaneDriver overrides the default tmux driver. A vm stage sets it,
+	// because on that stage a target names a computer and not a pane.
+	PaneDriver pane.Driver
 	pane       pane.Driver
 	rehearsing bool
 	cmdGuard   *CommandGuard
@@ -54,6 +58,55 @@ func New(p *scene.Project) *Engine {
 		Prompt:  &prompter.Hypr{},
 		Speed:   1,
 	}
+}
+
+// NewForScene builds an Engine with the drivers the scene asks for.
+//
+// A scene with no `vm` gets the ordinary stage: a tmux layout in a window on
+// this machine, recorded off a monitor. A scene that names a vm gets all four
+// drivers swapped at once -- stage, recorder, panes, and in time the prompter
+// -- because the machine being filmed changes every one of them together. That
+// is why they are chosen here and not each in its own place: a run with a guest
+// stage and a host recorder would record this desktop while typing on another.
+func NewForScene(p *scene.Project, s *scene.Scene) (*Engine, error) {
+	e := New(p)
+	if s == nil || s.VM == "" {
+		return e, nil
+	}
+	cfg, ok := p.VMs[s.VM]
+	if !ok {
+		return nil, fmt.Errorf("scene %q runs on vm %q, which backstage.json does not declare",
+			s.Name, s.VM)
+	}
+	if cfg.Domain == "" {
+		return nil, fmt.Errorf("vm %q names no libvirt domain", s.VM)
+	}
+	if cfg.User == "" {
+		return nil, fmt.Errorf("vm %q names no user; the stage films that account's session "+
+			"and connects as it", s.VM)
+	}
+	box := guest.New(cfg.Domain, cfg.User, cfg.Admin, cfg.Key, cfg.URI)
+	box.Open = cfg.Open
+	box.Language = cfg.Language
+	e.Stager = stage.NewVM(box)
+
+	// The scene wins over the vm, because the scene is what knows whether it is
+	// about to kill the session it is being recorded from.
+	which := cfg.Recorder
+	if s.Recorder != "" {
+		which = s.Recorder
+	}
+	switch which {
+	case "", "inside":
+		e.Rec = recorder.NewWF(box, p.Record.FPS)
+	case "framebuffer":
+		e.Rec = recorder.NewFramebuffer(cfg.Domain, cfg.URI, p.Record.FPS)
+	default:
+		return nil, fmt.Errorf("scene %q asks for recorder %q; say `inside` or `framebuffer`",
+			s.Name, which)
+	}
+	e.PaneDriver = pane.NewGuest(box)
+	return e, nil
 }
 
 // Run stages the scene's layout, optionally records, executes every step, then
@@ -186,7 +239,11 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		if err != nil {
 			return err
 		}
-		e.pane = pane.NewTmux(m)
+		if e.PaneDriver != nil {
+			e.pane = e.PaneDriver
+		} else {
+			e.pane = pane.NewTmux(m)
+		}
 		e.sleep(stageWarm)
 	} else {
 		fmt.Printf(">> stage layout: %s (none)\n", s.LayoutName())

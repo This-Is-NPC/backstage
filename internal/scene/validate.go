@@ -116,7 +116,8 @@ func (p *Project) ValidateProduction(prod Production) error {
 		return fmt.Errorf("production has no scenes")
 	}
 	inSeq := map[string]bool{}
-	for _, sc := range prod.Scenes {
+	for _, ref := range prod.Scenes {
+		sc := ref.Scene
 		path, err := p.ScenePathSafe(sc)
 		if err != nil {
 			return err
