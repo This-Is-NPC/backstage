@@ -36,7 +36,9 @@ backstage play path/to/scene.json
 
 Finds the project (`backstage.json` above the scene), runs the `reset`/`setup`
 hook, stages the layout, starts recording, performs every step, stops. The video
-lands at `<project>/<record.out>/<scene-name>.mp4`. The stage stays open
+lands at `<project>/<record.out>/<scene-name>.mp4`. A take that comes back
+materially shorter than the time the recorder ran is reported as an error, with
+both lengths; the clip is written either way. The stage stays open
 afterwards; close it with `backstage kill`.
 
 ## rehearse

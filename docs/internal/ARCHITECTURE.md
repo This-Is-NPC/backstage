@@ -41,6 +41,7 @@ backstage/
 │   ├── engine/
 │   │   ├── engine.go            # Run(scene, opts): hooks→stage→record→steps→stop
 │   │   ├── actions.go           # dispatch dialog/run/type/keys/prop/wait
+│   │   ├── take.go              # weigh the clip against the recording window
 │   │   └── timing.go            # delays, type duration
 │   ├── stage/                   # stage drivers (display + windows)
 │   │   ├── stage.go             # Stager interface
@@ -48,6 +49,7 @@ backstage/
 │   │   └── virtual.go           # future: Xvfb/cage headless @ WxH
 │   ├── recorder/                # recording drivers
 │   │   ├── recorder.go          # Recorder interface
+│   │   ├── length.go            # ffprobe clip duration, shared with production
 │   │   ├── gpu.go               # gpu-screen-recorder (current)
 │   │   └── ffmpeg.go            # ffmpeg x11grab (virtual display)
 │   ├── prompter/                # auto-type of the box
