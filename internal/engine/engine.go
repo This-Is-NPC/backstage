@@ -89,7 +89,22 @@ func NewForScene(p *scene.Project, s *scene.Scene) (*Engine, error) {
 	box.Open = cfg.Open
 	box.Language = cfg.Language
 	e.Stager = stage.NewVM(box)
-	e.Rec = recorder.NewWF(box, p.Record.FPS)
+
+	// The scene wins over the vm, because the scene is what knows whether it is
+	// about to kill the session it is being recorded from.
+	which := cfg.Recorder
+	if s.Recorder != "" {
+		which = s.Recorder
+	}
+	switch which {
+	case "", "inside":
+		e.Rec = recorder.NewWF(box, p.Record.FPS)
+	case "framebuffer":
+		e.Rec = recorder.NewFramebuffer(cfg.Domain, cfg.URI, p.Record.FPS)
+	default:
+		return nil, fmt.Errorf("scene %q asks for recorder %q; say `inside` or `framebuffer`",
+			s.Name, which)
+	}
 	e.PaneDriver = pane.NewGuest(box)
 	return e, nil
 }

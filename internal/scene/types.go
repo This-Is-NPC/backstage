@@ -34,10 +34,14 @@ type Scene struct {
 	// afterwards -- which is what keeps a take from having to keep two
 	// recorders in step, and what lets the same footage be laid out more than
 	// one way later.
-	VM    string `json:"vm,omitempty"`
-	Fresh bool   `json:"fresh,omitempty"`
-	Reset *bool  `json:"reset,omitempty"`
-	Steps []Step `json:"steps"`
+	VM string `json:"vm,omitempty"`
+	// Recorder overrides the vm's, for a scene that needs the other one.
+	// A scene ending in a logout, a reboot or a greeter has to be filmed
+	// from outside the session it is about to end.
+	Recorder string `json:"recorder,omitempty"`
+	Fresh    bool   `json:"fresh,omitempty"`
+	Reset    *bool  `json:"reset,omitempty"`
+	Steps    []Step `json:"steps"`
 }
 
 // LayoutName returns the layout to stage.
@@ -112,6 +116,13 @@ type VMCfg struct {
 	// language and whose package manager is in another reads as two
 	// recordings spliced together.
 	Language string `json:"language,omitempty"`
+	// Recorder is `inside` (the default) or `framebuffer`.
+	//
+	// `inside` records the guest's own screen from within its session, which is
+	// smooth and is right for almost everything. `framebuffer` photographs the
+	// screen from outside through libvirt: coarser, and the only thing that
+	// survives the session it is filming being killed.
+	Recorder string `json:"recorder,omitempty"`
 }
 
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the
