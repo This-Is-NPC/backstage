@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/This-Is-NPC/backstage/compare/v0.3.0...v0.4.0) (2026-09-08)
+
+
+### Features
+
+* **engine:** report a take shorter than its window ([15f7676](https://github.com/This-Is-NPC/backstage/commit/15f7676bbc059c256183bccae7842e0f3bd1a9b4))
+* **engine:** report a take shorter than its window ([8bcd701](https://github.com/This-Is-NPC/backstage/commit/8bcd701e4033629a9ac8bf8a9c13380b365c0531))
+
+
+### Bug Fixes
+
+* **engine:** cap the slack a long take is given ([5959005](https://github.com/This-Is-NPC/backstage/commit/5959005e07a1538d2bacb28c1667720499f6c3bb))
+* **recorder:** notice a wf-recorder still closing ([867a11e](https://github.com/This-Is-NPC/backstage/commit/867a11eccb467533a76edad0916e753174117bc1))
+
 ## [0.3.0](https://github.com/This-Is-NPC/backstage/compare/v0.2.1...v0.3.0) (2026-09-08)
 
 
