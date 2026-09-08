@@ -23,7 +23,7 @@ func TestListProject(t *testing.T) {
 		Dir: dir,
 		Layouts: map[string]scene.Layout{"solo": {Panes: []scene.Pane{{Name: "t"}}}},
 		Productions: map[string]scene.Production{
-			"tour": {Scenes: []string{"01-intro"}, Transitions: []scene.TransitionUse{{After: "01-intro", Use: "x"}}},
+			"tour": {Scenes: refs("01-intro"), Transitions: []scene.TransitionUse{{After: "01-intro", Use: "x"}}},
 		},
 	}
 
@@ -64,4 +64,14 @@ func TestSplitCSV(t *testing.T) {
 	if len(splitCSV("")) != 0 {
 		t.Error("empty string should give no items")
 	}
+}
+
+// refs turns names into scene references, for cases written before a
+// production could say how to present a take.
+func refs(names ...string) []scene.SceneRef {
+	out := make([]scene.SceneRef, 0, len(names))
+	for _, name := range names {
+		out = append(out, scene.SceneRef{Scene: name})
+	}
+	return out
 }

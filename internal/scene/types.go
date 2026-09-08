@@ -207,7 +207,9 @@ type TransitionUse struct {
 
 // Production is an ordered list of scene names plus the transitions between them.
 type Production struct {
-	Scenes      []string        `json:"scenes"`
+	// Scenes are the takes in order. Each is a bare name, or an object
+	// that also says how to present it. See SceneRef.
+	Scenes      []SceneRef      `json:"scenes"`
 	Transitions []TransitionUse `json:"transitions,omitempty"`
 }
 
