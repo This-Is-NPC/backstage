@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/This-Is-NPC/backstage/internal/recorder"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
 
@@ -57,7 +58,7 @@ func TestRetimeShortensTheClipByTheRate(t *testing.T) {
 	if out == clip {
 		t.Fatal("Retime returned the original clip")
 	}
-	length, err := Duration(out)
+	length, err := recorder.Duration(out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +68,7 @@ func TestRetimeShortensTheClipByTheRate(t *testing.T) {
 		t.Errorf("the retimed clip is %.2fs; want about 5s", length)
 	}
 	// And the take is untouched, because it is the evidence.
-	was, err := Duration(clip)
+	was, err := recorder.Duration(clip)
 	if err != nil || was < 7.5 {
 		t.Errorf("the original clip is now %.2fs", was)
 	}
