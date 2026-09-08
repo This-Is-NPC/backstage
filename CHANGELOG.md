@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/This-Is-NPC/backstage/compare/v0.2.1...v0.3.0) (2026-09-08)
+
+
+### Features
+
+* **guest:** drive an Omarchy guest as a stage ([976a7d2](https://github.com/This-Is-NPC/backstage/commit/976a7d29de1014ccf203e205bfbd9447876f2119))
+* **produce:** play a stretch of a take at its own rate ([8f6d339](https://github.com/This-Is-NPC/backstage/commit/8f6d339c43cca07819513e6bf75fdc509da2f8e6))
+* **recorder:** film a guest from outside it ([3ba7558](https://github.com/This-Is-NPC/backstage/commit/3ba7558713349ba2dd65af3238f111b6ebc79cbc))
+* **scene:** let a scene choose which recorder films it ([8664486](https://github.com/This-Is-NPC/backstage/commit/8664486e953490e60d526e96087d3ec729864b9f))
+* **scene:** let a scene name the vm it runs on ([77e382a](https://github.com/This-Is-NPC/backstage/commit/77e382a7c607db796bfce1dfdd4da36d92dbd995))
+* **skill:** install the agent skill into ~/.agents ([8993bfa](https://github.com/This-Is-NPC/backstage/commit/8993bfae0832cb6627651a45aedc74c9153de99b))
+* stage, drive and record a scene inside an Omarchy guest ([263a1c5](https://github.com/This-Is-NPC/backstage/commit/263a1c5db49bb5644b9aedc48f0a1311e8880879))
+* **vm:** make the stage usable for a real take ([6861076](https://github.com/This-Is-NPC/backstage/commit/6861076c8eeef30596bc1af33bace236cfc8f5c5))
+* **vm:** stage, record and type inside an Omarchy guest ([8d283d9](https://github.com/This-Is-NPC/backstage/commit/8d283d9dce7a7f69423e015a2ee7e66fb45dbeaf))
+
 ## [0.2.1](https://github.com/This-Is-NPC/backstage/compare/v0.2.0...v0.2.1) (2026-06-15)
 
 
