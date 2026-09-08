@@ -30,7 +30,16 @@ var clipLength = recorder.Duration
 // first sleeping for a real scene's worth of seconds.
 var takeSlack = 2.0 // seconds
 
-const takeSlackPct = 0.02 // of the window, for takes long enough that 2s is noise
+// Of the window, for takes long enough that two seconds is noise -- but capped,
+// because a slack that grows without limit stops guarding the takes that most
+// need guarding. Two percent of a fifty-one minute session is a whole minute:
+// a take that lost a minute of its ending would pass in silence, and that is
+// the take nobody can casually shoot again. The cap is the smallest loss ever
+// measured, so the slack never grows past a gap that has really happened.
+const (
+	takeSlackPct = 0.02
+	takeSlackCap = 5.0 // seconds
+)
 
 // checkTake reports a take that is materially shorter than the window it was
 // recorded in.
@@ -61,6 +70,9 @@ func checkTake(path string, window time.Duration) error {
 	slack := takeSlack
 	if p := want * takeSlackPct; p > slack {
 		slack = p
+	}
+	if slack > takeSlackCap {
+		slack = takeSlackCap
 	}
 	if length >= want-slack {
 		return nil

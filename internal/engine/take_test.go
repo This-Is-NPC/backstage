@@ -49,8 +49,14 @@ func TestCheckTakeSeparatesTheTakesThatLostTheirEnding(t *testing.T) {
 		{"the take that lost more of it", 50, 41.2, true},
 		{"the one take that was held to its end", 62, 61.733, false},
 		{"a take a frame under, which every clean take is", 44, 43.9, false},
-		{"a long take, where two seconds is noise", 3000, 2995, false},
+		{"a long take, where two seconds is noise", 3000, 2997, false},
 		{"a long take that is genuinely short", 3000, 2800, true},
+		// The reason the slack is capped. Two percent of a fifty-one minute
+		// session is a whole minute, so without a cap a take that lost a
+		// minute of its ending -- the session closing, which is the point of
+		// that film, and an hour of clock to shoot again -- would pass.
+		{"fifty-one minutes losing a minute of its ending", 3075, 3015, true},
+		{"fifty-one minutes losing six seconds of its ending", 3075, 3069, true},
 		// The framebuffer recorder assembles at the rate it measured, so its
 		// takes run slightly past their window rather than short of it. Over
 		// is never a complaint: the recorder was running for all of it.

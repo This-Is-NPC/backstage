@@ -122,6 +122,10 @@ where the two would be the same size and hardest to tell apart.
 
 **Backstage now says so.** A take materially shorter than the window it was
 filmed in is reported as an error at the end of the run, naming both lengths.
+Materially is two seconds, or two percent of the window, and never more than
+five: the percentage covers a middling take, and the cap keeps it from growing
+into the length of the losses it exists to catch. Two percent of a fifty-one
+minute session would be a whole minute.
 The take is kept: a short take is still worth looking at. Each take from a
 guest also prints how long its recorder took to close and how much it wrote
 while closing, which is what tells a recorder that was merely slow from one
