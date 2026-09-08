@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/This-Is-NPC/backstage/internal/recorder"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
 
@@ -19,7 +20,7 @@ import (
 // speed to publish it at is a question somebody answers afterwards, more than
 // once, and a clip written fast has thrown the answer away.
 func Retime(clip string, segments []scene.Segment, badgeFont string) (string, error) {
-	length, err := Duration(clip)
+	length, err := recorder.Duration(clip)
 	if err != nil {
 		return "", err
 	}
@@ -100,20 +101,4 @@ func badge(text, font string) string {
 		drawn += ":fontfile=" + font
 	}
 	return drawn
-}
-
-// Duration reads how long a clip is, in seconds.
-func Duration(clip string) (float64, error) {
-	said, err := exec.Command("ffprobe", "-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=nw=1:nk=1", clip).Output()
-	if err != nil {
-		return 0, fmt.Errorf("reading the length of %s: %w", filepath.Base(clip), err)
-	}
-	length, err := strconv.ParseFloat(strings.TrimSpace(string(said)), 64)
-	if err != nil || length <= 0 {
-		return 0, fmt.Errorf("%s reports a length of %q", filepath.Base(clip),
-			strings.TrimSpace(string(said)))
-	}
-	return length, nil
 }

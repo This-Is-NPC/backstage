@@ -115,8 +115,28 @@ Use the other recorder for that scene:
 `framebuffer` photographs the screen through libvirt. Nothing in the guest can
 stop it. It survives a logout, a compositor restart, and a reboot.
 
-The rate is lower. Each frame is a full grab. Use `inside` for every other
-scene.
+The rate is lower. Each frame is a full grab.
+
+---
+
+## Read the length the run reports
+
+A clip can come back short without the session having ended. The recorder
+inside the guest can stop before the scene does, and what it drops is the end.
+The run reports it and names both lengths:
+
+```
+the take is 46.2s but the recorder ran for 62.0s: 15.8s is missing
+```
+
+The clip is kept. Watch it, and film the scene again if it lost the beat it was
+made for. Each guest take also prints how long its recorder took to close.
+
+A `wait` step at the end of the scene moves the loss into padding. Size it
+against the take: about a quarter of the running time for a scene driving a
+window. A scene that is long and still, and whose last beat is the point, is
+better filmed with `framebuffer` -- it assembles at the rate it measured, so it
+is real time and has no end to lose.
 
 ---
 

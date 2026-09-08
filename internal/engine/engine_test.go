@@ -421,8 +421,9 @@ func (f *fakeStager) Teardown() error {
 }
 
 type fakeRec struct {
-	order *[]string
-	out   string
+	order   *[]string
+	out     string
+	stopped bool
 }
 
 func (f *fakeRec) Start(out string) error {
@@ -430,7 +431,7 @@ func (f *fakeRec) Start(out string) error {
 	*f.order = append(*f.order, "rec")
 	return nil
 }
-func (f *fakeRec) Stop() (string, error) { return f.out, nil }
+func (f *fakeRec) Stop() (string, error) { f.stopped = true; return f.out, nil }
 
 type startErrRec struct {
 	startErr error

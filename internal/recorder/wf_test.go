@@ -44,3 +44,15 @@ func TestWFStopBeforeStartIsRefusedByName(t *testing.T) {
 		t.Errorf("the refusal does not say what is wrong: %v", err)
 	}
 }
+
+func TestGrewSaysSoWhenTheSizeCouldNotBeRead(t *testing.T) {
+	if got := grew(-1, 100); !strings.Contains(got, "unknown") {
+		t.Errorf("grew with no reading = %q, want it to admit it", got)
+	}
+	if got := grew(100, -1); !strings.Contains(got, "unknown") {
+		t.Errorf("grew with no second reading = %q, want it to admit it", got)
+	}
+	if got := grew(0, 2<<20); got != "2.0 MiB" {
+		t.Errorf("grew(0, 2MiB) = %q", got)
+	}
+}

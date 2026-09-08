@@ -78,8 +78,8 @@ budget that runs on the clock is never spent.
 | Recorder | Where | Use it for |
 |---|---|---|
 | `gpu-screen-recorder` | this machine | a stage on this machine |
-| `wf-recorder` | inside the guest | almost every guest scene |
-| framebuffer | outside the guest | a scene that ends the session |
+| `wf-recorder` | inside the guest | a guest scene whose picture moves |
+| framebuffer | outside the guest | a scene that ends the session, or a long still one whose last beat is the point |
 
 A guest with no render node cannot use hardware encoding. `wf-recorder` records
 through the compositor and encodes in software.
@@ -91,6 +91,30 @@ its own size.
 
 A recorder inside the session dies with that session. Use the framebuffer
 recorder for a scene that ends a session.
+
+A recorder inside the session can also come back short without dying. It has
+been measured losing a twentieth of a take with a terminal on screen, and better
+than a fifth with a window. What it loses is the end. See
+[What does not work yet](what-does-not-work.md).
+
+---
+
+## A take is weighed against the window it was filmed in
+
+Backstage starts a clock when the recorder is warm and reads it when the
+recorder stops. That is how long the recorder was running. It then reads how
+long the clip is.
+
+A clip materially shorter than that window is missing its end, and the run says
+so and names both lengths. The take is kept: a short take is still evidence.
+
+Nothing else notices. A recorder that stops early exits cleanly, writes a whole
+container, writes a file that is not empty, and writes a film that plays at real
+speed with no gap in it. Every check a recorder makes for itself passes.
+
+The window is the clock and not the sum of the delays of the scene. A prop takes
+as long as it takes. A guest is slow when it is slow. A rehearsal asks for
+delays it will not sleep. The clock covers all of it.
 
 ---
 

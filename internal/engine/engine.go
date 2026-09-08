@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/This-Is-NPC/backstage/internal/guest"
 	"github.com/This-Is-NPC/backstage/internal/pane"
@@ -151,6 +152,9 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	var recMu sync.Mutex
 	recArmed := false
 	recStopped := false
+	// When the recorder became warm, so a take can be weighed against the
+	// window it was filmed in. See checkTake.
+	var recArmedAt time.Time
 	stopRec := func() error {
 		recMu.Lock()
 		if !opts.Record || !recArmed || recStopped {
@@ -221,6 +225,9 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		if err := e.Rec.Start(out); err != nil {
 			return err
 		}
+		recMu.Lock()
+		recArmedAt = time.Now()
+		recMu.Unlock()
 		return nil
 	}
 
@@ -269,8 +276,18 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 
 	e.sleep(endWait)
 	if opts.Record {
+		recMu.Lock()
+		window := time.Since(recArmedAt)
+		recMu.Unlock()
 		if err := stopRec(); err != nil {
 			return err
+		}
+		// Joined and not returned: the take is on disk and a short one is still
+		// worth keeping and looking at, the same reason a failed step does not
+		// abandon the rest of the scene. What must not happen is finishing quietly.
+		if err := checkTake(out, window); err != nil {
+			fmt.Fprintf(os.Stderr, "   !! %v\n", err)
+			runErr = errors.Join(runErr, err)
 		}
 		fmt.Printf(">> done. %s  (stage open — backstage kill)\n", out)
 	} else {
