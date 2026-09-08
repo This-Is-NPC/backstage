@@ -4,74 +4,68 @@
 
 **Backstage turns real software workflows into reproducible video tutorials.**
 
-Write the flow once. Backstage opens the environment, drives the tools, shows
-step-by-step narration on screen, and records the result as a polished `.mp4`.
-When the app changes, re-run the same scene and regenerate the tutorial.
+Write the flow one time. Backstage opens the environment, drives the tools,
+shows the narration on the screen, and records the result as an `.mp4`. When the
+product changes, play the same scene again and get a new tutorial.
 
 No manual screen recording. No forgotten steps. No stale visual documentation.
 
 ---
 
-## Why Backstage?
+## Why Backstage
 
-Most product documentation explains what a feature does, but not how it actually
-feels to use it. Teams fill that gap with hand-recorded walkthroughs, onboarding
-clips, release videos, and customer tutorials.
+Most documentation explains what a feature does. It does not show how the
+feature feels to use. Teams fill that gap with hand-made walkthroughs.
 
-Those videos are valuable, but painful to maintain:
+Those videos are useful, and they are expensive to keep:
 
-- a UI changes and the tutorial becomes outdated;
-- a CLI flag changes and the old recording lies;
-- a release needs a fresh walkthrough, but recording it again takes time;
-- one typo or missed click means another take.
+- a screen changes, and the tutorial is wrong;
+- a flag changes, and the old recording lies;
+- a release needs a new walkthrough, and a person must record it again;
+- one wrong keystroke costs a new take.
 
-Backstage makes video tutorials **declarative, automated, and reproducible**.
-Describe a real workflow in a scene file, let Backstage perform it like a user,
-and get the same clean video every time.
+Backstage makes a video tutorial declarative. Describe the workflow in a scene
+file. Backstage performs it and records the take.
 
-It is documentation you can replay.
+It is documentation that you can play again.
 
-## What It Records
+## What it records
 
-Backstage is tool-agnostic. It can drive terminal apps, TUIs, browsers, desktop
-apps, local scripts, Playwright tests, setup commands, and any other process a
-scene can call.
+Backstage is tool-agnostic. It drives terminal programs, browsers, desktop
+applications, local scripts, and any other process that a scene calls.
 
 Use it for:
 
-- **Feature walkthroughs** that show the exact user journey.
-- **Onboarding videos** that can be regenerated when the product changes.
-- **Release notes** as short, repeatable clips instead of one-off recordings.
-- **CLI and API tutorials** that never go stale.
-- **E2E tests as video tutorials** by running headed tests and narrating the flow.
-- **Customer education** built from the same workflows your team already trusts.
+- **feature walkthroughs** that show the true user journey;
+- **onboarding videos** that you make again when the product changes;
+- **release notes** as short clips;
+- **CLI and API tutorials** that stay correct;
+- **end-to-end tests as tutorials**, with narration on the screen;
+- **customer education** from the workflows that your team already trusts.
 
-## The Core Idea
+## The core idea
 
 A Backstage project is a scripted production.
 
-| Term | What it means |
+| Term | Meaning |
 | :--- | :--- |
-| **Stage** | the environment the workflow runs in: terminals, panes, windows, apps |
-| **Scene** | the script: what to type, what to click, what to show, and when |
-| **Prompter** | the on-screen narration box, typed out like a human is explaining the step |
-| **Prop** | any external script a scene can call: Playwright, shell, Python, RPA, setup |
-| **Rehearsal** | a fast dry-run to validate the flow before recording |
+| **Stage** | the environment that the workflow runs in |
+| **Scene** | the script: what to type, what to press, and when |
+| **Prompter** | the narration box, typed like a person explains a step |
+| **Prop** | a script that a scene calls |
+| **Rehearsal** | a fast run that validates the flow before a take |
 
 You direct the scene. Backstage performs it and records the take.
 
-## How It Works
+## How it works
 
-1. Create a project with a `backstage.json` config.
-2. Define a layout for the Stage: one terminal, split panes, or app windows.
-3. Write a Scene as ordered steps: narration, commands, key presses, waits, Props.
-4. Rehearse the Scene to validate timing and targeting.
-5. Play the Scene to record a video tutorial.
+1. Create a project with a `backstage.json` file.
+2. Define a layout: one terminal, several panes, or a virtual machine.
+3. Write a scene as ordered steps: narration, commands, keys, waits, props.
+4. Rehearse the scene to check the timing and the targets.
+5. Play the scene to record the tutorial.
 
-The output lands in `<project>/recordings/<scene>.mp4`.
-
-Because the flow is scripted, the tutorial is not a fragile artifact. It is a
-repeatable build output.
+The output is at `<project>/recordings/<scene>.mp4`.
 
 ## Quickstart
 
@@ -81,8 +75,7 @@ Install on Linux:
 curl -fsSL https://raw.githubusercontent.com/This-Is-NPC/backstage/master/install.sh | bash
 ```
 
-Backstage is built for Hyprland and ships Linux-only builds. See the note below
-for dependencies.
+Backstage is built for Hyprland and ships Linux-only builds.
 
 Record a scene:
 
@@ -90,61 +83,77 @@ Record a scene:
 backstage play path/to/scene.json
 ```
 
-New here? Start with [Getting started](.docs/getting-started.md).
+New here? Start with
+[Record your first scene](docs/how-to-record-your-first-scene.md).
 
 ## Commands
 
-| Command | What it does |
+| Command | Result |
 | :--- | :--- |
-| `backstage list` | list the project's scenes and productions |
-| `backstage play SCENE` | run the scene and record it to an `.mp4` |
-| `backstage rehearse SCENE` | dry-run fast, with no recording, to check the flow |
-| `backstage produce PRODUCTION` | stitch several scenes and transitions into one video |
-| `backstage setup --stage LAYOUT` | set the stage without recording |
-| `backstage kill` | strike the set |
+| `backstage list` | it lists the scenes and productions of the project |
+| `backstage play SCENE` | it runs the scene and records an `.mp4` |
+| `backstage rehearse SCENE` | it runs the scene fast, with no recorder |
+| `backstage produce PRODUCTION` | it joins clips and transitions into one video |
+| `backstage setup --stage LAYOUT` | it stages a layout and stops |
+| `backstage kill` | it strikes the set |
 
-> `play`, `produce`, and `setup` take over your screen. Run them on a clean desktop.
+> `play`, `produce` and `setup` take the whole display. Run them on a clean
+> desktop, or on a virtual machine stage.
 
-## Turning E2E Tests Into Video Tutorials
+## Record on a virtual machine
 
-Your end-to-end tests already know how to walk through the product. Backstage can
-reuse that work.
+A scene can run inside a libvirt guest that runs Omarchy. Backstage starts the
+guest, installs its tools, makes the desktop ready, drives the keyboard of the
+guest, and records the screen from inside it.
 
-Point a Prop at a headed Playwright test, add on-screen narration, and the test
-run becomes a guided video tutorial. When the feature changes, update the test or
-scene and regenerate the clip.
+```json
+{ "name": "01-installing", "vm": "laptop", "layout": "solo", "steps": [] }
+```
+
+See [Record inside a virtual machine](docs/how-to-record-inside-a-vm.md).
+
+## Turn end-to-end tests into tutorials
+
+Your tests already walk through the product. Point a prop at a headed test, add
+narration, and the test run becomes a guided tutorial. When the feature
+changes, update the test and record the clip again.
 
 ```json
 {
   "name": "checkout-tour",
   "layout": "solo",
   "steps": [
-    {"action": "dialog", "value": "Let's walk through checkout from cart to confirmation."},
+    {"action": "dialog", "value": "Walk through checkout, from cart to confirmation."},
     {"action": "prop", "value": "props/e2e.sh", "args": ["checkout.spec.ts"]}
   ]
 }
 ```
 
-The result is not just proof that the feature works. It is a tutorial your users,
-support team, and release notes can reuse.
+## Your content stays yours
 
-## Project Content Stays Yours
+Backstage stays generic. Your scenes, hooks, scripts and recordings are in your
+own project directory.
 
-Backstage itself stays generic. Your scenes, hooks, scripts, demo state, and
-recordings live in `projects/`, which is kept out of version control by default.
+## Teach your agent
 
-The tool is shared. The workflows you record are yours.
+```bash
+mise run install:skill
+```
 
-## Learn More
+This links the Backstage skill into `~/.agents/skills`. Run
+`mise run uninstall:skill` to remove it.
 
-Full docs live in [`.docs/`](.docs/README.md).
+## Learn more
 
-- **[Getting started](.docs/getting-started.md)**: build your first tutorial from scratch.
-- **[Concepts](.docs/concepts.md)**: Stage, Scene, Prompter, Prop, Rehearsal.
-- **[Writing scenes](.docs/scenes.md)**: the scene file format, step by step.
-- **[Configuration](.docs/configuration.md)** and **[CLI](.docs/cli.md)**: references.
-- **[How it works](.docs/how-it-works.md)**: the pipeline under the hood.
+Full documentation is in [`docs/`](docs/README.md).
+
+- **[Record your first scene](docs/how-to-record-your-first-scene.md)**
+- **[Record inside a virtual machine](docs/how-to-record-inside-a-vm.md)**
+- **[Compose clips into one video](docs/how-to-compose-a-production.md)**
+- **[Scenes](docs/scenes.md)** and **[Configuration](docs/configuration.md)**
+- **[Design](docs/design.md)** and **[What does not work yet](docs/what-does-not-work.md)**
 
 ---
 
-<sub>Built for Hyprland. Needs Go, tmux, ghostty, gpu-screen-recorder, and ffmpeg.</sub>
+<sub>Built for Hyprland. Needs Go, tmux, ghostty, gpu-screen-recorder, and ffmpeg.
+A virtual machine stage also needs libvirt and an Omarchy guest.</sub>

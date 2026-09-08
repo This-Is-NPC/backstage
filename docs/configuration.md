@@ -235,4 +235,4 @@ live props — never hand a live prop the recording path.
 A transition is placed between its `after` scene and the next one; a transition
 after the last scene is ignored.
 
-See also: [Writing scenes](scenes.md) · [CLI](cli.md) · [How it works](how-it-works.md).
+See also: [Writing scenes](scenes.md) · [CLI](cli.md) · [How it works](design.md).
