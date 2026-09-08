@@ -47,10 +47,25 @@ var tools = []string{"ydotool", "wf-recorder"}
 // Guest is one Omarchy computer: a libvirt domain, an account on it, and the
 // ssh key that opens it.
 type Guest struct {
-	Domain  string
-	User    string
+	Domain string
+	// User is the account whose session is filmed.
+	User string
+	// Admin is the account ssh connects as. It needs a key and sudo; the
+	// filmed account needs neither, and usually should have neither.
+	//
+	// Two fields because they are two people. The point of filming a
+	// household is that whoever is at the keyboard has no privilege --
+	// giving the filmed account a key and passwordless sudo so a recorder
+	// could reach it would be filming a different machine than the one
+	// being described.
+	Admin   string
 	KeyFile string
 	URI     string
+	// Open is the program left on the desktop; empty means a terminal.
+	Open string
+	// Language is the locale that program runs under, so the film speaks
+	// one language. Empty leaves the guest's own.
+	Language string
 
 	// Filled by Start.
 	Address string
@@ -58,14 +73,17 @@ type Guest struct {
 }
 
 // New returns a guest with the defaults filled in.
-func New(domain, user, key, uri string) *Guest {
+func New(domain, user, admin, key, uri string) *Guest {
 	if uri == "" {
 		uri = "qemu:///system"
+	}
+	if admin == "" {
+		admin = user
 	}
 	if key != "" && strings.HasPrefix(key, "~/") {
 		key = filepath.Join(os.Getenv("HOME"), key[2:])
 	}
-	return &Guest{Domain: domain, User: user, KeyFile: key, URI: uri}
+	return &Guest{Domain: domain, User: user, Admin: admin, KeyFile: key, URI: uri}
 }
 
 func (g *Guest) virsh(args ...string) (string, error) {
@@ -83,7 +101,7 @@ func (g *Guest) sshArgs(command string) []string {
 		"-o", "LogLevel=ERROR",
 		"-o", "ConnectTimeout=10",
 		"-o", "BatchMode=yes",
-		fmt.Sprintf("%s@%s", g.User, g.Address),
+		fmt.Sprintf("%s@%s", g.Admin, g.Address),
 		command,
 	}
 }
@@ -116,7 +134,7 @@ func (g *Guest) Fetch(remote, local string) error {
 	// Owned by the ssh account too, because scp reads it as that account and a
 	// clip it cannot open is a take that was made and cannot be collected.
 	staging := "/tmp/backstage-fetch"
-	if out, err := g.Root(fmt.Sprintf("install -m 644 -o %s %s %s", g.User, remote, staging)); err != nil {
+	if out, err := g.Root(fmt.Sprintf("install -m 644 -o %s %s %s", g.Admin, remote, staging)); err != nil {
 		return fmt.Errorf("%s: %s", remote, strings.TrimSpace(out))
 	}
 	args := []string{
@@ -124,7 +142,7 @@ func (g *Guest) Fetch(remote, local string) error {
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
-		fmt.Sprintf("%s@%s:%s", g.User, g.Address, staging),
+		fmt.Sprintf("%s@%s:%s", g.Admin, g.Address, staging),
 		local,
 	}
 	if out, err := exec.Command("scp", args...).CombinedOutput(); err != nil {
@@ -173,7 +191,7 @@ func (g *Guest) Start(patience time.Duration) error {
 }
 
 func (g *Guest) readUID() error {
-	out, err := g.SSH("id -u")
+	out, err := g.SSH("id -u " + g.User)
 	if err != nil {
 		return fmt.Errorf("reading the uid of %s: %s", g.User, strings.TrimSpace(out))
 	}
@@ -188,13 +206,25 @@ func (g *Guest) readUID() error {
 // Session is the environment a command needs to reach this account's own
 // Wayland session from an ssh that is not in it.
 func (g *Guest) Session() string {
+	// The compositor's instance too, and it is not optional. `hyprctl` without
+	// it finds no instance and prints nothing, and a caller that parses the
+	// nothing gets an empty answer instead of an error -- which is how a stage
+	// that meant to close every window quietly closed none of them, twice.
+	//
+	// Newest first, because a session that was restarted leaves the old
+	// signature's directory behind.
 	return fmt.Sprintf("export XDG_RUNTIME_DIR=/run/user/%d WAYLAND_DISPLAY=wayland-1 "+
-		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%d/bus", g.uid, g.uid)
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%d/bus; "+
+		"export HYPRLAND_INSTANCE_SIGNATURE=$(ls -t /run/user/%d/hypr 2>/dev/null | head -1)",
+		g.uid, g.uid, g.uid)
 }
 
 // InSession runs a command inside the account's own session.
 func (g *Guest) InSession(command string) (string, error) {
-	return g.SSH(fmt.Sprintf("bash -lc '%s; %s'", g.Session(), strings.ReplaceAll(command, "'", `'\''`)))
+	// As the filmed account, through sudo, because the ssh belongs to the admin
+	// and the session does not.
+	quoted := strings.ReplaceAll(command, "'", `'\''`)
+	return g.Root(fmt.Sprintf("-u %s bash -lc '%s; %s'", g.User, g.Session(), quoted))
 }
 
 // AssertOmarchy refuses a guest this package cannot drive.
@@ -267,12 +297,11 @@ func tail(out string) string {
 func (g *Guest) Prepare() error {
 	_, _ = g.Root(fmt.Sprintf("sh -c 'echo %s:%s | chpasswd'", g.User, g.User))
 
-	_, _ = g.SSH(fmt.Sprintf("python3 -c '" +
-		"import json,pathlib;" +
-		"p=pathlib.Path.home()/\"'\"'\"'.config/omarchy/shell.json'\"'\"'\";" +
-		"d=json.loads(p.read_text());" +
-		"d.setdefault(\"idle\",{}).update(screensaver=86400,lock=86400);" +
-		"p.write_text(json.dumps(d,indent=2))'"))
+	_, _ = g.Root(fmt.Sprintf("-u %s python3 -c 'import json,pathlib;"+
+		"p=pathlib.Path(\"/home/%s/.config/omarchy/shell.json\");"+
+		"d=json.loads(p.read_text());"+
+		"d.setdefault(\"idle\",{}).update(screensaver=86400,lock=86400);"+
+		"p.write_text(json.dumps(d,indent=2))'", g.User, g.User))
 
 	_, _ = g.Root("YDOTOOL_SOCKET=" + socket + " ydotool mousemove -x 40 -y 40")
 	time.Sleep(2 * time.Second)
@@ -282,13 +311,55 @@ func (g *Guest) Prepare() error {
 
 	_, _ = g.InSession("omarchy restart shell")
 	time.Sleep(3 * time.Second)
-	for _, card := range []string{"Learn Keybindings", "Update System", "Wi-Fi", "Error"} {
+	// By summary, and the list is what Omarchy actually sends: the first-run
+	// cards, and the failure cards a previous take left behind. A card from a
+	// run that failed is the worst of them, because it is on screen describing
+	// a problem that has since been fixed.
+	for _, card := range []string{
+		"Learn Keybindings", "Update System", "Wi-Fi",
+		"Error", "App failure", "failed",
+	} {
 		_, _ = g.InSession(fmt.Sprintf("omarchy notification dismiss %q", card))
 	}
 	return nil
 }
 
-// OpenTerminal leaves exactly one terminal on the desktop, ready to type into.
+// ClearTheDesktop closes every window the filmed account has open.
+//
+// By asking the compositor what is there, rather than by killing the programs
+// this package happens to know the names of. A stage that only closed its own
+// terminal left a window from an earlier take tiled beside the new one, and the
+// film showed two things at once with no explanation for either. That leftover
+// had been opened by nothing in this package, so no list of names would ever
+// have caught it.
+//
+// A take begins on an empty desktop. That is the whole rule.
+func (g *Guest) ClearTheDesktop() error {
+	out, err := g.InSession("hyprctl -j clients")
+	if err == nil {
+		var clients []struct {
+			PID int `json:"pid"`
+		}
+		if json.Unmarshal([]byte(out), &clients) == nil {
+			for _, client := range clients {
+				if client.PID > 0 {
+					_, _ = g.Root(fmt.Sprintf("kill %d", client.PID))
+				}
+			}
+		}
+	}
+	time.Sleep(2 * time.Second)
+	return nil
+}
+
+// Open is the program the stage leaves on the desktop. Empty means a terminal.
+//
+// A scene drives what is in front of it, so this is what decides whether the
+// film shows a shell or the product's own window.
+//
+// Set by the stage from the project config.
+
+// OpenTerminal leaves exactly one program on the desktop, ready to be driven.
 //
 // Through `systemd-run --user` and not through Omarchy's SUPER+RETURN. A
 // binding is what a person presses and it is not what a stage should depend on:
@@ -297,21 +368,45 @@ func (g *Guest) Prepare() error {
 // also keeps the terminal alive after the ssh that asked for it has gone, which
 // a backgrounded launch does not.
 func (g *Guest) OpenTerminal() error {
-	_, _ = g.Root("pkill -u " + g.User + " -x foot")
-	time.Sleep(time.Second)
-	if _, err := g.InSession(
-		"systemd-run --user --collect --unit=backstage-terminal " +
-			"uwsm-app -- xdg-terminal-exec"); err != nil {
-		return fmt.Errorf("opening a terminal on %s: %w", g.Domain, err)
+	program, launch := "foot", "uwsm-app -- xdg-terminal-exec"
+	if g.Open != "" {
+		program, launch = g.Open, "uwsm-app -- "+g.Open
 	}
-	deadline := time.Now().Add(20 * time.Second)
+	// One language on screen. The guest speaks whatever Omarchy was installed
+	// with, and a film whose captions are in one language and whose pacman is
+	// in another reads as two recordings spliced together.
+	if g.Language != "" {
+		launch = "systemd-run --user --collect --unit=backstage-open " +
+			"--setenv=LANG=" + g.Language + " --setenv=LC_ALL=" + g.Language + " " + launch
+	} else {
+		launch = "systemd-run --user --collect --unit=backstage-open " + launch
+	}
+	if err := g.ClearTheDesktop(); err != nil {
+		return err
+	}
+	// And the unit from the last take. `systemd-run` refuses a name that is
+	// still loaded, and a take that ended with its window open leaves one --
+	// so the second scene of a production failed to open anything at all, with
+	// an exit status and no reason attached to it.
+	_, _ = g.InSession("systemctl --user stop backstage-open")
+	_, _ = g.InSession("systemctl --user reset-failed backstage-open")
+	time.Sleep(time.Second)
+	if _, err := g.InSession(launch); err != nil {
+		return fmt.Errorf("opening %s on %s: %w", program, g.Domain, err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if g.Try("pgrep -u " + g.User + " -x foot") {
+		if g.Try("pgrep -u " + g.User + " -x " + program) {
+			// Open is not the same as drawn. A window that has mapped but not
+			// painted is a first step typed into nothing, and the failure looks
+			// like the keyboard.
+			time.Sleep(2 * time.Second)
 			return nil
 		}
 		time.Sleep(time.Second)
 	}
-	return fmt.Errorf("no terminal came up on %s, so a scene would have nothing to type into", g.Domain)
+	return fmt.Errorf("%s never came up on %s, so a scene would have nothing to drive",
+		program, g.Domain)
 }
 
 // Type sends literal text to whatever the guest's compositor is pointing at.

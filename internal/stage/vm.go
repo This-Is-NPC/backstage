@@ -42,21 +42,36 @@ func NewVM(g *guest.Guest) *VM {
 // prepare, because preparing needs the keyboard it installs; prepare before the
 // terminal, because a locked session swallows the keystroke that would open it.
 func (v *VM) Setup(layout scene.Layout, _ *scene.Project) (*scene.Manifest, error) {
-	if err := v.Guest.Start(v.Patience); err != nil {
+	// Each phase is timed and said out loud, because the cost of a vm stage is
+	// not one number: a guest that is already up is seconds and a cold boot is
+	// minutes, and somebody deciding whether to keep a stage between takes
+	// needs to see which of the two they are paying for.
+	phase := func(name string, do func() error) error {
+		began := time.Now()
+		if err := do(); err != nil {
+			return err
+		}
+		fmt.Printf(">> stage %s: %s (%.1fs)\n", v.Guest.Domain, name, time.Since(began).Seconds())
+		return nil
+	}
+
+	if err := phase("up", func() error { return v.Guest.Start(v.Patience) }); err != nil {
 		return nil, err
 	}
-	version, err := v.Guest.AssertOmarchy()
-	if err != nil {
+	if err := phase("omarchy", func() error {
+		version, err := v.Guest.AssertOmarchy()
+		v.Omarchy = version
+		return err
+	}); err != nil {
 		return nil, err
 	}
-	v.Omarchy = version
-	if err := v.Guest.Provision(); err != nil {
+	if err := phase("tools", v.Guest.Provision); err != nil {
 		return nil, err
 	}
-	if err := v.Guest.Prepare(); err != nil {
+	if err := phase("desktop", v.Guest.Prepare); err != nil {
 		return nil, err
 	}
-	if err := v.Guest.OpenTerminal(); err != nil {
+	if err := phase("terminal", v.Guest.OpenTerminal); err != nil {
 		return nil, err
 	}
 
@@ -87,7 +102,7 @@ func (v *VM) Teardown() error {
 	if v.Guest == nil {
 		return nil
 	}
-	_, _ = v.Guest.InSession("systemctl --user stop backstage-terminal")
+	_, _ = v.Guest.InSession("systemctl --user stop backstage-open")
 	_, _ = v.Guest.Root("pkill -u " + v.Guest.User + " -x foot")
 	return nil
 }

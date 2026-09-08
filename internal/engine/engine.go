@@ -85,7 +85,9 @@ func NewForScene(p *scene.Project, s *scene.Scene) (*Engine, error) {
 		return nil, fmt.Errorf("vm %q names no user; the stage films that account's session "+
 			"and connects as it", s.VM)
 	}
-	box := guest.New(cfg.Domain, cfg.User, cfg.Key, cfg.URI)
+	box := guest.New(cfg.Domain, cfg.User, cfg.Admin, cfg.Key, cfg.URI)
+	box.Open = cfg.Open
+	box.Language = cfg.Language
 	e.Stager = stage.NewVM(box)
 	e.Rec = recorder.NewWF(box, p.Record.FPS)
 	e.PaneDriver = pane.NewGuest(box)

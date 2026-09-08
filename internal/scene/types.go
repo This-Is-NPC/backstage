@@ -86,13 +86,32 @@ type Project struct {
 type VMCfg struct {
 	// Domain is the libvirt domain name.
 	Domain string `json:"domain"`
-	// User is the account whose session is filmed. It is also the account ssh
-	// connects as, so it needs a key and sudo.
+	// User is the account whose session is filmed.
 	User string `json:"user"`
+	// Admin is the account ssh connects as; it needs the key and sudo. Empty
+	// means the filmed account is also the administrator.
+	//
+	// Two fields because they are two people. A household is worth filming
+	// precisely because whoever is at the keyboard has no privilege, and
+	// handing the filmed account a key and passwordless sudo so a recorder
+	// could reach it would be filming a machine nobody described.
+	Admin string `json:"admin,omitempty"`
 	// Key is the ssh private key, `~` expanded. Empty uses ssh's own default.
 	Key string `json:"key,omitempty"`
 	// URI is the libvirt connection; empty means qemu:///system.
 	URI string `json:"uri,omitempty"`
+	// Open is what the stage leaves on the desktop for the scene to drive.
+	// Empty opens a terminal, which is what most scenes type into.
+	//
+	// A showcase of a program with a window should be showing that window, so
+	// this names it: `omahouse-studio` puts the product's own face on screen
+	// and keeps the terminal for the steps that genuinely have no other way.
+	Open string `json:"open,omitempty"`
+	// Language is the locale the opened program runs under, like
+	// `C.UTF-8` or `en_US.UTF-8`. A film whose captions are in one
+	// language and whose package manager is in another reads as two
+	// recordings spliced together.
+	Language string `json:"language,omitempty"`
 }
 
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the

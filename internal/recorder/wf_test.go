@@ -8,7 +8,7 @@ import (
 )
 
 func TestWFArgs(t *testing.T) {
-	g := guest.New("omahouse-parent", "parent", "", "")
+	g := guest.New("omahouse-parent", "parent", "", "", "")
 	got := strings.Join(NewWF(g, 30).args("/tmp/take.mp4"), " ")
 	for _, want := range []string{"-c libx264", "-f /tmp/take.mp4", "-r 30"} {
 		if !strings.Contains(got, want) {
@@ -23,7 +23,7 @@ func TestWFArgs(t *testing.T) {
 }
 
 func TestWFLeavesTheRateToTheCompositorWhenUnset(t *testing.T) {
-	g := guest.New("d", "u", "", "")
+	g := guest.New("d", "u", "", "", "")
 	got := strings.Join(NewWF(g, 0).args("/tmp/take.mp4"), " ")
 	if strings.Contains(got, "-r") {
 		t.Errorf("args = %q, want no frame rate forced when none was configured", got)
@@ -31,7 +31,7 @@ func TestWFLeavesTheRateToTheCompositorWhenUnset(t *testing.T) {
 }
 
 func TestWFStopBeforeStartIsRefusedByName(t *testing.T) {
-	g := guest.New("d", "u", "", "")
+	g := guest.New("d", "u", "", "", "")
 	_, err := NewWF(g, 30).Stop()
 	if err == nil {
 		t.Fatal("stopping a recorder that never started was accepted")
