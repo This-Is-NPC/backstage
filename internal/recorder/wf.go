@@ -15,6 +15,10 @@ import (
 // software.
 const wfBinary = "wf-recorder"
 
+// finaliseWait is how long the guest's recorder is given to close its container
+// after the interrupt. Fetching before it has is fetching a short take.
+const finaliseWait = 20 * time.Second
+
 // WF records an Omarchy guest's own screen, from inside the guest.
 //
 // Not gpu-screen-recorder, and not from the host. These guests have a `card0`
@@ -83,14 +87,25 @@ func (w *WF) Stop() (string, error) {
 	// SIGINT and not SIGTERM: wf-recorder finalises the container on an
 	// interrupt and is killed by a terminate, and a killed one leaves an mp4
 	// with no duration that half the players refuse.
+	atInterrupt := w.remoteSize()
+	began := time.Now()
 	_, _ = w.Guest.Root("pkill -INT -x " + wfBinary)
-	deadline := time.Now().Add(20 * time.Second)
+	left := false
+	deadline := began.Add(finaliseWait)
 	for time.Now().Before(deadline) {
 		if !w.Guest.Try("pgrep -x " + wfBinary) {
+			left = true
 			break
 		}
 		time.Sleep(time.Second)
 	}
+	// Said out loud every take, because it is the only place the two numbers
+	// behind a short take are visible. How long the encoder needed after the
+	// interrupt, and how much it still had to write when it got it, are what
+	// tell a guest that was merely slow from one that was so far behind it ran
+	// out of time -- and neither survives anywhere else.
+	fmt.Printf(">> %s finalised in %.1fs, writing %s while it closed\n",
+		wfBinary, time.Since(began).Seconds(), grew(atInterrupt, w.remoteSize()))
 	_, _ = w.Guest.InSession("systemctl --user reset-failed backstage-recorder")
 	if err := w.Guest.Fetch(w.remote, w.out); err != nil {
 		return "", err
@@ -102,5 +117,39 @@ func (w *WF) Stop() (string, error) {
 	if info.Size() == 0 {
 		return "", fmt.Errorf("the take from %s is empty", w.Guest.Domain)
 	}
+	if !left {
+		// Fetched first and reported after, and the path comes back with the
+		// error: the file is worth looking at even though it is not finished.
+		// But it is not finished. A recorder still running when its time ran
+		// out had not written its last frames when this copy was taken, and a
+		// copy of a container mid-close is short by whatever it had left to
+		// flush. Handing it back as a good take is how a scene loses its ending
+		// quietly.
+		return w.out, fmt.Errorf("%s on %s was still running %s after its interrupt, so %s "+
+			"is a copy of a take that had not finished writing",
+			wfBinary, w.Guest.Domain, finaliseWait, w.out)
+	}
 	return w.out, nil
+}
+
+// remoteSize is the take's size on the guest, in bytes, or -1 when it cannot be
+// read. Never an error: this is for saying what happened, not for deciding.
+func (w *WF) remoteSize() int64 {
+	said, err := w.Guest.Root("stat -c%s " + w.remote)
+	if err != nil {
+		return -1
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(said), 10, 64)
+	if err != nil {
+		return -1
+	}
+	return size
+}
+
+// grew renders the growth between two remoteSize readings for the log line.
+func grew(before, after int64) string {
+	if before < 0 || after < 0 {
+		return "an unknown amount"
+	}
+	return fmt.Sprintf("%.1f MiB", float64(after-before)/(1<<20))
 }
