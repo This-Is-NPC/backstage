@@ -43,8 +43,72 @@ backstage produce --scenes 01-installing,02-linking --transition chapter
 |---|---|
 | `--scenes a,b,c` | a production from a list |
 | `--transition NAME` | a transition between every pair |
-| `--speed N` | a timing multiplier; a smaller number is faster |
+| `--speed N` | it shortens the delays while a scene is performed |
 | `--out FILE` | the path of the finished video |
+
+---
+
+## Play part of a take at another rate
+
+Record the real time. Choose the rate when you publish.
+
+A production names a scene as a bare string, or as an object that also says how
+to present it:
+
+```json
+"productions": {
+  "tour": {
+    "scenes": [
+      "06-the-panel",
+      { "scene": "07-a-real-hour",
+        "speed": [
+          { "until": "1:00",  "rate": 1 },
+          { "until": "48:00", "rate": 10, "badge": "10x" },
+          { "rate": 1 }
+        ] }
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `until` | where the stretch ends, in the source clip |
+| `rate` | `10` plays ten times faster; `1` is real time |
+| `badge` | text drawn over the stretch while it plays |
+
+Write `until` as seconds, `mm:ss` or `hh:mm:ss`.
+
+**Do not use `--speed` for this.** That flag shortens the delays while the scene
+is performed. The machine then gets less time, and a budget that runs on the
+clock is never spent. A 50-minute take must take 50 minutes.
+
+### Keep the ends at real time
+
+The interesting parts of a long take are at its ends. Play the first minute at
+real time, so the viewer sees that the machine is real. Play the last minute at
+real time, because that is where the result arrives.
+
+### The take is never changed
+
+Backstage writes a second file and leaves the recording as it is. Ask for
+another rate tomorrow, and no new recording is necessary.
+
+### Each stretch starts where the last one ended
+
+A production states no start. The last stretch runs to the end of the clip, and
+must not say where the end is. A production that knew the length of its own
+take would fail when the take became one second longer.
+
+### The badge stays on
+
+A viewer who looks away must be able to tell a fast film from a fast machine. A
+mark that appears one time at the start does not tell them that later.
+
+### The source rate and the speed multiply
+
+A clip recorded at 3 frames each second plays as 30 at ten times. Record a long
+take at a low rate when you plan to speed it up. This saves disk and time.
 
 ---
 

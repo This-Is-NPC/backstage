@@ -58,6 +58,21 @@ recording.
 
 ---
 
+## Speed belongs to the presentation
+
+A take of fifty real minutes is the evidence. The rate to publish it at is a
+different question, and somebody answers it more than one time.
+
+A production therefore carries the rate, and the recording does not. Backstage
+writes a retimed copy and leaves the take as it is. A clip written fast has
+thrown the evidence away.
+
+The `--speed` flag is a different thing, and it cannot serve here. It shortens
+the delays while a scene is performed. The machine then gets less time, and a
+budget that runs on the clock is never spent.
+
+---
+
 ## Recording, and where the camera stands
 
 | Recorder | Where | Use it for |

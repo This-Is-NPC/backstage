@@ -236,3 +236,29 @@ A transition is placed between its `after` scene and the next one; a transition
 after the last scene is ignored.
 
 See also: [Writing scenes](scenes.md) · [CLI](cli.md) · [How it works](design.md).
+
+### A scene with a rate
+
+A scene in a production is a name, or an object that says how to present it.
+
+```json
+"scenes": [
+  "06-the-panel",
+  { "scene": "07-a-real-hour",
+    "speed": [
+      { "until": "1:00",  "rate": 1 },
+      { "until": "48:00", "rate": 10, "badge": "10x" },
+      { "rate": 1 }
+    ] }
+]
+```
+
+| Field | Meaning | Default |
+|---|---|---|
+| `scene` | the name of the scene | required |
+| `speed[].until` | where the stretch ends in the source clip | the end |
+| `speed[].rate` | how much faster the stretch plays | required |
+| `speed[].badge` | text drawn over the stretch | none |
+
+The take on disk does not change. See
+[Compose clips into one video](how-to-compose-a-production.md).

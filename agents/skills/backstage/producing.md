@@ -11,8 +11,40 @@ backstage produce --scenes 01-intro,02-deploy  # ad hoc
 |------|--------|
 | `--scenes a,b,c` | an ad hoc production from a list |
 | `--transition NAME` | a transition between every pair |
-| `--speed N` | timing multiplier, smaller is faster |
+| `--speed N` | shortens the delays *during* a take, so the machine gets less time |
 | `--out FILE` | where the finished video goes |
+
+## Play Part Of A Take At Another Rate
+
+Record the real time. Choose the rate when you publish.
+
+```json
+{ "scene": "07-a-real-hour",
+  "speed": [ { "until": "1:00",  "rate": 1 },
+             { "until": "48:00", "rate": 10, "badge": "10x" },
+             { "rate": 1 } ] }
+```
+
+Segments, not one rate: the interesting parts of a long take are at its ends.
+The first minute at real time says the machine is real. The last minute at real
+time is where the result arrives.
+
+**`--speed` is not this.** That flag shortens the delays *during* a take, so the
+machine gets less time and a budget that runs on the clock is never spent. A
+fifty-minute take has to take fifty minutes.
+
+The take on disk is never touched. Ask for another rate tomorrow and record
+nothing.
+
+Each segment starts where the last ended, and the last one runs to the end of
+the clip without saying where that is. A production that knew the length of its
+own take would break the day the take got a second longer.
+
+Keep the badge on for the whole stretch. Somebody who looks away has to be able
+to tell a fast film from a fast machine.
+
+The source rate and the speed multiply: a clip grabbed at 3 frames a second
+plays as 30 at ten times. Record a long take low when you plan to speed it up.
 
 ## Composition Is Post-Processing
 
