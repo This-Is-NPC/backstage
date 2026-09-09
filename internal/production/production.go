@@ -4,6 +4,7 @@
 package production
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/This-Is-NPC/backstage/internal/engine"
+	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 	"github.com/This-Is-NPC/backstage/internal/recorder"
 	"github.com/This-Is-NPC/backstage/internal/scene"
@@ -22,6 +24,7 @@ import (
 
 // Options drive a production render.
 type Options struct {
+	Context      context.Context
 	Project      *scene.Project
 	Prod         scene.Production
 	OutPath      string  // final mp4; empty → <project>/<record.out>/production.mp4
@@ -103,6 +106,25 @@ func Run(opts Options) (string, error) {
 	if err := p.ValidateProduction(opts.Prod); err != nil {
 		return "", err
 	}
+	reserved, err := managedStages(p, opts.Prod)
+	if err != nil {
+		return "", err
+	}
+	if len(reserved) > 0 {
+		m, err := machine.New()
+		if err != nil {
+			return "", err
+		}
+		names := []string{}
+		for name := range reserved {
+			names = append(names, name)
+		}
+		release, err := m.Store.LockMany(names...)
+		if err != nil {
+			return "", err
+		}
+		defer release()
+	}
 	speed := opts.Speed
 	if speed <= 0 {
 		speed = 1
@@ -152,10 +174,14 @@ func Run(opts Options) (string, error) {
 			return err
 		}
 		runErr := eng.Run(s, engine.Options{
+			Context: opts.Context, ReservedStages: reserved,
 			Record: true, OutPath: clip, ShowStaging: opts.ShowStaging, Speed: speed,
 			OnInterrupt: cleanupSegmentsOnInterrupt,
 		})
-		teardownErr := (&stage.Hypr{}).Teardown()
+		var teardownErr error
+		if s.VM == "" {
+			teardownErr = (&stage.Hypr{}).Teardown()
+		}
 		if runErr != nil {
 			if teardownErr != nil {
 				return fmt.Errorf("scene %q: %w; teardown: %v", sg.name, runErr, teardownErr)

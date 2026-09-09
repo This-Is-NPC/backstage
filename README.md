@@ -96,6 +96,11 @@ New here? Start with
 | `backstage produce PRODUCTION` | it joins clips and transitions into one video |
 | `backstage setup --stage LAYOUT` | it stages a layout and stops |
 | `backstage kill` | it strikes the set |
+| `backstage stage create NAME` | it creates a shared Omarchy VM ready to record |
+| `backstage stage --help` | it lists VM management, snapshot and clone commands |
+
+See [Create and manage VM stages](docs/how-to-manage-vm-stages.md) for host
+requirements, snapshots, cloning and continuity between scenes.
 
 > `play`, `produce` and `setup` take the whole display. Run them on a clean
 > desktop, or on a virtual machine stage.

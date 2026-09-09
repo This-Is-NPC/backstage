@@ -3,12 +3,15 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -35,8 +38,10 @@ func Execute(version string) error {
 	}
 	root.PersistentFlags().StringVar(&projectFlag, "project", "",
 		"project dir (default: search up from cwd)")
-	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd())
-	return root.Execute()
+	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	return root.ExecuteContext(ctx)
 }
 
 func produceCmd() *cobra.Command {
@@ -47,7 +52,7 @@ func produceCmd() *cobra.Command {
 		Use:   "produce [PRODUCTION]",
 		Short: "Record several scenes with transitions into one video",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(c *cobra.Command, args []string) error {
 			p, err := loadProjectFrom(projectFlag)
 			if err != nil {
 				return err
@@ -64,6 +69,7 @@ func produceCmd() *cobra.Command {
 				return fmt.Errorf("produce needs a PRODUCTION name or --scenes a,b,c")
 			}
 			outPath, err := production.Run(production.Options{
+				Context: c.Context(),
 				Project: p, Prod: prod, OutPath: out,
 				ShowStaging: showStaging, KeepSegments: keepSegments, Speed: speed,
 			})
@@ -155,8 +161,8 @@ func playCmd() *cobra.Command {
 		Use:   "play SCENE",
 		Short: "Stage the scene, record it, and write an mp4",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return runScene(args[0], engine.Options{Record: true, Speed: 1})
+		RunE: func(c *cobra.Command, args []string) error {
+			return runScene(args[0], engine.Options{Context: c.Context(), Record: true, Speed: 1})
 		},
 	}
 }
@@ -166,8 +172,8 @@ func rehearseCmd() *cobra.Command {
 		Use:   "rehearse SCENE",
 		Short: "Dry-run the scene fast, without recording",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return runScene(args[0], engine.Options{Record: false, Speed: rehearseSpeed})
+		RunE: func(c *cobra.Command, args []string) error {
+			return runScene(args[0], engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed})
 		},
 	}
 }

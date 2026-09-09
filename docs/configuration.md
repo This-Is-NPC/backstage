@@ -43,8 +43,14 @@ A project is a folder containing `backstage.json` plus `scenes/` and (optionally
 | `hooks.reset` | script run before every other take | — |
 | `aliases` | custom action names → `{action, target}` | — |
 | `layouts` | named stage layouts (see below) | — |
+| `vms` | named external VM connections or shared managed-stage references | — |
 
 The video is written to `<project>/<record.out>/<scene-name>.mp4`.
+
+To use a managed VM, declare `"vms": {"demo": {"stage": "shared-name"}}` and
+set `"vm": "demo"` in the scene. `open`, `language` and `recorder` are optional
+project-level overrides. `stage` cannot be mixed with explicit connection fields.
+See [Manage VM stages](how-to-manage-vm-stages.md).
 
 ## Popup style
 

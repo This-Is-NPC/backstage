@@ -1,5 +1,50 @@
 # The VM Stage
 
+## Managed stages
+
+Backstage can create local Omarchy VMs through libvirt/QEMU:
+
+```bash
+backstage stage doctor
+backstage stage create demo --omarchy latest
+backstage stage snapshot demo product-installed
+backstage stage clone demo tutorial --snapshot product-installed
+```
+
+Reference a shared stage with `"vms": {"laptop": {"stage": "demo"}}`.
+Keep `"vm": "laptop"` in the scene. Do not combine `stage` with explicit
+connection fields. `open`, `language` and `recorder` still work.
+
+Choose the scene's starting state explicitly when it matters:
+
+- `"vm-start": {"mode": "clean", "snapshot": "product-installed"}` restores
+  a cold snapshot; omitting `snapshot` uses the stage's `initial` snapshot.
+- `"vm-start": {"mode": "reuse"}` keeps disk contents and reorganizes the
+  desktop, like the existing behavior.
+- `"vm-start": {"mode": "continue", "after": "01-install"}` preserves the
+  entire live session. The predecessor must have succeeded in the same project,
+  boot, session and execution type (rehearsal or recording). This mode skips
+  reset/setup hooks and rejects explicit `fresh: true` or `reset: true`.
+
+Rehearse a whole continuation chain before recording that chain. Never continue
+a recording from a rehearsal. Restore/reboot/SSH access invalidates continuity.
+Snapshots save disk and UEFI state, not running processes. Clones have separate
+machine identities but inherit application data, including saved login sessions.
+
+Managed stages have generated passwords; use `stage credentials NAME` only
+when the filmed workflow needs that password. Do not assume username=password.
+Managed hooks run on the host after the stage is reachable, before desktop
+preparation. They receive `BACKSTAGE_VM_ADDRESS`, `BACKSTAGE_VM_ADMIN`,
+`BACKSTAGE_VM_USER`, `BACKSTAGE_VM_KEY`, `BACKSTAGE_VM_KNOWN_HOSTS`,
+`BACKSTAGE_VM_DOMAIN` and `BACKSTAGE_STAGE`.
+
+`stage list`, `inspect`, `start`, `stop`, `ssh`, `snapshots`, `restore` and
+`delete` manage the machines without a project. Creation/snapshots/restoration
+leave a stage stopped. Recordings leave it running. `latest` is resolved at
+creation; existing stages keep their installed version.
+
+## Existing external VMs
+
 A scene that names a `vm` runs inside a virtual machine: the steps are typed on
 that computer's own keyboard and its screen is recorded from inside it. The
 scene file says nothing about either.

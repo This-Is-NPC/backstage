@@ -1,6 +1,7 @@
 package stage
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -22,7 +23,9 @@ import (
 // on the one machine. Two computers are two takes, composed afterwards, which
 // is what keeps a take from having to synchronise two recorders.
 type VM struct {
-	Guest *guest.Guest
+	// Continue preserves the entire live session rather than restaging it.
+	Continue bool
+	Guest    *guest.Guest
 	// Patience is how long to wait for the domain to boot and answer ssh.
 	Patience time.Duration
 	// Omarchy is the version the guest reported, filled by Setup and written
@@ -55,8 +58,10 @@ func (v *VM) Setup(layout scene.Layout, _ *scene.Project) (*scene.Manifest, erro
 		return nil
 	}
 
-	if err := phase("up", func() error { return v.Guest.Start(v.Patience) }); err != nil {
-		return nil, err
+	if !v.Continue {
+		if err := phase("up", func() error { return v.Guest.Start(v.Patience) }); err != nil {
+			return nil, err
+		}
 	}
 	if err := phase("omarchy", func() error {
 		version, err := v.Guest.AssertOmarchy()
@@ -65,14 +70,16 @@ func (v *VM) Setup(layout scene.Layout, _ *scene.Project) (*scene.Manifest, erro
 	}); err != nil {
 		return nil, err
 	}
-	if err := phase("tools", v.Guest.Provision); err != nil {
-		return nil, err
-	}
-	if err := phase("desktop", v.Guest.Prepare); err != nil {
-		return nil, err
-	}
-	if err := phase("terminal", v.Guest.OpenTerminal); err != nil {
-		return nil, err
+	if !v.Continue {
+		if err := phase("tools", v.Guest.Provision); err != nil {
+			return nil, err
+		}
+		if err := phase("desktop", v.Guest.Prepare); err != nil {
+			return nil, err
+		}
+		if err := phase("terminal", v.Guest.OpenTerminal); err != nil {
+			return nil, err
+		}
 	}
 
 	// Names only. There is nothing to resolve them to -- one guest is one
@@ -102,8 +109,12 @@ func (v *VM) Teardown() error {
 	if v.Guest == nil {
 		return nil
 	}
-	_, _ = v.Guest.InSession("systemctl --user stop backstage-open")
-	_, _ = v.Guest.Root("pkill -u " + v.Guest.User + " -x foot")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	g := *v.Guest
+	g.Context = ctx
+	_, _ = g.InSession("systemctl --user stop backstage-open")
+	_, _ = g.Root("pkill -u " + g.User + " -x foot")
 	return nil
 }
 

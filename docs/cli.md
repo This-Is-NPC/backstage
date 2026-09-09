@@ -12,10 +12,15 @@ backstage <command> [args]
 | `backstage produce [PRODUCTION]` | record several scenes + transitions into one video |
 | `backstage setup --stage LAYOUT` | stage a layout only, no recording |
 | `backstage kill` | tear down the stage and dismiss any popup |
+| `backstage stage --help` | create and manage shared VM stages, snapshots and clones |
 | `backstage --version` | print the version |
 
 `--project DIR` is a persistent flag on every command: it sets the project
 directory (otherwise Backstage searches up from the current directory).
+
+`stage` commands operate on the user's shared VM registry and do not require a
+project. See [Manage VM stages](how-to-manage-vm-stages.md) for their complete
+workflow and host requirements.
 
 > ⚠️ `play`, `setup` and `produce` take over the physical display. Run on a clean desktop.
 

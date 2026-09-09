@@ -9,6 +9,7 @@ Read the page for the task you must do.
 
 - [Record your first scene](how-to-record-your-first-scene.md)
 - [Record inside a virtual machine](how-to-record-inside-a-vm.md)
+- [Create and manage VM stages](how-to-manage-vm-stages.md)
 - [Compose clips into one video](how-to-compose-a-production.md)
 
 ## References
