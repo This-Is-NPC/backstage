@@ -38,7 +38,7 @@ func Execute(version string) error {
 	}
 	root.PersistentFlags().StringVar(&projectFlag, "project", "",
 		"project dir (default: search up from cwd)")
-	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd())
+	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd(), renderCmd(), previewCmd(), templateCmd())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return root.ExecuteContext(ctx)
@@ -138,9 +138,24 @@ func listProject(out io.Writer, p *scene.Project) error {
 			fmt.Fprintf(out, "  %-22s  (invalid: %v)\n", name, err)
 			continue
 		}
-		fmt.Fprintf(out, "  %-22s  layout=%-12s steps=%d\n", name, s.LayoutName(), len(s.Steps))
+		if s.Type == "visual" {
+			fmt.Fprintf(out, "  %-22s  type=visual duration=%.2fs\n", name, s.Duration)
+		} else {
+			fmt.Fprintf(out, "  %-22s  layout=%-12s steps=%d\n", name, s.LayoutName(), len(s.Steps))
+		}
 	}
 
+	if len(p.Presentations) > 0 {
+		names := make([]string, 0, len(p.Presentations))
+		for name := range p.Presentations {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		fmt.Fprintln(out, "\nPresentations:")
+		for _, name := range names {
+			fmt.Fprintf(out, "  %-22s  file=%s\n", name, p.Presentations[name].File)
+		}
+	}
 	if len(p.Productions) > 0 {
 		names := make([]string, 0, len(p.Productions))
 		for n := range p.Productions {

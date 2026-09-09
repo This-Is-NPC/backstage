@@ -57,6 +57,35 @@ func (p *Project) ValidateConfig() error {
 // Validate checks a scene against its project: the layout must exist and every
 // step must carry an action that is either canonical or a configured alias.
 func (s *Scene) Validate(p *Project) error {
+	if s.Type != "" && s.Type != "recording" && s.Type != "visual" {
+		return fmt.Errorf("unknown scene type %q", s.Type)
+	}
+	for id, audio := range s.Audio {
+		if id == "" || audio.File == "" {
+			return fmt.Errorf("scene audio needs name and file")
+		}
+		if _, err := p.SafePath(audio.File); err != nil {
+			return err
+		}
+	}
+	ids := map[string]bool{}
+	for _, cue := range s.Narration.Cues {
+		if cue.ID == "" || ids[cue.ID] || cue.Text == "" || cue.Start < 0 || cue.End <= cue.Start {
+			return fmt.Errorf("scene %q: invalid or duplicate narration cue %q", s.Name, cue.ID)
+		}
+		ids[cue.ID] = true
+	}
+	if s.Type == "visual" {
+		if s.Duration <= 0 || s.Entry == "" {
+			return fmt.Errorf("visual scene requires entry and positive duration")
+		}
+		if s.VM != "" || s.VMStart != nil || s.Layout != "" || len(s.Steps) != 0 || s.Recorder != "" || s.Fresh || s.Reset != nil {
+			return fmt.Errorf("visual scene cannot declare recording configuration")
+		}
+		_, err := p.SafePath(s.Entry)
+		return err
+	}
+
 	if err := s.ValidateVMStart(p); err != nil {
 		return err
 	}

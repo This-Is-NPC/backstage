@@ -1,0 +1,23 @@
+{
+  "name": "laptop",
+  "type": "recording",
+  "layout": "solo",
+  "steps": [
+    {
+      "action": "wait",
+      "delay-after": 1
+    }
+  ],
+  "narration": {
+    "language": "en",
+    "cues": [
+      {
+        "id": "rule",
+        "start": 1,
+        "end": 2,
+        "text": "One rule applies to each computer.",
+        "audio": "assets/voice.wav"
+      }
+    ]
+  }
+}

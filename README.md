@@ -148,6 +148,16 @@ mise run install:skill
 This links the Backstage skill into `~/.agents/skills`. Run
 `mise run uninstall:skill` to remove it.
 
+## Declarative presentations
+
+Compose existing recordings with `backstage render`: multiple screens, HTML
+layouts, animated SVG scenes, captions and selected audio. A presentation changes
+the montage without recording another take. `preview` renders first, then opens
+playback controls. Rendering needs Chromium, FFmpeg and ffprobe.
+
+[Follow the walkthrough](docs/how-to-compose-presentations.md) or
+[run the example](examples/presentation/README.md).
+
 ## Learn more
 
 Full documentation is in [`docs/`](docs/README.md).
@@ -155,6 +165,7 @@ Full documentation is in [`docs/`](docs/README.md).
 - **[Record your first scene](docs/how-to-record-your-first-scene.md)**
 - **[Record inside a virtual machine](docs/how-to-record-inside-a-vm.md)**
 - **[Compose clips into one video](docs/how-to-compose-a-production.md)**
+- **[Presentations](docs/presentations.md)** and **[Templates](docs/templates.md)**
 - **[Scenes](docs/scenes.md)** and **[Configuration](docs/configuration.md)**
 - **[Design](docs/design.md)** and **[What does not work yet](docs/what-does-not-work.md)**
 

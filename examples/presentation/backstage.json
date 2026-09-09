@@ -1,0 +1,32 @@
+{
+  "record": {
+    "out": "recordings"
+  },
+  "render": {
+    "w": 960,
+    "h": 540,
+    "fps": 12
+  },
+  "layouts": {
+    "solo": {
+      "panes": []
+    }
+  },
+  "templates": {
+    "household": {
+      "entry": "templates/household/template.html"
+    }
+  },
+  "presentations": {
+    "complete": {
+      "file": "presentations/complete.json",
+      "template": "household",
+      "out": "exports/complete.mp4"
+    },
+    "short": {
+      "file": "presentations/short.json",
+      "template": "household",
+      "out": "exports/short.mp4"
+    }
+  }
+}

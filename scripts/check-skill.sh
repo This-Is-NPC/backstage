@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 skill="agents/skills/backstage"
-pages=(SKILL.md scenes.md vm-stage.md producing.md)
+pages=(SKILL.md scenes.md vm-stage.md producing.md presentations.md)
 
 for page in "${pages[@]}"; do
   [ -f "$skill/$page" ] || { echo "FAIL: $skill/$page is missing" >&2; exit 1; }

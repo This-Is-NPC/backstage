@@ -43,6 +43,8 @@ A project is a folder containing `backstage.json` plus `scenes/` and (optionally
 | `hooks.reset` | script run before every other take | — |
 | `aliases` | custom action names → `{action, target}` | — |
 | `layouts` | named stage layouts (see below) | — |
+| `templates` | named HTML entries for presentation layouts | built-in when omitted |
+| `presentations` | named presentation JSON files, templates and outputs | — |
 | `vms` | named external VM connections or shared managed-stage references | — |
 
 The video is written to `<project>/<record.out>/<scene-name>.mp4`.
@@ -268,3 +270,41 @@ A scene in a production is a name, or an object that says how to present it.
 
 The take on disk does not change. See
 [Compose clips into one video](how-to-compose-a-production.md).
+
+## Declarative presentations
+
+```json
+{
+  "templates": {
+    "household": { "entry": "templates/household/template.html" }
+  },
+  "presentations": {
+    "complete": {
+      "file": "presentations/complete.json",
+      "template": "household",
+      "out": "exports/complete.mp4"
+    }
+  }
+}
+```
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| `templates.NAME.entry` | project-relative HTML file | required |
+| `presentations.NAME.file` | project-relative presentation JSON | required |
+| `presentations.NAME.template` | key in `templates` | built-in template |
+| `presentations.NAME.out` | project-relative output MP4 | `exports/NAME.mp4` |
+
+A presentation's `render` fields override the corresponding project `render`
+values. Unset dimensions default to 1920×1080 for presentations; fps falls back
+to project `render.fps`, then 30. Project `render.fps` itself defaults to
+`record.fps`. These defaults do not change legacy production sizing.
+
+JSON resource paths are relative to the project root, including paths inside
+scene and presentation files. HTML/CSS references are relative to those files.
+Paths cannot escape the project through traversal or symlinks.
+
+`layouts` still configures recording panes. HTML templates define presentation
+layouts. Visual HTML is referenced by a `visual` scene; there is no `slides`
+registry. See [Presentations](presentations.md), [Templates](templates.md), or the
+[composition walkthrough](how-to-compose-presentations.md).

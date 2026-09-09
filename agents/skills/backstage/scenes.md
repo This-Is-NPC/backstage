@@ -1,6 +1,8 @@
 # Writing Scenes
 
-A scene is an ordered list of steps against a staged layout.
+A recording scene is an ordered list of steps against a staged layout. It is
+the default when `type` is omitted. Visual scenes and editorial content are
+described below.
 
 ```json
 {
@@ -21,7 +23,7 @@ A scene is an ordered list of steps against a staged layout.
 | `layout` | which layout from `backstage.json` to stage |
 | `vm` | which guest to run inside; empty stages on this machine |
 | `fresh` | run the `setup` hook instead of `reset` |
-| `reset` | default true; false leaves the state as the last take left it |
+| `reset` | default true; false skips hooks, not desktop preparation |
 
 ## Actions
 
@@ -59,3 +61,23 @@ the stage opens for you.
   the release it was made from, and a demonstration of a verb nobody wrote down
   goes on being watched after that verb is gone. Consider a check that compares
   the commands a scene types against the page that teaches them.
+
+
+## Visual Scenes And Narration
+
+A visual scene declares `type: "visual"`, project-relative HTML `entry` and a
+positive `duration`. It does not accept VM, recording layout, steps or reset
+configuration. Use it as a presentation event, not with play or rehearse.
+
+Both scene types can declare `narration: {language, cues}`. Each cue has a unique
+`id`, `start`, `end`, nonempty `text` and optional project-relative `audio` file.
+Times belong to the source take for recording scenes or the local visual scene.
+They are explicit; do not derive them by adding action delays. `dialog` text is
+not automatically editorial narration.
+
+Named non-speech audio can also belong to the scene:
+`"audio": {"ambience": {"file": "assets/room.wav"}}`. The presentation selects
+what is heard, its volume and whether it follows video edits or independent
+placement. It also selects captions by cue ID, without copying the scene text.
+
+See [presentations.md](presentations.md) for complete declarations and clocks.

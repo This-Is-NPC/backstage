@@ -1,6 +1,8 @@
 # Producing
 
-`play` makes one clip per scene. `produce` puts clips together.
+`play` records one scene. `produce` records its scenes again and joins the
+results. To arrange existing takes without recording, use `render`; see
+[presentations.md](presentations.md).
 
 ```bash
 backstage produce tour                        # a declared production
@@ -33,8 +35,9 @@ time is where the result arrives.
 machine gets less time and a budget that runs on the clock is never spent. A
 fifty-minute take has to take fifty minutes.
 
-The take on disk is never touched. Ask for another rate tomorrow and record
-nothing.
+The source take is not rewritten by retiming. However, invoking `produce`
+records its scenes again. Use presentation track segments with `render` to
+change the rate of files already on disk.
 
 Each segment starts where the last ended, and the last one runs to the end of
 the clip without saying where that is. A production that knew the length of its

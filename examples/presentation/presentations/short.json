@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "duration": 6,
+  "parameters": {
+    "title": "A household, three computers"
+  },
+  "sources": {
+    "parent": {
+      "scene": "parent"
+    },
+    "laptop": {
+      "scene": "laptop"
+    },
+    "browser": {
+      "scene": "browser"
+    }
+  },
+  "tracks": {
+    "parent": {
+      "source": "parent",
+      "start": 0,
+      "segments": [
+        {
+          "from": 0,
+          "to": 4,
+          "rate": 2
+        }
+      ]
+    },
+    "laptop": {
+      "source": "laptop",
+      "start": 0,
+      "segments": [
+        {
+          "from": 0,
+          "to": 4,
+          "rate": 2
+        }
+      ]
+    },
+    "browser": {
+      "source": "browser",
+      "start": 0,
+      "segments": [
+        {
+          "from": 0,
+          "to": 4,
+          "rate": 2
+        }
+      ]
+    }
+  },
+  "timeline": [
+    {
+      "at": 0,
+      "layout": "three-screens",
+      "slots": {
+        "left": "parent",
+        "right-top": "laptop",
+        "right-bottom": "browser"
+      }
+    },
+    {
+      "at": 1,
+      "layout": "two-screens",
+      "slots": {
+        "left": "parent",
+        "right": "laptop"
+      },
+      "transition": {
+        "effect": "morph",
+        "duration": 0.5
+      }
+    },
+    {
+      "at": 2,
+      "scene": "explain",
+      "transition": {
+        "effect": "fade",
+        "duration": 0.5
+      }
+    }
+  ],
+  "audio": [
+    {
+      "id": "voice",
+      "scene": "parent",
+      "cue": "rule",
+      "mode": "independent",
+      "at": 0.5,
+      "volume": 0.3
+    },
+    {
+      "id": "music",
+      "file": "assets/music.wav",
+      "at": 0,
+      "loop": true,
+      "volume": 0.1,
+      "fade-in": 0.3,
+      "fade-out": 0.4
+    }
+  ],
+  "captions": [
+    {
+      "scene": "parent",
+      "cue": "rule",
+      "clock": "audio",
+      "audio": "voice",
+      "slot": "subtitle"
+    },
+    {
+      "scene": "explain",
+      "cue": "concept",
+      "clock": "presentation",
+      "at": 2,
+      "duration": 4,
+      "slot": "subtitle"
+    }
+  ]
+}

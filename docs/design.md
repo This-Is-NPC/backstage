@@ -14,21 +14,25 @@ Use one term for each meaning. These are the terms.
 | **stage** | the environment that a scene runs in |
 | **layout** | a named set of panes, from `backstage.json` |
 | **pane** | one target that a step types into |
-| **scene** | the ordered steps, in one file |
+| **scene** | a recording script or HTML visual with editorial content |
 | **step** | one action in a scene |
 | **prompter** | the narration box on the screen |
 | **prop** | a script of the project that a step calls |
 | **hook** | `setup` or `reset`; it builds the starting state |
 | **take** | one run of `play` |
 | **clip** | the `.mp4` that one take produces |
-| **production** | several clips in one video |
+| **production** | scenes recorded and concatenated by `produce` |
+| **presentation** | existing media composed by a JSON timeline |
+| **template** | HTML/CSS layouts, screen slots and caption styling |
+| **track** | an instance of a media source with its own cuts and start time |
+| **cue** | a named narration text with source times and optional audio |
 | **guest** | a libvirt machine that a scene runs on |
 
 ---
 
 ## Four parts, and each one can be replaced
 
-An engine performs a scene with four drivers.
+The recording engine performs a recording scene with four drivers.
 
 | Driver | Job |
 |---|---|
@@ -154,3 +158,16 @@ the domain, the accounts, the address, and the Omarchy version.
 
 A film is evidence. That file is the difference between a take that you can
 produce again and a take that you can only record again.
+
+
+## Presentations reuse recordings
+
+A presentation consumes files and scene editorial content. It does not invoke
+the recording engine. Its track clocks select source moments; its timeline
+selects layouts or visual scenes. HTML receives global and local time, allowing
+an animation to be reconstructed at the requested instant.
+
+Preview plays the same rendered output after an initial wait. Changing layouts,
+captions or selected audio does not require recording another take. See
+[Presentations](presentations.md) and [Templates](templates.md) for the contracts,
+or [the implementation](internal/presentations.md) for the pipeline.

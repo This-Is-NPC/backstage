@@ -6,13 +6,16 @@ backstage <command> [args]
 
 | Command | What it does |
 |---------|--------------|
-| `backstage list` | list the project's scenes and productions |
+| `backstage list` | list recording/visual scenes, productions and presentations |
 | `backstage play SCENE` | stage the scene, record it, write the `.mp4` |
 | `backstage rehearse SCENE` | run the scene fast, **without** recording (dry-run) |
 | `backstage produce [PRODUCTION]` | record several scenes + transitions into one video |
 | `backstage setup --stage LAYOUT` | stage a layout only, no recording |
 | `backstage kill` | tear down the stage and dismiss any popup |
 | `backstage stage --help` | create and manage shared VM stages, snapshots and clones |
+| `backstage render NAME` | compose existing media into an MP4 |
+| `backstage preview NAME` | render a temporary preview and open playback controls |
+| `backstage template init NAME` | create an editable presentation template |
 | `backstage --version` | print the version |
 
 `--project DIR` is a persistent flag on every command: it sets the project
@@ -30,8 +33,9 @@ workflow and host requirements.
 backstage list [--project DIR]
 ```
 
-Prints the scenes in `scenes/` (name, layout, step count) and any declared
-productions. A handy first command to see what you can `play` or `produce`.
+Prints recording scenes with layout and step count, visual scenes with duration,
+and declared productions and presentations. Use `play` for recording scenes and
+`render` or `preview` for presentations.
 
 ## play
 
@@ -95,3 +99,47 @@ backstage kill
 Strikes the set: kills the tmux session and closes the stage and popup windows.
 
 See also: [Writing scenes](scenes.md) · [Configuration](configuration.md).
+
+## render
+
+```bash
+backstage render NAME [--check] [--out FILE] [--project DIR]
+```
+
+Composes existing media using the named project presentation. It never records
+scenes, runs hooks or starts VMs. Missing input files are errors.
+
+| Flag | Effect |
+| --- | --- |
+| `--check` | validate configuration, media, timing and template slots without export |
+| `--out FILE` | override the project-relative MP4 output path |
+
+Output defaults to the presentation's `out`, then `exports/NAME.mp4`. A companion
+`.facts.json` records configuration, resource hashes and tool versions. Custom
+HTML can still fail at a later frame after `--check` succeeds. Failed exports do
+not replace an existing MP4. Ctrl-C cancels work and removes intermediates.
+
+## preview
+
+```bash
+backstage preview NAME [--project DIR]
+```
+
+Renders a temporary MP4 first, then serves that exact video locally with play,
+pause, seek and frame-step controls. The command prints the URL and opens it
+with `xdg-open` when available. It waits for Ctrl-C to close the server and
+remove temporary files. This is not an incremental editor.
+
+## template init
+
+```bash
+backstage template init NAME [--project DIR]
+```
+
+Creates `templates/NAME/template.html` and a sample `visual.html`. NAME must be a
+single directory name; an existing directory is refused. Register the template
+in `backstage.json` and reference visual HTML from a visual scene.
+
+See [Compose a presentation](how-to-compose-presentations.md) for the workflow,
+[Presentations](presentations.md) for the JSON, and [Templates](templates.md) for
+custom HTML. Rendering requires Chromium, FFmpeg and ffprobe, not a VM.

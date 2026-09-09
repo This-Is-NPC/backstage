@@ -11,12 +11,15 @@ Read the page for the task you must do.
 - [Record inside a virtual machine](how-to-record-inside-a-vm.md)
 - [Create and manage VM stages](how-to-manage-vm-stages.md)
 - [Compose clips into one video](how-to-compose-a-production.md)
+- [Compose a presentation from existing recordings](how-to-compose-presentations.md)
 
 ## References
 
 - [Scenes](scenes.md) — the scene file and its actions
 - [Configuration](configuration.md) — `backstage.json`
 - [CLI](cli.md) — the commands
+- [Presentations](presentations.md) — timeline, tracks, audio and captions
+- [Templates](templates.md) — HTML/CSS/SVG slots and animation
 - [Design](design.md) — the parts, and why they are separate
 
 ## Before you trust a recording
@@ -26,5 +29,6 @@ Read the page for the task you must do.
 ## For contributors
 
 - [Architecture](internal/ARCHITECTURE.md)
+- [Presentation implementation](internal/presentations.md)
 - [Developer guide](internal/dev-guide.md)
 - [Requirements](internal/requirements.md)
