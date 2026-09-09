@@ -5,24 +5,25 @@ item states what happens, and what to do until it is corrected.
 
 ---
 
-## 1. A caption cannot be added after the take
+## 1. Caption timing is not inferred from recording steps
 
-**What happens.** Backstage does not record the time of each step beside the
-clip. A production cannot know when to show each line of narration.
+**What happens.** Backstage does not write each action's time beside the take.
+Narration cues need explicit times. Captions can now be added after recording
+through a presentation.
 
-**What to do in the meantime.** Keep the narration inside the take with
-`dialog` steps. To burn a caption band under a composed video, read the
-`delay-after` values of the scene and write the times by hand.
+**What to do.** Declare text and times in the scene's `narration.cues`, then
+select cue IDs and a clock in [presentation captions](presentations.md#captions).
+Do not assume action delays exactly identify the frames of an existing take.
 
 ---
 
-## 2. A production cannot lay two clips side by side
+## 2. Legacy produce is sequential
 
-**What happens.** `produce` joins clips one after the other. It has no layout
-that puts two screens in one frame.
+**What happens.** `produce` records and joins scenes one after another. It does
+not position several clips inside the same frame.
 
-**What to do in the meantime.** Use `ffmpeg` with the `hstack` filter. Pad the
-shorter clip with `tpad` so that both clips end together.
+**What to do.** Use [declarative presentations](how-to-compose-presentations.md)
+and `render` for simultaneous screens and layout changes from existing media.
 
 ---
 
@@ -150,3 +151,18 @@ because every later failure looks like something else.
 
 **A scene that records one screen.** Two computers are two scenes. Compose the
 clips afterwards.
+
+
+## Presentation limits
+
+- Preview renders the full temporary movie before opening playback controls.
+  It does not update incrementally while editing. Render a short presentation
+  when adjusting timing or layout.
+- Video slots support axis-aligned rectangles, borders, rounded corners and
+  shadows. Arbitrary 3D transforms and masks are outside the slot contract.
+- Speech generation and automatic transcription are not implemented. Supply
+  text in scene cues and, when desired, existing audio files.
+- The timeline can end a visual scene before its animation finishes. Reserve
+  enough time for the animation and a reading pause; inspect the final frame.
+- Long or high-resolution renders can need substantial intermediate disk space.
+  Rendering does not require keeping every raw frame in memory.

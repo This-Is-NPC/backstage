@@ -1,6 +1,8 @@
 # Producing
 
-`play` makes one clip per scene. `produce` puts clips together.
+`play` records one scene. `produce` records its scenes again and joins the
+results. To arrange existing takes without recording, use `render`; see
+[presentations.md](presentations.md).
 
 ```bash
 backstage produce tour                        # a declared production
@@ -33,8 +35,9 @@ time is where the result arrives.
 machine gets less time and a budget that runs on the clock is never spent. A
 fifty-minute take has to take fifty minutes.
 
-The take on disk is never touched. Ask for another rate tomorrow and record
-nothing.
+The source take is not rewritten by retiming. However, invoking `produce`
+records its scenes again. Use presentation track segments with `render` to
+change the rate of files already on disk.
 
 Each segment starts where the last ended, and the last one runs to the end of
 the clip without saying where that is. A production that knew the length of its
@@ -86,26 +89,3 @@ caption contradicting the screen underneath it.
 A cut straight from one machine to another reads as a glitch. A card that names
 the next machine, held four or five seconds with a fade at each end, is what
 tells the viewer the computer changed.
-
-
-## Declarative Presentations From Existing Media
-
-Use `backstage render NAME` to compose existing files without recording scenes
-again. Register `presentations` and optional HTML `templates` in backstage.json.
-The presentation JSON declares version 1, duration, sources, tracks with cuts and
-rates, and timeline events selecting layouts or visual scenes.
-
-`backstage render NAME --check` checks media and HTML slots. `backstage preview
-NAME` renders a temporary movie first and then opens playback/seek/frame-step
-controls. `backstage template init NAME` copies an editable template.
-
-The built-in layouts are single, two-screens and three-screens. HTML slots define
-screen rectangles, borders and captions; morph transitions preserve track time.
-Visual scenes use type=visual, entry and duration without VM or recording steps.
-Texts live in scene narration.cues. Presentations select cue IDs and decide
-whether captions/audio follow source cuts or use independent presentation time.
-Audio is opt-in and can belong to a scene or to the final presentation. No voice
-provider is implemented yet.
-
-See the repository's docs/how-to-compose-presentations.md for the complete
-schema and examples/presentation for a runnable example using generated inputs.

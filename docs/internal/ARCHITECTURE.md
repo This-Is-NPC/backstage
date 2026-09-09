@@ -27,6 +27,14 @@ and removed (phases 0–1 are done; see the phase table).
 | **Rehearsal** | dry-run: no recording, compressed delays | `rehearse` verb |
 | **Prompter** | auto-type of the instruction box | `prompter/` (driver) |
 
+## Presentation composition
+
+The implemented `internal/presentation` package is separate from recording
+drivers. It compiles existing media and scene editorial content into a timeline,
+then composes HTML/SVG through Chromium and encodes with FFmpeg. See
+[Presentation implementation](presentations.md) for its pipeline, preview,
+cancellation and validation. The Wails desktop described below remains future work.
+
 ## Module layout
 
 ```
