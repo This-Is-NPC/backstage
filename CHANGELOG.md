@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/This-Is-NPC/backstage/compare/v0.5.0...v0.6.0) (2026-09-09)
+
+
+### Features
+
+* **presentation:** compose declarative videos ([aab13ef](https://github.com/This-Is-NPC/backstage/commit/aab13efe8695c037af3f1df298d630b1f3fcb25c))
+* **presentation:** compose declarative videos ([2eedf41](https://github.com/This-Is-NPC/backstage/commit/2eedf41a67ba9710013ac579f1af43e7b68f8843))
+
 ## [0.5.0](https://github.com/This-Is-NPC/backstage/compare/v0.4.0...v0.5.0) (2026-09-09)
 
 
