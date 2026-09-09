@@ -33,7 +33,7 @@ run = "golangci-lint run"
 
 [tasks.vuln]
 description = "Run Go vulnerability scan"
-run = "govulncheck ./..."
+run = "./scripts/check-vulnerabilities.sh"
 
 [tasks.check]
 description = "Run the full verification suite"
