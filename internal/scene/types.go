@@ -34,7 +34,8 @@ type Scene struct {
 	// afterwards -- which is what keeps a take from having to keep two
 	// recorders in step, and what lets the same footage be laid out more than
 	// one way later.
-	VM string `json:"vm,omitempty"`
+	VM      string   `json:"vm,omitempty"`
+	VMStart *VMStart `json:"vm-start,omitempty"`
 	// Recorder overrides the vm's, for a scene that needs the other one.
 	// A scene ending in a logout, a reboot or a greeter has to be filmed
 	// from outside the session it is about to end.
@@ -88,6 +89,8 @@ type Project struct {
 // idle, notifications and restart. A guest that is not Omarchy is refused when
 // the stage opens rather than failing later as something else.
 type VMCfg struct {
+	// Stage references a shared managed stage instead of connection details.
+	Stage string `json:"stage,omitempty"`
 	// Domain is the libvirt domain name.
 	Domain string `json:"domain"`
 	// User is the account whose session is filmed.
@@ -123,6 +126,20 @@ type VMCfg struct {
 	// screen from outside through libvirt: coarser, and the only thing that
 	// survives the session it is filming being killed.
 	Recorder string `json:"recorder,omitempty"`
+}
+
+// VMStart chooses disk restoration, desktop reuse, or live-session continuity.
+type VMStart struct {
+	Mode     string `json:"mode"`
+	Snapshot string `json:"snapshot,omitempty"`
+	After    string `json:"after,omitempty"`
+}
+
+func (s *Scene) VMStartMode() string {
+	if s.VMStart == nil {
+		return "reuse"
+	}
+	return s.VMStart.Mode
 }
 
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the

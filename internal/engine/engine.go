@@ -1,14 +1,17 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/This-Is-NPC/backstage/internal/guest"
+	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/pane"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 	"github.com/This-Is-NPC/backstage/internal/recorder"
@@ -18,8 +21,11 @@ import (
 
 // Options tune a run. Record off + Speed < 1 is a rehearsal (dry-run).
 type Options struct {
-	Record bool
-	Speed  float64 // delay multiplier; 1 = real time, smaller = faster rehearsal
+	Context context.Context
+	// ReservedStages are held by a surrounding production for its whole run.
+	ReservedStages map[string]bool
+	Record         bool
+	Speed          float64 // delay multiplier; 1 = real time, smaller = faster rehearsal
 
 	// OutPath overrides where the recording is written. Empty uses the default
 	// <project>/<record.out>/<scene>.mp4. Used by the production pipeline to
@@ -36,10 +42,12 @@ type Options struct {
 
 // Engine runs a scene over the stage/recorder/prompter/pane drivers.
 type Engine struct {
-	Project *scene.Project
-	Stager  stage.Stager
-	Rec     recorder.Recorder
-	Prompt  prompter.Prompter
+	Managed     *machine.Manager
+	ManagedName string
+	Project     *scene.Project
+	Stager      stage.Stager
+	Rec         recorder.Recorder
+	Prompt      prompter.Prompter
 
 	Speed float64
 	// PaneDriver overrides the default tmux driver. A vm stage sets it,
@@ -79,6 +87,29 @@ func NewForScene(p *scene.Project, s *scene.Scene) (*Engine, error) {
 		return nil, fmt.Errorf("scene %q runs on vm %q, which backstage.json does not declare",
 			s.Name, s.VM)
 	}
+	if err := s.ValidateVMStart(p); err != nil {
+		return nil, err
+	}
+	var box *guest.Guest
+	if cfg.Stage != "" {
+		manager, err := machine.New()
+		if err != nil {
+			return nil, err
+		}
+		r, err := manager.Store.Load(cfg.Stage)
+		if err != nil {
+			return nil, err
+		}
+		box, err = manager.Guest(r)
+		if err != nil {
+			return nil, err
+		}
+		e.Managed = manager
+		e.ManagedName = cfg.Stage
+		cfg.Domain = box.Domain
+		cfg.User = box.User
+		cfg.URI = box.URI
+	}
 	if cfg.Domain == "" {
 		return nil, fmt.Errorf("vm %q names no libvirt domain", s.VM)
 	}
@@ -86,7 +117,9 @@ func NewForScene(p *scene.Project, s *scene.Scene) (*Engine, error) {
 		return nil, fmt.Errorf("vm %q names no user; the stage films that account's session "+
 			"and connects as it", s.VM)
 	}
-	box := guest.New(cfg.Domain, cfg.User, cfg.Admin, cfg.Key, cfg.URI)
+	if box == nil {
+		box = guest.New(cfg.Domain, cfg.User, cfg.Admin, cfg.Key, cfg.URI)
+	}
 	box.Open = cfg.Open
 	box.Language = cfg.Language
 	e.Stager = stage.NewVM(box)
@@ -113,6 +146,12 @@ func NewForScene(p *scene.Project, s *scene.Scene) (*Engine, error) {
 // Run stages the scene's layout, optionally records, executes every step, then
 // stops. The layout is assumed validated against the project (scene.Validate).
 func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	e.Speed = opts.Speed
 	if e.Speed <= 0 {
 		e.Speed = 1
@@ -186,6 +225,7 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 
 	guard := newInterruptGuard(
 		func() error {
+			cancel()
 			cmdGuard.Interrupt()
 			return stopRec()
 		},
@@ -198,8 +238,49 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		guard.Release()
 	}()
 
-	if err := e.runHooks(s); err != nil {
-		return err
+	if e.Managed != nil {
+		if !opts.ReservedStages[e.ManagedName] {
+			release, err := e.Managed.Store.LockMany(e.ManagedName)
+			if err != nil {
+				return err
+			}
+			defer release()
+		}
+		r, err := e.Managed.Store.Load(e.ManagedName)
+		if err != nil {
+			return err
+		}
+		project, err := filepath.Abs(e.Project.Dir)
+		if err != nil {
+			return err
+		}
+		if resolved, err := filepath.EvalSymlinks(project); err == nil {
+			project = resolved
+		}
+		snapshot, after := "", ""
+		if s.VMStart != nil {
+			snapshot = s.VMStart.Snapshot
+			after = s.VMStart.After
+		}
+		g, err := e.Managed.Begin(ctx, r, s.VMStartMode(), snapshot, after, project, opts.Record)
+		if err != nil {
+			return err
+		}
+		vm := e.Stager.(*stage.VM)
+		g.Open = vm.Guest.Open
+		g.Language = vm.Guest.Language
+		*vm.Guest = *g
+		vm.Continue = s.VMStartMode() == "continue"
+		defer func() {
+			if runErr == nil {
+				runErr = e.Managed.Finish(r, g, project, s.Name, opts.Record)
+			}
+		}()
+	}
+	if s.VMStartMode() != "continue" {
+		if err := e.runHooks(s); err != nil {
+			return err
+		}
 	}
 
 	out := opts.OutPath
@@ -234,13 +315,13 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	usesStage := len(layout.Panes) > 0
 
 	// ShowStaging: capture the stage montage too (record before staging).
-	if opts.ShowStaging {
+	if opts.ShowStaging && e.Managed == nil && s.VM == "" {
 		if err := startRec(); err != nil {
 			return err
 		}
 	}
 
-	if usesStage {
+	if usesStage || s.VM != "" {
 		fmt.Printf(">> stage layout: %s\n", s.LayoutName())
 		m, err := e.Stager.Setup(layout, e.Project)
 		if err != nil {
@@ -258,7 +339,7 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	}
 
 	// Default: start after the stage is ready, hiding the setup.
-	if !opts.ShowStaging {
+	if !opts.ShowStaging || s.VM != "" {
 		if err := startRec(); err != nil {
 			return err
 		}
@@ -281,6 +362,11 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		recMu.Unlock()
 		if err := stopRec(); err != nil {
 			return err
+		}
+		if vm, ok := e.Stager.(*stage.VM); ok {
+			if err := vm.Facts(out); err != nil {
+				return err
+			}
 		}
 		// Joined and not returned: the take is on disk and a short one is still
 		// worth keeping and looking at, the same reason a failed step does not
@@ -374,6 +460,10 @@ func (e *Engine) runScript(rel string) error {
 	cmd := exec.Command(path)
 	cmd.Dir = e.Project.Dir
 	cmd.Env = e.Project.PropEnv()
+	if vm, ok := e.Stager.(*stage.VM); ok && e.Managed != nil {
+		g := vm.Guest
+		cmd.Env = append(cmd.Env, "BACKSTAGE_STAGE="+e.ManagedName, "BACKSTAGE_VM_ADDRESS="+g.Address, "BACKSTAGE_VM_USER="+g.User, "BACKSTAGE_VM_ADMIN="+g.Admin, "BACKSTAGE_VM_KEY="+g.KeyFile, "BACKSTAGE_VM_DOMAIN="+g.Domain, "BACKSTAGE_VM_KNOWN_HOSTS="+g.KnownHosts)
+	}
 	scene.SetProcessGroup(cmd)
 	var runErr error
 	if e.cmdGuard != nil {

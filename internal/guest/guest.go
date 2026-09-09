@@ -17,6 +17,7 @@
 package guest
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,7 +48,19 @@ var tools = []string{"ydotool", "wf-recorder"}
 // Guest is one Omarchy computer: a libvirt domain, an account on it, and the
 // ssh key that opens it.
 type Guest struct {
-	Domain string
+	// Managed guests retain their generated password and a private host-key file.
+	Managed     bool
+	Password    string
+	KnownHosts  string
+	Context     context.Context
+	StageName   string
+	Origin      string
+	StartMode   string
+	Snapshot    string
+	ISOVersion  string
+	ISOChecksum string
+	Recipe      string
+	Domain      string
 	// User is the account whose session is filmed.
 	User string
 	// Admin is the account ssh connects as. It needs a key and sudo; the
@@ -87,14 +100,14 @@ func New(domain, user, admin, key, uri string) *Guest {
 }
 
 func (g *Guest) virsh(args ...string) (string, error) {
-	out, err := exec.Command("virsh", append([]string{"-c", g.URI}, args...)...).Output()
+	out, err := g.command("virsh", append([]string{"-c", g.URI}, args...)...).Output()
 	return string(out), err
 }
 
 // ssh options that make a disposable guest reachable without an operator
 // answering a host-key prompt the first time every clone is booted.
 func (g *Guest) sshArgs(command string) []string {
-	return []string{
+	args := []string{
 		"-i", g.KeyFile,
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
@@ -104,12 +117,57 @@ func (g *Guest) sshArgs(command string) []string {
 		fmt.Sprintf("%s@%s", g.Admin, g.Address),
 		command,
 	}
+	if g.KnownHosts != "" {
+		args[3] = "StrictHostKeyChecking=accept-new"
+		args[5] = "UserKnownHostsFile=" + g.KnownHosts
+		args = append([]string{"-o", "HostKeyAlias=" + g.Domain}, args...)
+	}
+	return args
+}
+
+func (g *Guest) command(name string, args ...string) *exec.Cmd {
+	ctx := g.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	return cmd
+}
+
+func (g *Guest) sleep(d time.Duration) error {
+	ctx := g.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // SSH runs a command as the operator and returns its combined output.
 func (g *Guest) SSH(command string) (string, error) {
-	out, err := exec.Command("ssh", g.sshArgs(command)...).CombinedOutput()
+	out, err := g.command("ssh", g.sshArgs(command)...).CombinedOutput()
 	return string(out), err
+}
+
+func (g *Guest) sshInput(command, input string) (string, error) {
+	cmd := g.command("ssh", g.sshArgs(command)...)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// InteractiveSSH shares the stage's host-key policy with recording commands.
+func (g *Guest) InteractiveSSH(ctx context.Context) *exec.Cmd {
+	args := g.sshArgs("")
+	args = args[:len(args)-1]
+	return exec.CommandContext(ctx, "ssh", append([]string{"-t"}, args...)...)
 }
 
 // Root runs a command under sudo on the guest.
@@ -145,7 +203,12 @@ func (g *Guest) Fetch(remote, local string) error {
 		fmt.Sprintf("%s@%s:%s", g.Admin, g.Address, staging),
 		local,
 	}
-	if out, err := exec.Command("scp", args...).CombinedOutput(); err != nil {
+	if g.KnownHosts != "" {
+		args[3] = "StrictHostKeyChecking=accept-new"
+		args[5] = "UserKnownHostsFile=" + g.KnownHosts
+		args = append([]string{"-o", "HostKeyAlias=" + g.Domain}, args...)
+	}
+	if out, err := g.command("scp", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("scp %s: %s", remote, strings.TrimSpace(string(out)))
 	}
 	_, _ = g.Root("rm -f " + staging)
@@ -160,6 +223,7 @@ var address = regexp.MustCompile(`\b(\d{1,3}(?:\.\d{1,3}){3})\b`)
 // and a caller that conflated them would report "the machine never came up" for
 // a machine that came up and has no network.
 func (g *Guest) Start(patience time.Duration) error {
+	g.Address = ""
 	state, _ := g.virsh("domstate", g.Domain)
 	if !strings.Contains(state, "running") {
 		if out, err := g.virsh("start", g.Domain); err != nil {
@@ -176,7 +240,9 @@ func (g *Guest) Start(patience time.Duration) error {
 				break
 			}
 		}
-		time.Sleep(3 * time.Second)
+		if err := g.sleep(3 * time.Second); err != nil {
+			return err
+		}
 	}
 	if g.Address == "" {
 		return fmt.Errorf("%s never took an address", g.Domain)
@@ -185,7 +251,9 @@ func (g *Guest) Start(patience time.Duration) error {
 		if g.Try("true") {
 			return g.readUID()
 		}
-		time.Sleep(3 * time.Second)
+		if err := g.sleep(3 * time.Second); err != nil {
+			return err
+		}
 	}
 	return fmt.Errorf("%s is at %s and never answered ssh", g.Domain, g.Address)
 }
@@ -265,7 +333,9 @@ func (g *Guest) Provision() error {
 		if out, _ := g.Root("loginctl seat-status seat0"); strings.Contains(out, "ydotoold virtual device") {
 			return nil
 		}
-		time.Sleep(2 * time.Second)
+		if err := g.sleep(2 * time.Second); err != nil {
+			return err
+		}
 	}
 	return fmt.Errorf("no virtual keyboard appeared on seat0 of %s", g.Domain)
 }
@@ -295,22 +365,43 @@ func tail(out string) string {
 //  6. the first-run cards dismissed. They are sent `-u critical`, so they never
 //     expire and would sit in the corner for the whole film.
 func (g *Guest) Prepare() error {
-	_, _ = g.Root(fmt.Sprintf("sh -c 'echo %s:%s | chpasswd'", g.User, g.User))
+	password := g.User
+	if g.Managed {
+		password = g.Password
+	} else {
+		_, _ = g.Root(fmt.Sprintf("sh -c 'echo %s:%s | chpasswd'", g.User, g.User))
+	}
 
-	_, _ = g.Root(fmt.Sprintf("-u %s python3 -c 'import json,pathlib;"+
+	idleOutput, idleErr := g.Root(fmt.Sprintf("-u %s python3 -c 'import json,pathlib;"+
 		"p=pathlib.Path(\"/home/%s/.config/omarchy/shell.json\");"+
-		"d=json.loads(p.read_text());"+
+		"p.parent.mkdir(parents=True,exist_ok=True);"+
+		"d=json.loads(p.read_text()) if p.exists() else {};"+
 		"d.setdefault(\"idle\",{}).update(screensaver=86400,lock=86400);"+
 		"p.write_text(json.dumps(d,indent=2))'", g.User, g.User))
+	if g.Managed && idleErr != nil {
+		return fmt.Errorf("configuring guest idle timers: %s", tail(idleOutput))
+	}
 
 	_, _ = g.Root("YDOTOOL_SOCKET=" + socket + " ydotool mousemove -x 40 -y 40")
-	time.Sleep(2 * time.Second)
-	_, _ = g.Root(fmt.Sprintf("YDOTOOL_SOCKET=%s ydotool type --key-delay 20 '%s'", socket, g.User))
+	if err := g.sleep(2 * time.Second); err != nil {
+		return err
+	}
+	if g.Managed {
+		if _, err := g.sshInput("sudo env YDOTOOL_SOCKET="+socket+" ydotool type --key-delay 20 --file -", password); err != nil {
+			return fmt.Errorf("unlocking the managed session: %w", err)
+		}
+	} else {
+		_, _ = g.Root(fmt.Sprintf("YDOTOOL_SOCKET=%s ydotool type --key-delay 20 '%s'", socket, strings.ReplaceAll(password, "'", `'\''`)))
+	}
 	_, _ = g.Root("YDOTOOL_SOCKET=" + socket + " ydotool key 28:1 28:0")
-	time.Sleep(3 * time.Second)
+	if err := g.sleep(3 * time.Second); err != nil {
+		return err
+	}
 
 	_, _ = g.InSession("omarchy restart shell")
-	time.Sleep(3 * time.Second)
+	if err := g.sleep(3 * time.Second); err != nil {
+		return err
+	}
 	// By summary, and the list is what Omarchy actually sends: the first-run
 	// cards, and the failure cards a previous take left behind. A card from a
 	// run that failed is the worst of them, because it is on screen describing
@@ -348,7 +439,9 @@ func (g *Guest) ClearTheDesktop() error {
 			}
 		}
 	}
-	time.Sleep(2 * time.Second)
+	if err := g.sleep(2 * time.Second); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -390,7 +483,9 @@ func (g *Guest) OpenTerminal() error {
 	// an exit status and no reason attached to it.
 	_, _ = g.InSession("systemctl --user stop backstage-open")
 	_, _ = g.InSession("systemctl --user reset-failed backstage-open")
-	time.Sleep(time.Second)
+	if err := g.sleep(time.Second); err != nil {
+		return err
+	}
 	if _, err := g.InSession(launch); err != nil {
 		return fmt.Errorf("opening %s on %s: %w", program, g.Domain, err)
 	}
@@ -400,10 +495,14 @@ func (g *Guest) OpenTerminal() error {
 			// Open is not the same as drawn. A window that has mapped but not
 			// painted is a first step typed into nothing, and the failure looks
 			// like the keyboard.
-			time.Sleep(2 * time.Second)
+			if err := g.sleep(2 * time.Second); err != nil {
+				return err
+			}
 			return nil
 		}
-		time.Sleep(time.Second)
+		if err := g.sleep(time.Second); err != nil {
+			return err
+		}
 	}
 	return fmt.Errorf("%s never came up on %s, so a scene would have nothing to drive",
 		program, g.Domain)
@@ -461,16 +560,25 @@ func (g *Guest) Key(name string) error {
 // and `pacman -Q omarchy` in six months are the difference between a take that
 // can be reproduced and one that can only be re-shot.
 type Facts struct {
-	Domain  string `json:"domain"`
-	User    string `json:"user"`
-	Omarchy string `json:"omarchy"`
-	Address string `json:"address"`
-	Made    string `json:"made"`
+	Stage       string `json:"stage,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	StartMode   string `json:"vm-start,omitempty"`
+	Snapshot    string `json:"snapshot,omitempty"`
+	ISOVersion  string `json:"iso-version,omitempty"`
+	ISOChecksum string `json:"iso-sha256,omitempty"`
+	Recipe      string `json:"recipe,omitempty"`
+	Domain      string `json:"domain"`
+	User        string `json:"user"`
+	Omarchy     string `json:"omarchy"`
+	Address     string `json:"address"`
+	Made        string `json:"made"`
 }
 
 // WriteFacts drops the sidecar beside a clip.
 func (g *Guest) WriteFacts(clip, version string) error {
 	facts := Facts{
+		Stage: g.StageName, Origin: g.Origin, StartMode: g.StartMode,
+		Snapshot: g.Snapshot, ISOVersion: g.ISOVersion, ISOChecksum: g.ISOChecksum, Recipe: g.Recipe,
 		Domain: g.Domain, User: g.User, Omarchy: version,
 		Address: g.Address, Made: time.Now().Format(time.RFC3339),
 	}

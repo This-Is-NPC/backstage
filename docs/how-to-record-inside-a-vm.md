@@ -10,6 +10,10 @@ The scene file does not change.
 
 ## Before you start
 
+To have Backstage create and provision the VM, follow
+[Create and manage VM stages](how-to-manage-vm-stages.md). The instructions below
+describe connecting an existing, externally managed VM.
+
 - Run libvirt without `sudo`. Add your account to the `libvirt` group.
 - Prepare a guest that runs **Omarchy**. Backstage refuses any other guest.
 - Create an account on the guest with a key and `sudo`.

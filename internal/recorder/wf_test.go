@@ -22,6 +22,15 @@ func TestWFArgs(t *testing.T) {
 	}
 }
 
+func TestManagedWFRecordsStaticDesktop(t *testing.T) {
+	g := guest.New("demo", "omarchy", "backstage-admin", "key", "")
+	g.Managed = true
+	args := strings.Join(NewWF(g, 30).args("/tmp/take.mp4"), " ")
+	if !strings.Contains(args, "--no-damage") {
+		t.Fatal("static managed desktop would produce an empty clip")
+	}
+}
+
 func TestWFLeavesTheRateToTheCompositorWhenUnset(t *testing.T) {
 	g := guest.New("d", "u", "", "", "")
 	got := strings.Join(NewWF(g, 0).args("/tmp/take.mp4"), " ")

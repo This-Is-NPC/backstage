@@ -24,10 +24,16 @@ scene, one clip.
 | `name` | the name of the output file, `<out>/<name>.mp4` |
 | `layout` | the layout to stage, from `backstage.json` |
 | `vm` | the guest to run inside; empty stages on this machine |
+| `vm-start` | `{"mode":"clean"}`, `{"mode":"reuse"}`, or `{"mode":"continue","after":"previous-scene"}` |
 | `recorder` | `inside` or `framebuffer`; it overrides the guest |
 | `fresh` | `true` runs the `setup` hook in place of `reset` |
 | `reset` | `false` keeps the state that the last take left |
 | `steps` | the ordered actions |
+
+`clean` restores a named `snapshot`, defaulting to `initial`; `reuse` keeps disk
+contents and reorganizes the desktop; `continue` preserves the live session and
+skips reset/setup hooks. Clean and continue require managed stages. See
+[Manage VM stages](how-to-manage-vm-stages.md#choose-how-each-scene-starts).
 
 ## Actions
 

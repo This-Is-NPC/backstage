@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,11 @@ func NewWF(g *guest.Guest, fps int) *WF { return &WF{Guest: g, FPS: fps} }
 // without a guest, the way GPU.args is.
 func (w *WF) args(remote string) []string {
 	args := []string{"-c", "libx264", "-f", remote}
+	if w.Guest.Managed {
+		// A static desktop otherwise supplies only one damaged frame. The fps
+		// filter cannot flush a real clip from that frame, even after seconds.
+		args = append(args, "--no-damage")
+	}
 	if w.FPS > 0 {
 		args = append(args, "-r", strconv.Itoa(w.FPS))
 	}
@@ -84,6 +90,19 @@ func (w *WF) Stop() (string, error) {
 	if w.remote == "" {
 		return "", fmt.Errorf("the recorder was never started")
 	}
+	// Finalize and fetch even when the scene's context has been cancelled.
+	// Use a private Guest copy, leaving the driver's cancelled context intact.
+	cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	original := w.Guest
+	copyGuest := *original
+	copyGuest.Context = cleanup
+	copyRecorder := *w
+	copyRecorder.Guest = &copyGuest
+	return copyRecorder.stop()
+}
+
+func (w *WF) stop() (string, error) {
 	// SIGINT and not SIGTERM: wf-recorder finalises the container on an
 	// interrupt and is killed by a terminate, and a killed one leaves an mp4
 	// with no duration that half the players refuse.

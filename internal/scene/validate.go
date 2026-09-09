@@ -25,6 +25,16 @@ var popupClassRE = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 // ValidateConfig checks project-level settings after defaults are applied.
 func (p *Project) ValidateConfig() error {
+	for name, vm := range p.VMs {
+		if vm.Stage != "" {
+			if !regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`).MatchString(vm.Stage) {
+				return fmt.Errorf("vm %q: invalid managed stage name", name)
+			}
+			if vm.Domain != "" || vm.User != "" || vm.Admin != "" || vm.Key != "" || vm.URI != "" {
+				return fmt.Errorf("vm %q: stage cannot be combined with domain/user/admin/key/uri", name)
+			}
+		}
+	}
 	style := p.Popup.Style
 	if style.FontSize < 0 {
 		return fmt.Errorf("popup.style.fontSize must not be negative")
@@ -47,6 +57,9 @@ func (p *Project) ValidateConfig() error {
 // Validate checks a scene against its project: the layout must exist and every
 // step must carry an action that is either canonical or a configured alias.
 func (s *Scene) Validate(p *Project) error {
+	if err := s.ValidateVMStart(p); err != nil {
+		return err
+	}
 	if s.Name != "" {
 		if err := ValidateName("scene", s.Name); err != nil {
 			return err
@@ -95,6 +108,46 @@ func (s *Scene) Validate(p *Project) error {
 		if len(layoutCfg.Panes) == 0 && (action == "run" || action == "type" || action == "keys") {
 			return fmt.Errorf("scene %q: step %d action %q needs a layout with panes", s.Name, i+1, action)
 		}
+	}
+	return nil
+}
+
+func (s *Scene) ValidateVMStart(p *Project) error {
+	if s.VMStart == nil {
+		return nil
+	}
+	vm, ok := p.VMs[s.VM]
+	if !ok || s.VM == "" {
+		return fmt.Errorf("vm-start requires a declared vm")
+	}
+	x := s.VMStart
+	switch x.Mode {
+	case "clean":
+		if vm.Stage == "" {
+			return fmt.Errorf("clean requires a managed stage")
+		}
+		if x.After != "" {
+			return fmt.Errorf("clean cannot specify after")
+		}
+		if x.Snapshot != "" && !regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`).MatchString(x.Snapshot) {
+			return fmt.Errorf("invalid snapshot name")
+		}
+	case "reuse":
+		if x.Snapshot != "" || x.After != "" {
+			return fmt.Errorf("reuse cannot specify snapshot or after")
+		}
+	case "continue":
+		if vm.Stage == "" || x.After == "" || x.Snapshot != "" {
+			return fmt.Errorf("continue requires a managed stage and after, and cannot specify snapshot")
+		}
+		if x.After == s.Name {
+			return fmt.Errorf("a scene cannot continue itself")
+		}
+		if s.Fresh || (s.Reset != nil && *s.Reset) {
+			return fmt.Errorf("continue cannot request fresh or reset hooks")
+		}
+	default:
+		return fmt.Errorf("vm-start.mode must be clean, reuse or continue")
 	}
 	return nil
 }
