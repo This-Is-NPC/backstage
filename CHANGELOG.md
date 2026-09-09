@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/This-Is-NPC/backstage/compare/v0.4.0...v0.5.0) (2026-09-09)
+
+
+### Features
+
+* **machine:** add managed Omarchy VM stages ([fbfa27c](https://github.com/This-Is-NPC/backstage/commit/fbfa27c129d390001da6ac16a6c8c1e89ccd9a9d))
+* **machine:** add managed Omarchy VM stages ([f5a8ed2](https://github.com/This-Is-NPC/backstage/commit/f5a8ed2682853119bcc430af12bf5ae733fd7922))
+
 ## [0.4.0](https://github.com/This-Is-NPC/backstage/compare/v0.3.0...v0.4.0) (2026-09-08)
 
 
