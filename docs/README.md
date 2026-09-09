@@ -28,3 +28,5 @@ Read the page for the task you must do.
 - [Architecture](internal/ARCHITECTURE.md)
 - [Developer guide](internal/dev-guide.md)
 - [Requirements](internal/requirements.md)
+
+- [Compose declarative presentations](how-to-compose-presentations.md): multiple screens, HTML templates, narration and audio.

@@ -162,3 +162,7 @@ Full documentation is in [`docs/`](docs/README.md).
 
 <sub>Built for Hyprland. Needs Go, tmux, ghostty, gpu-screen-recorder, and ffmpeg.
 A virtual machine stage also needs libvirt and an Omarchy guest.</sub>
+
+### Declarative presentations
+
+Compose existing recordings into multiple simultaneous screens, change HTML layouts, add animated SVG scenes and mix narration or music with `backstage render`. Text belongs to scenes; presentations control cuts, speed and placement. [Guide](docs/how-to-compose-presentations.md) · [Runnable example](examples/presentation/README.md).

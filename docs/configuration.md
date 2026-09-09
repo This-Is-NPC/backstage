@@ -268,3 +268,7 @@ A scene in a production is a name, or an object that says how to present it.
 
 The take on disk does not change. See
 [Compose clips into one video](how-to-compose-a-production.md).
+
+## Declarative presentations
+
+`templates` registers HTML entries; `presentations` registers JSON timeline files, their template and output. These compose existing media without recording scenes. See [the presentation guide](how-to-compose-presentations.md).

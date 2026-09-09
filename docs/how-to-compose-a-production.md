@@ -5,6 +5,9 @@ new recording.
 
 ---
 
+`produce` records its scenes again. To mount existing takes without recording,
+use [declarative presentations](how-to-compose-presentations.md).
+
 ## Before you start
 
 - Record each scene. Confirm that each `.mp4` is in `recordings/`.
@@ -163,5 +166,4 @@ next machine. Hold the card for four seconds. Fade it in and out.
 - **It does not know when each caption belongs.** Backstage does not yet write
   the time of each step beside the clip. Write those times yourself, or keep
   the narration inside the take.
-- **It does not lay two clips side by side.** Use `ffmpeg` with `hstack` for
-  that layout today.
+- **`produce` does not lay clips side by side.** Use [declarative presentations](how-to-compose-presentations.md) with `backstage render` to compose existing recordings into multiple screens.

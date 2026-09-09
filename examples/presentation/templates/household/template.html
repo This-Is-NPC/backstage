@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{background:var(--background,#11111a);color:var(--foreground,#e4e8f7);font:24px sans-serif}h1{position:absolute;left:5%;top:3%;font-size:1.5em;font-weight:500}.slot{position:absolute;border:2px solid var(--border,#39415e);border-radius:16px;background:#080b12;overflow:hidden}.caption{position:absolute;left:8%;right:8%;bottom:4%;height:8%;text-align:center;font-size:24px}.label{position:absolute;top:calc(100% + 10px)}
+body[data-layout="single"] [data-slot="center"]{left:10%;top:15%;width:80%;height:65%}
+body[data-layout="two-screens"] [data-slot="left"]{left:5%;top:28%;width:43%;height:43%}
+body[data-layout="two-screens"] [data-slot="right"]{left:52%;top:28%;width:43%;height:43%}
+body[data-layout="three-screens"] [data-slot="left"]{left:5%;top:30%;width:40%;height:40%}
+body[data-layout="three-screens"] [data-slot="right-top"]{left:55%;top:13%;width:40%;height:34%}
+body[data-layout="three-screens"] [data-slot="right-bottom"]{left:55%;top:50%;width:40%;height:34%}
+</style></head><body><h1 id="title"></h1><div id="slots"></div><div class="caption" data-caption-slot="subtitle"></div>
+<script>
+window.backstageTemplate={version:1,layouts:{single:['center'],'two-screens':['left','right'],'three-screens':['left','right-top','right-bottom']},captionSlots:['subtitle']};
+window.render=async function(c){
+ if(document.body.dataset.layout!==c.layout){document.body.dataset.layout=c.layout;document.querySelector('#slots').replaceChildren(...backstageTemplate.layouts[c.layout].map(name=>{const e=document.createElement('div');e.className='slot';e.dataset.slot=name;return e}));}
+ const p=c.parameters||{};document.querySelector('#title').textContent=p.title||'';
+ for(const k of ['background','foreground','border'])if(p[k])document.documentElement.style.setProperty('--'+k,p[k]);
+};
+</script></body></html>

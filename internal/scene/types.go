@@ -23,6 +23,12 @@ type Step struct {
 //
 // Reset is a pointer so an omitted value defaults to true (ResetEnabled).
 type Scene struct {
+	Type      string                `json:"type,omitempty"`
+	Entry     string                `json:"entry,omitempty"`
+	Duration  float64               `json:"duration,omitempty"`
+	Narration Narration             `json:"narration,omitempty"`
+	Audio     map[string]SceneAudio `json:"audio,omitempty"`
+
 	Name   string `json:"name,omitempty"`
 	Layout string `json:"layout"`
 	// VM names an entry in the project's `vms` and moves the whole take onto
@@ -58,6 +64,9 @@ func (s *Scene) ResetEnabled() bool {
 // Project is a backstage.json: record/popup config, env, hooks, aliases and the
 // named layouts scenes can stage. Loaded by LoadProject, which fills defaults.
 type Project struct {
+	Templates     map[string]TemplateRef     `json:"templates,omitempty"`
+	Presentations map[string]PresentationRef `json:"presentations,omitempty"`
+
 	Record  RecordCfg         `json:"record"`
 	Popup   PopupCfg          `json:"popup"`
 	Term    string            `json:"term,omitempty"`
@@ -316,4 +325,30 @@ func (m *Manifest) Pane(candidates ...string) string {
 		return m.Panes[m.Order[0]]
 	}
 	return ""
+}
+
+// Editorial content belongs to the scene, independently of recording actions.
+type Narration struct {
+	Language string         `json:"language,omitempty"`
+	Cues     []NarrationCue `json:"cues,omitempty"`
+}
+type NarrationCue struct {
+	ID    string  `json:"id"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+	Audio string  `json:"audio,omitempty"`
+}
+type TemplateRef struct {
+	Entry string `json:"entry"`
+}
+type PresentationRef struct {
+	File     string `json:"file"`
+	Template string `json:"template,omitempty"`
+	Out      string `json:"out,omitempty"`
+}
+
+// SceneAudio names reusable non-speech audio owned by a scene.
+type SceneAudio struct {
+	File string `json:"file"`
 }

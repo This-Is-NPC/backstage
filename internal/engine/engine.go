@@ -78,6 +78,9 @@ func New(p *scene.Project) *Engine {
 // is why they are chosen here and not each in its own place: a run with a guest
 // stage and a host recorder would record this desktop while typing on another.
 func NewForScene(p *scene.Project, s *scene.Scene) (*Engine, error) {
+	if s.Type == "visual" {
+		return nil, fmt.Errorf("visual scenes use backstage render or preview, not recording commands")
+	}
 	e := New(p)
 	if s == nil || s.VM == "" {
 		return e, nil

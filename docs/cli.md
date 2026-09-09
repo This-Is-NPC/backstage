@@ -95,3 +95,11 @@ backstage kill
 Strikes the set: kills the tmux session and closes the stage and popup windows.
 
 See also: [Writing scenes](scenes.md) · [Configuration](configuration.md).
+
+## Presentation commands
+
+- `backstage render NAME [--check] [--out FILE]`: validate or export existing media.
+- `backstage preview NAME`: render a temporary preview and open playback controls.
+- `backstage template init NAME`: create an editable HTML template.
+
+See [Compose declarative presentations](how-to-compose-presentations.md).

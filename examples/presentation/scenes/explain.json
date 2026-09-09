@@ -1,0 +1,17 @@
+{
+  "name": "explain",
+  "type": "visual",
+  "entry": "templates/household/visual.html",
+  "duration": 12,
+  "narration": {
+    "language": "en",
+    "cues": [
+      {
+        "id": "concept",
+        "start": 0,
+        "end": 3,
+        "text": "The parent defines a rule; each laptop enforces it."
+      }
+    ]
+  }
+}

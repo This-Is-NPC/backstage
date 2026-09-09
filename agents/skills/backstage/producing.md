@@ -86,3 +86,26 @@ caption contradicting the screen underneath it.
 A cut straight from one machine to another reads as a glitch. A card that names
 the next machine, held four or five seconds with a fade at each end, is what
 tells the viewer the computer changed.
+
+
+## Declarative Presentations From Existing Media
+
+Use `backstage render NAME` to compose existing files without recording scenes
+again. Register `presentations` and optional HTML `templates` in backstage.json.
+The presentation JSON declares version 1, duration, sources, tracks with cuts and
+rates, and timeline events selecting layouts or visual scenes.
+
+`backstage render NAME --check` checks media and HTML slots. `backstage preview
+NAME` renders a temporary movie first and then opens playback/seek/frame-step
+controls. `backstage template init NAME` copies an editable template.
+
+The built-in layouts are single, two-screens and three-screens. HTML slots define
+screen rectangles, borders and captions; morph transitions preserve track time.
+Visual scenes use type=visual, entry and duration without VM or recording steps.
+Texts live in scene narration.cues. Presentations select cue IDs and decide
+whether captions/audio follow source cuts or use independent presentation time.
+Audio is opt-in and can belong to a scene or to the final presentation. No voice
+provider is implemented yet.
+
+See the repository's docs/how-to-compose-presentations.md for the complete
+schema and examples/presentation for a runnable example using generated inputs.

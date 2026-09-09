@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "duration": 8,
+  "parameters": {
+    "title": "A household, three computers"
+  },
+  "sources": {
+    "parent": {
+      "scene": "parent"
+    },
+    "laptop": {
+      "scene": "laptop"
+    },
+    "browser": {
+      "scene": "browser"
+    }
+  },
+  "tracks": {
+    "parent": {
+      "source": "parent",
+      "start": 0,
+      "segments": [
+        {
+          "from": 0,
+          "to": 4,
+          "rate": 1
+        }
+      ]
+    },
+    "laptop": {
+      "source": "laptop",
+      "start": 0,
+      "segments": [
+        {
+          "from": 0,
+          "to": 4,
+          "rate": 1
+        }
+      ]
+    },
+    "browser": {
+      "source": "browser",
+      "start": 0,
+      "segments": [
+        {
+          "from": 0,
+          "to": 4,
+          "rate": 1
+        }
+      ]
+    }
+  },
+  "timeline": [
+    {
+      "at": 0,
+      "layout": "three-screens",
+      "slots": {
+        "left": "parent",
+        "right-top": "laptop",
+        "right-bottom": "browser"
+      }
+    },
+    {
+      "at": 2,
+      "layout": "two-screens",
+      "slots": {
+        "left": "parent",
+        "right": "laptop"
+      },
+      "transition": {
+        "effect": "morph",
+        "duration": 0.5
+      }
+    },
+    {
+      "at": 4,
+      "scene": "explain",
+      "transition": {
+        "effect": "fade",
+        "duration": 0.5
+      }
+    }
+  ],
+  "audio": [
+    {
+      "id": "voice",
+      "track": "parent",
+      "cue": "rule",
+      "mode": "follow-video",
+      "volume": 0.3
+    },
+    {
+      "id": "music",
+      "file": "assets/music.wav",
+      "at": 0,
+      "loop": true,
+      "volume": 0.1,
+      "fade-in": 0.3,
+      "fade-out": 0.4
+    }
+  ],
+  "captions": [
+    {
+      "track": "parent",
+      "cue": "rule",
+      "clock": "source",
+      "slot": "subtitle"
+    },
+    {
+      "scene": "explain",
+      "cue": "concept",
+      "clock": "presentation",
+      "at": 4,
+      "duration": 4,
+      "slot": "subtitle"
+    }
+  ]
+}

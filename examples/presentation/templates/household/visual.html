@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;background:#11111a;color:#e4e8f7;font:28px sans-serif;overflow:hidden}svg{width:100%;height:100%}[data-caption-slot]{position:absolute;bottom:5%;width:90%;left:5%;height:10%;text-align:center}</style></head><body>
+<svg viewBox="0 0 1920 1080"><text x="960" y="170" text-anchor="middle" fill="#e4e8f7" font-size="54">One rule, several computers</text><g id="diagram"><rect x="180" y="390" width="400" height="200" rx="24" fill="#28334e"/><text x="380" y="505" text-anchor="middle" fill="white" font-size="40">Parent</text><path id="arrow" d="M580 490 H1278" pathLength="1" stroke="#7aa2f7" stroke-width="12"/><path id="arrowhead" d="M1260 465 L1290 490 L1260 515" fill="none" stroke="#7aa2f7" stroke-width="12"/><rect x="1290" y="390" width="440" height="200" rx="24" fill="#28334e"/><text x="1510" y="505" text-anchor="middle" fill="white" font-size="40">Laptop</text></g></svg>
+<div data-caption-slot="subtitle"></div><script>window.backstageTemplate={version:1,captionSlots:['subtitle']};// The example reserves four seconds: three to draw, one to read the result.
+window.render=async c=>{
+ const progress=Math.max(0,Math.min(1,c.localTime/3));
+ document.querySelector('#diagram').style.opacity=Math.min(1,c.localTime/1.5);
+ document.querySelector('#arrow').style.strokeDasharray='1';
+ document.querySelector('#arrow').style.strokeDashoffset=1-progress;
+ document.querySelector('#arrowhead').style.opacity=progress===1?1:0;
+};</script></body></html>
