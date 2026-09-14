@@ -100,8 +100,8 @@ func TestCaptureAppliesNamedReadACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o007 != 0 {
-		t.Fatalf("capture relaxed other bits: %o", info.Mode().Perm())
+	if info.Mode().Perm() != 0o440 {
+		t.Fatalf("capture mode: %o", info.Mode().Perm())
 	}
 }
 
@@ -161,7 +161,7 @@ func TestDoctorListsUnreadableImageRemediation(t *testing.T) {
 	m := testManager(t)
 	id := randomID()
 	disk := m.diskPath(id, "-image.qcow2")
-	i := Image{Schema: Schema, ID: id, Disk: disk, NVRAM: m.diskPath(id, "-image.fd")}
+	i := Image{Schema: ImageSchema, ID: id, Disk: disk, NVRAM: m.diskPath(id, "-image.fd")}
 	if err := os.WriteFile(disk, []byte("disk"), 0o600); err != nil {
 		t.Fatal(err)
 	}

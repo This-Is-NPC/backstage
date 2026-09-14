@@ -466,6 +466,9 @@ func TestNoteCaptureStatFailureOmitsSize(t *testing.T) {
 	if !strings.Contains(got, ">> stage demo: capture (1.0s)\n") || strings.Contains(got, "GiB") {
 		t.Fatalf("progress: %s", got)
 	}
+	if !strings.Contains(got, ">> stage demo: capture complete (missing-ancestor)") {
+		t.Fatalf("fallback progress: %s", got)
+	}
 	log := readProvisionLog(t, m, "demo")
 	if !strings.Contains(log, "timing capture-seconds") || strings.Contains(log, "timing capture-bytes") {
 		t.Fatalf("log: %s", log)

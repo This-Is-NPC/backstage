@@ -19,7 +19,13 @@ import (
 )
 
 const Schema = 1
+const ImageSchema = 1
+const ImageSchemaV2 = 2
 const Recipe = "1"
+
+// DefaultMaxImageDepth is the provisional host limit. 0 disables deltas.
+// A later real-VM measurement replaces this number.
+const DefaultMaxImageDepth = 4
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
 
@@ -188,8 +194,9 @@ type Credentials struct {
 	Key      string `json:"key"`
 }
 
-// Image is a standalone immutable disk plus matching firmware and credentials.
+// Image is an immutable disk plus matching firmware and credentials.
 // Active disks depend only on these objects, never on another stage's disk.
+// Parent is the catalog id of the backing image; empty means a complete image.
 type Image struct {
 	Schema      int         `json:"schema"`
 	ID          string      `json:"id"`
@@ -200,6 +207,7 @@ type Image struct {
 	Source      Source      `json:"source"`
 	Credentials Credentials `json:"credentials"`
 	Created     time.Time   `json:"created"`
+	Parent      string      `json:"parent,omitempty"`
 }
 
 type Store struct{ Root, Cache, Storage string }
@@ -350,6 +358,14 @@ func (s *Store) listImages() ([]*Image, error) {
 	return images, nil
 }
 
+func imageSchemaOK(n int) bool {
+	return n == ImageSchema || n == ImageSchemaV2
+}
+
+func (s *Store) imageJSON(id string) string {
+	return filepath.Join(s.Root, "images", id+".json")
+}
+
 func (s *Store) Image(id string) (*Image, error) {
 	if !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id) {
 		return nil, errors.New("invalid image id")
@@ -358,7 +374,7 @@ func (s *Store) Image(id string) (*Image, error) {
 	if err := readJSON(filepath.Join(s.Root, "images", id+".json"), &i); err != nil {
 		return nil, err
 	}
-	if i.Schema != Schema || i.ID != id {
+	if !imageSchemaOK(i.Schema) || i.ID != id {
 		return nil, errors.New("unsupported image record")
 	}
 	return &i, nil

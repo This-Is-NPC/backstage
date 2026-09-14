@@ -212,14 +212,10 @@ func TestReplaceSnapshotCaptureFailureKeepsPrevious(t *testing.T) {
 	if err := m.Store.Save(r); err != nil {
 		t.Fatal(err)
 	}
-	captureStageImage = func(*Manager, context.Context, *Record) (*Image, error) {
+	stubCapture(func(*Manager, context.Context, *Record) (*Image, error) {
 		return nil, errors.New("capture failed")
-	}
-	t.Cleanup(func() {
-		captureStageImage = func(m *Manager, ctx context.Context, rec *Record) (*Image, error) {
-			return m.capture(ctx, rec)
-		}
 	})
+	t.Cleanup(restoreDefaultCapture)
 	if _, err := m.ReplaceSnapshot(context.Background(), r, "ready", testOrigin("/proj", "alpha"), false); err == nil {
 		t.Fatal("capture failure succeeded")
 	}
@@ -300,18 +296,14 @@ func TestReplaceSnapshotWriteFailureRemovesCapturedImage(t *testing.T) {
 		return errors.New("disk full")
 	}
 	t.Cleanup(func() { commitStageRecord = (*Store).Save })
-	captureStageImage = func(mgr *Manager, ctx context.Context, rec *Record) (*Image, error) {
+	stubCapture(func(mgr *Manager, ctx context.Context, rec *Record) (*Image, error) {
 		img, err := mgr.capture(ctx, rec)
 		if err == nil {
 			orphan = img.ID
 		}
 		return img, err
-	}
-	t.Cleanup(func() {
-		captureStageImage = func(mgr *Manager, ctx context.Context, rec *Record) (*Image, error) {
-			return mgr.capture(ctx, rec)
-		}
 	})
+	t.Cleanup(restoreDefaultCapture)
 	if _, err := m.ReplaceSnapshot(context.Background(), r, "ready", testOrigin("/proj", "alpha"), false); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("write: %v", err)
 	}
@@ -520,6 +512,9 @@ func captureReady(t *testing.T, name string) (*Manager, *Record) {
 	}
 	m.Runner = runnerFunc(func(_ context.Context, _ io.Reader, bin string, args ...string) (string, error) {
 		if bin == "qemu-img" {
+			if len(args) > 0 && args[0] == "info" {
+				return `[{"filename":"` + r.Disk + `"}]`, nil
+			}
 			return "", os.WriteFile(args[len(args)-1], []byte("image"), 0o600)
 		}
 		switch args[2] {
@@ -537,7 +532,7 @@ func captureReady(t *testing.T, name string) (*Manager, *Record) {
 
 func writeCatalogImage(t *testing.T, m *Manager, id string) {
 	t.Helper()
-	i := Image{Schema: Schema, ID: id, Disk: m.diskPath(id, "-image.qcow2"), NVRAM: m.diskPath(id, "-image.fd")}
+	i := Image{Schema: ImageSchema, ID: id, Disk: m.diskPath(id, "-image.qcow2"), NVRAM: m.diskPath(id, "-image.fd")}
 	if err := os.WriteFile(i.Disk, []byte("disk"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -372,68 +372,6 @@ func (m *Manager) validateGuest(ctx context.Context, g *guest.Guest, r *Record) 
 	return g.ClearTheDesktop()
 }
 
-func (m *Manager) capture(ctx context.Context, r *Record) (*Image, error) {
-	state, err := m.State(ctx, r)
-	if err != nil {
-		return nil, err
-	}
-	if state != "shut off" {
-		return nil, errors.New("snapshot requires a stopped stage")
-	}
-	c, err := m.Store.Credentials(r.Name)
-	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	id := randomID()
-	i := &Image{Schema: Schema, ID: id, Disk: m.diskPath(id, "-image.qcow2"), NVRAM: m.diskPath(id, "-image.fd"), Firmware: r.Firmware, Spec: r.Spec, Source: r.Source, Created: time.Now().UTC()}
-	var created []string
-	fail := func(err error) (*Image, error) {
-		for n := len(created) - 1; n >= 0; n-- {
-			_ = os.RemoveAll(created[n])
-		}
-		return nil, err
-	}
-	if _, err := m.run(ctx, "qemu-img", "convert", "-O", "qcow2", r.Disk, i.Disk); err != nil {
-		created = append(created, i.Disk)
-		return fail(err)
-	}
-	created = append(created, i.Disk)
-	if err := os.Chmod(i.Disk, 0o600); err != nil {
-		return fail(err)
-	}
-	if err := protectCapturedDisk(i.Disk); err != nil {
-		return fail(err)
-	}
-	if err := copyFile(r.NVRAM, i.NVRAM, 0o600); err != nil {
-		created = append(created, i.NVRAM)
-		return fail(err)
-	}
-	created = append(created, i.NVRAM)
-	keyDir := filepath.Join(m.Store.Root, "images", id)
-	if err := os.MkdirAll(keyDir, 0o700); err != nil {
-		return fail(err)
-	}
-	created = append(created, keyDir)
-	i.Credentials = Credentials{Password: c.Password, Key: filepath.Join(keyDir, "id_ed25519")}
-	for _, suffix := range []string{"", ".pub"} {
-		if err := copyFile(c.Key+suffix, i.Credentials.Key+suffix, 0o600); err != nil {
-			return fail(err)
-		}
-	}
-	jsonPath := filepath.Join(m.Store.Root, "images", id+".json")
-	if err := atomicJSON(jsonPath, i); err != nil {
-		return fail(err)
-	}
-	created = append(created, jsonPath)
-	if err := ctx.Err(); err != nil {
-		return fail(err)
-	}
-	return i, nil
-}
-
 func removeCapturedImage(m *Manager, i *Image) {
 	if i == nil {
 		return
@@ -454,17 +392,23 @@ func (m *Manager) Snapshot(ctx context.Context, r *Record, name string) error {
 	if r.Status != "ready" {
 		return errors.New("only ready stages can be snapshotted")
 	}
+	limit, _, err := m.imageDepthLimit()
+	if err != nil {
+		return err
+	}
 	began := m.now()
 	if err := m.Stop(ctx, r, false); err != nil {
 		return err
 	}
 	m.logTiming(r, "shutdown-seconds", *secondsPtr(m.since(began)))
 	began = m.now()
-	i, err := m.capture(ctx, r)
+	got, err := m.captureImage(ctx, r, true, limit)
 	if err != nil {
 		return err
 	}
+	i := got.Image
 	m.noteCapture(r, began, i.Disk)
+	m.noteCaptureMeta(r, got.Mode, got.Depth, got.Fallback)
 	r.Snapshots[name] = i.ID
 	return m.Store.Save(r)
 }
@@ -737,41 +681,24 @@ func (m *Manager) Delete(ctx context.Context, r *Record) error {
 }
 
 // Collect removes only catalogued images with no stage or base-cache reference.
-// Called while holding image-catalog, after the stage registry mutation commits.
+// A direct id with neither JSON nor disk is ignored. A disk without JSON
+// stops the scan before any removal. Called while holding image-catalog,
+// after the stage registry mutation commits.
 func (m *Manager) Collect() error {
-	used := map[string]bool{}
-	stages, err := m.Store.List()
+	used, err := m.usedImageIDs()
 	if err != nil {
 		return err
-	}
-	for _, r := range stages {
-		used[r.Source.Image] = true
-		for _, id := range r.Snapshots {
-			used[id] = true
-		}
-		var a activation
-		if err := readJSON(filepath.Join(m.Store.Dir(r.Name), "activate.json"), &a); err == nil {
-			used[a.Next.Source.Image] = true
-			used[a.Old.Source.Image] = true
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-	}
-	baseFiles, err := filepath.Glob(filepath.Join(m.Store.Root, "bases", "*.json"))
-	if err != nil {
-		return err
-	}
-	for _, path := range baseFiles {
-		var id string
-		if err := readJSON(path, &id); err != nil {
-			return err
-		}
-		used[id] = true
 	}
 	files, err := filepath.Glob(filepath.Join(m.Store.Root, "images", "*.json"))
 	if err != nil {
 		return err
 	}
+	type victim struct {
+		id   string
+		path string
+		img  *Image
+	}
+	var victims []victim
 	for _, path := range files {
 		id := strings.TrimSuffix(filepath.Base(path), ".json")
 		if used[id] {
@@ -784,20 +711,126 @@ func (m *Manager) Collect() error {
 		if i.Disk != m.diskPath(id, "-image.qcow2") || i.NVRAM != m.diskPath(id, "-image.fd") {
 			return errors.New("refusing to collect an image outside managed storage")
 		}
-		for _, file := range []string{i.Disk, i.NVRAM, path} {
+		victims = append(victims, victim{id: id, path: path, img: i})
+	}
+	for _, v := range victims {
+		for _, file := range []string{v.img.Disk, v.img.NVRAM, v.path} {
 			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
 				return err
 			}
 		}
-		if err := os.RemoveAll(filepath.Join(m.Store.Root, "images", id)); err != nil {
+		if err := os.RemoveAll(filepath.Join(m.Store.Root, "images", v.id)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-var captureStageImage = func(m *Manager, ctx context.Context, r *Record) (*Image, error) {
-	return m.capture(ctx, r)
+func (m *Manager) cachedBaseIDs() (map[string]bool, error) {
+	ids := map[string]bool{}
+	baseFiles, err := filepath.Glob(filepath.Join(m.Store.Root, "bases", "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range baseFiles {
+		var id string
+		if err := readJSON(path, &id); err != nil {
+			return nil, err
+		}
+		if id != "" {
+			ids[id] = true
+		}
+	}
+	return ids, nil
+}
+
+func (m *Manager) usedImageIDs() (map[string]bool, error) {
+	used := map[string]bool{}
+	stages, err := m.Store.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range stages {
+		if err := m.noteUsedImage(used, r.Source.Image, fmt.Sprintf("stage %s source", r.Name)); err != nil {
+			return nil, err
+		}
+		for name, id := range r.Snapshots {
+			if err := m.noteUsedImage(used, id, fmt.Sprintf("stage %s snapshot %s", r.Name, name)); err != nil {
+				return nil, err
+			}
+		}
+		var a activation
+		if err := readJSON(filepath.Join(m.Store.Dir(r.Name), "activate.json"), &a); err == nil {
+			if err := m.noteUsedImage(used, a.Next.Source.Image, fmt.Sprintf("stage %s activate.json next", r.Name)); err != nil {
+				return nil, err
+			}
+			if err := m.noteUsedImage(used, a.Old.Source.Image, fmt.Sprintf("stage %s activate.json old", r.Name)); err != nil {
+				return nil, err
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	baseFiles, err := filepath.Glob(filepath.Join(m.Store.Root, "bases", "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range baseFiles {
+		var id string
+		if err := readJSON(path, &id); err != nil {
+			return nil, err
+		}
+		if err := m.noteUsedImage(used, id, fmt.Sprintf("base %s", filepath.Base(path))); err != nil {
+			return nil, err
+		}
+	}
+	if err := m.markAncestors(used); err != nil {
+		return nil, err
+	}
+	return used, nil
+}
+
+func (m *Manager) noteUsedImage(used map[string]bool, id, where string) error {
+	if id == "" {
+		return nil
+	}
+	_, jsonErr := os.Stat(m.Store.imageJSON(id))
+	_, diskErr := os.Stat(m.diskPath(id, "-image.qcow2"))
+	if os.IsNotExist(jsonErr) && os.IsNotExist(diskErr) {
+		return nil
+	}
+	if os.IsNotExist(jsonErr) {
+		return fmt.Errorf("%s: image %s has a disk but no catalog record", where, id)
+	}
+	used[id] = true
+	return nil
+}
+
+func (m *Manager) markAncestors(used map[string]bool) error {
+	ids := make([]string, 0, len(used))
+	for id := range used {
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		seen := map[string]bool{}
+		for cur := id; cur != ""; {
+			if seen[cur] {
+				return fmt.Errorf("image parent cycle involving %s", cur)
+			}
+			seen[cur] = true
+			used[cur] = true
+			img, err := m.Store.Image(cur)
+			if err != nil {
+				return fmt.Errorf("used image %s: %w", cur, err)
+			}
+			cur = img.Parent
+		}
+	}
+	return nil
+}
+
+var captureStageImage = func(m *Manager, ctx context.Context, r *Record, allowDelta bool, maxDepth int) (*capturedImage, error) {
+	return m.captureImage(ctx, r, allowDelta, maxDepth)
 }
 
 var commitStageRecord = func(s *Store, r *Record) error {
@@ -817,6 +850,9 @@ type ReplaceResult struct {
 	CaptureSeconds       *float64
 	CaptureBytes         *int64
 	CaptureApparentBytes *int64
+	CaptureMode          *string
+	ImageDepth           *int
+	CaptureFallback      *string
 }
 
 // ReplaceSnapshot captures the stopped guest and commits the mapping and
@@ -828,6 +864,10 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	}
 	if r.Status != "ready" {
 		return ReplaceResult{}, errors.New("only ready stages can be snapshotted")
+	}
+	limit, _, err := m.imageDepthLimit()
+	if err != nil {
+		return ReplaceResult{}, err
 	}
 	release, err := m.Store.LockWait(ctx, "image-catalog")
 	if err != nil {
@@ -841,11 +881,13 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	out := ReplaceResult{ShutdownSeconds: secondsPtr(m.since(began))}
 	m.logTiming(r, "shutdown-seconds", *out.ShutdownSeconds)
 	began = m.now()
-	img, err := captureStageImage(m, ctx, r)
+	got, err := captureStageImage(m, ctx, r, true, limit)
 	if err != nil {
 		return out, err
 	}
+	img := got.Image
 	out.CaptureSeconds, out.CaptureBytes, out.CaptureApparentBytes = m.noteCapture(r, began, img.Disk)
+	out.CaptureMode, out.ImageDepth, out.CaptureFallback = m.noteCaptureMeta(r, got.Mode, got.Depth, got.Fallback)
 	if err := ctx.Err(); err != nil {
 		removeCapturedImage(m, img)
 		return out, err

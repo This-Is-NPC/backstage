@@ -54,6 +54,8 @@ func (m *Manager) logTiming(r *Record, name string, value any) {
 	switch v := value.(type) {
 	case float64:
 		msg = fmt.Sprintf("timing %s %.3f", name, v)
+	case int:
+		msg = fmt.Sprintf("timing %s %d", name, v)
 	case int64:
 		msg = fmt.Sprintf("timing %s %d", name, v)
 	default:
@@ -62,6 +64,28 @@ func (m *Manager) logTiming(r *Record, name string, value any) {
 	if err := m.log(r, msg); err != nil {
 		m.warn(fmt.Sprintf("timing log: %v", err))
 	}
+}
+
+func (m *Manager) printCaptureFallback(r *Record, reason string) {
+	if m == nil || m.Output == nil || reason == "" {
+		return
+	}
+	fmt.Fprintf(m.Output, ">> stage %s: capture complete (%s)\n", r.Name, reason)
+}
+
+func (m *Manager) noteCaptureMeta(r *Record, mode string, depth int, fallback string) (modeOut *string, depthOut *int, fallbackOut *string) {
+	if mode != "" {
+		m.logTiming(r, "capture-mode", mode)
+		modeOut = &mode
+	}
+	m.logTiming(r, "image-depth", depth)
+	depthCopy := depth
+	depthOut = &depthCopy
+	if fallback != "" {
+		m.logTiming(r, "capture-fallback", fallback)
+		fallbackOut = &fallback
+	}
+	return modeOut, depthOut, fallbackOut
 }
 
 func (m *Manager) printCapture(r *Record, secs float64, allocated *int64) {

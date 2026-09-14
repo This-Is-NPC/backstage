@@ -57,6 +57,8 @@ type Manager struct {
 	Log func(message string) error
 	// StartTimes is what the last Restore or Begin completed.
 	StartTimes StartTimes
+	// MaxImageDepth, if set, overrides env and settings.json. Tests inject it.
+	MaxImageDepth *int
 }
 
 func New() (*Manager, error) {
@@ -172,6 +174,7 @@ func (m *Manager) Doctor(ctx context.Context) []Check {
 	checks = append(checks, Check{"storage", ok, detail})
 	checks = append(checks, m.poolACLCheck())
 	checks = append(checks, m.catalogACLChecks()...)
+	checks = append(checks, m.imageDepthCheck())
 	return checks
 }
 

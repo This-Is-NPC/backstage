@@ -177,19 +177,15 @@ func TestReplaceSnapshotCancelAfterCaptureRemovesImage(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var captured string
-	captureStageImage = func(mgr *Manager, ctx context.Context, rec *Record) (*Image, error) {
+	stubCapture(func(mgr *Manager, ctx context.Context, rec *Record) (*Image, error) {
 		img, err := mgr.capture(ctx, rec)
 		if err == nil {
 			captured = img.ID
 		}
 		cancel()
 		return img, err
-	}
-	t.Cleanup(func() {
-		captureStageImage = func(mgr *Manager, ctx context.Context, rec *Record) (*Image, error) {
-			return mgr.capture(ctx, rec)
-		}
 	})
+	t.Cleanup(restoreDefaultCapture)
 	result, err := m.ReplaceSnapshot(ctx, r, "ready", testOrigin("/proj", "alpha"), false)
 	if err == nil {
 		t.Fatal("expected cancel")

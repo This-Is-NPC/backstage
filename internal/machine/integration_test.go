@@ -266,3 +266,141 @@ func acceptanceScenes(t *testing.T, ctx context.Context, m *Manager, r *Record) 
 		}
 	}
 }
+
+// Opt-in. A restored delta must boot with the same guest marker as a
+// complete image of that state; delta-on-delta stays incremental below
+// the host limit and flattens above it.
+func TestRealDeltaImages(t *testing.T) {
+	if os.Getenv("BACKSTAGE_VM_INTEGRATION") != "1" {
+		t.Skip("set BACKSTAGE_VM_INTEGRATION=1 to provision real VMs")
+	}
+	m, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Minute)
+	defer cancel()
+	name := "accept-" + randomID()[:8]
+	cloneName := name + "-clone"
+	release, err := m.Store.LockMany(name, cloneName, "image-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { release() }()
+	r, err := m.Create(ctx, name, DefaultSpec())
+	if err != nil {
+		t.Fatalf("create %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		_ = m.Delete(context.Background(), r)
+	})
+	initial, err := m.Store.Image(r.Snapshots["initial"])
+	if err != nil || initial.Parent != "" || initial.Schema != ImageSchema {
+		t.Fatalf("save-initial must stay complete: %+v %v", initial, err)
+	}
+	if err := m.Restore(ctx, r, "initial"); err != nil {
+		t.Fatal(err)
+	}
+	g, err := m.Start(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.InSession("printf marked > /home/omarchy/backstage-delta"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Snapshot(ctx, r, "marked"); err != nil {
+		t.Fatal(err)
+	}
+	delta, err := m.Store.Image(r.Snapshots["marked"])
+	if err != nil || delta.Parent != r.Snapshots["initial"] {
+		t.Fatalf("first snapshot should be a delta on initial: %+v %v", delta, err)
+	}
+	if err := m.Restore(ctx, r, "marked"); err != nil {
+		t.Fatal(err)
+	}
+	g, err = m.Start(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Root("test -f /home/omarchy/backstage-delta"); err != nil {
+		t.Fatal("restored delta lost the marker")
+	}
+	clone, err := m.Clone(ctx, r, cloneName, "marked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = m.Delete(context.Background(), clone)
+	})
+	if clone.Source.Image != delta.ID {
+		t.Fatalf("clone source: %s", clone.Source.Image)
+	}
+	initClone, err := m.Store.Image(clone.Snapshots["initial"])
+	if err != nil || initClone.Parent != "" {
+		t.Fatalf("clone initial must stay complete: %+v %v", initClone, err)
+	}
+	one := 1
+	m.MaxImageDepth = &one
+	if err := m.Restore(ctx, r, "marked"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Snapshot(ctx, r, "flat"); err != nil {
+		t.Fatal(err)
+	}
+	flat, err := m.Store.Image(r.Snapshots["flat"])
+	if err != nil || flat.Parent != "" {
+		t.Fatalf("above the limit must flatten: %+v %v", flat, err)
+	}
+}
+
+// Opt-in measurement. Captures a chain of depths 0..N and prints timings.
+func TestMeasureImageDepthChain(t *testing.T) {
+	if os.Getenv("BACKSTAGE_VM_DEPTH_MEASURE") != "1" {
+		t.Skip("set BACKSTAGE_VM_DEPTH_MEASURE=1 to measure real depth costs")
+	}
+	m, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+	defer cancel()
+	limit, origin, err := m.imageDepthLimit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("max-image-depth %d (%s)", limit, origin)
+	name := "accept-" + randomID()[:8]
+	release, err := m.Store.LockMany(name, "image-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { release() }()
+	r, err := m.Create(ctx, name, DefaultSpec())
+	if err != nil {
+		t.Fatalf("create %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		_ = m.Delete(context.Background(), r)
+	})
+	if err := m.Restore(ctx, r, "initial"); err != nil {
+		t.Fatal(err)
+	}
+	for depth := 0; depth <= limit+1; depth++ {
+		snap := "depth-" + randomID()[:8]
+		if _, err := m.Start(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Snapshot(ctx, r, snap); err != nil {
+			t.Fatal(err)
+		}
+		img, err := m.Store.Image(r.Snapshots[snap])
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("depth-step %d name=%s parent=%q schema=%d", depth, snap, img.Parent, img.Schema)
+		t.Logf("%s", readProvisionLog(t, m, r.Name))
+		if err := m.Restore(ctx, r, snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
