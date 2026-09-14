@@ -428,8 +428,13 @@ type fakeRec struct {
 
 func (f *fakeRec) Start(out string) error {
 	f.out = out
-	*f.order = append(*f.order, "rec")
-	return nil
+	if f.order != nil {
+		*f.order = append(*f.order, "rec")
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(out, []byte("clip"), 0o644)
 }
 func (f *fakeRec) Stop() (string, error) { f.stopped = true; return f.out, nil }
 

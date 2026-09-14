@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/This-Is-NPC/backstage/internal/facts"
@@ -18,6 +19,7 @@ import (
 	"github.com/This-Is-NPC/backstage/internal/recorder"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 	"github.com/This-Is-NPC/backstage/internal/stage"
+	"github.com/This-Is-NPC/backstage/internal/take"
 )
 
 // Options tune a run. Record off + Speed < 1 is a rehearsal (dry-run).
@@ -61,6 +63,7 @@ type Engine struct {
 	cmdGuard      *CommandGuard
 	startImage    string
 	startSnapshot string
+	takeSess      atomic.Pointer[take.Session]
 }
 
 type recordingGuest interface {
@@ -237,6 +240,10 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	e.cmdGuard = cmdGuard
 	defer func() { e.cmdGuard = prevCmdGuard }()
 
+	e.takeSess.Store(nil)
+	// Registered before the interrupt guard so the recorder stops first.
+	defer func() { e.finishTakeSession(&runErr) }()
+
 	guard := newInterruptGuard(
 		func() error {
 			cancel()
@@ -308,26 +315,38 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	}
 
 	out := opts.OutPath
-	if out == "" {
-		if err := scene.ValidateName("scene", s.Name); err != nil {
-			return err
+	prepareOut := func() (string, error) {
+		if out != "" {
+			return out, nil
 		}
-		var err error
-		out, err = e.Project.OutputPath(e.Project.Record.Out, s.Name+".mp4")
+		if !opts.Record {
+			return "", nil
+		}
+		if sess := e.takeSess.Load(); sess != nil {
+			return sess.Clip(), nil
+		}
+		pending, err := take.BeginContext(ctx, e.Project, s.Name)
 		if err != nil {
-			return err
+			return "", err
 		}
+		e.takeSess.Store(pending)
+		out = pending.Clip()
+		return out, nil
 	}
 	startRec := func() error {
 		if !opts.Record {
 			return nil
+		}
+		path, err := prepareOut()
+		if err != nil {
+			return err
 		}
 		recMu.Lock()
 		recArmed = true
 		recStopped = false
 		recMu.Unlock()
 		fmt.Println(">> start recording")
-		if err := e.Rec.Start(out); err != nil {
+		if err := e.Rec.Start(path); err != nil {
 			return err
 		}
 		recMu.Lock()
@@ -405,7 +424,23 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		if err := e.writeClipFacts(out, s, opts.Version, result); err != nil {
 			return errors.Join(runErr, err)
 		}
-		fmt.Printf(">> done. %s  (stage open — backstage kill)\n", out)
+		if sess := e.takeSess.Load(); sess != nil {
+			if result != facts.ResultOK {
+				path, err := sess.KeepAttempt()
+				if err != nil {
+					return errors.Join(runErr, err)
+				}
+				fmt.Printf(">> done. %s  (stage open — backstage kill)\n", path)
+			} else {
+				pub, err := sess.Publish(ctx)
+				if err != nil {
+					return errors.Join(runErr, err)
+				}
+				fmt.Printf(">> done. %s  (stage open — backstage kill)\n", pub.StableClip)
+			}
+		} else {
+			fmt.Printf(">> done. %s  (stage open — backstage kill)\n", out)
+		}
 	} else {
 		fmt.Println(">> rehearsal done (no recording).  (stage open — backstage kill)")
 	}
@@ -451,6 +486,27 @@ func (e *Engine) writeClipFacts(clip string, s *scene.Scene, version, result str
 	return facts.Write(facts.Path(clip), f)
 }
 
+func (e *Engine) finishTakeSession(runErr *error) {
+	sess := e.takeSess.Load()
+	if sess == nil || sess.Finished() {
+		return
+	}
+	if !sess.HasClip() {
+		if err := sess.Discard(); err != nil && runErr != nil {
+			*runErr = errors.Join(*runErr, err)
+		}
+		return
+	}
+	path, err := sess.KeepAttempt()
+	if err != nil {
+		if runErr != nil {
+			*runErr = errors.Join(*runErr, err)
+		}
+		return
+	}
+	fmt.Fprintf(os.Stderr, "   !! take kept at %s\n", path)
+}
+
 func (e *Engine) cleanupOnInterrupt(extra func()) {
 	// Primary recorder/command cleanup is owned by the guard; repeat the command
 	// interrupt here so direct cleanupOnInterrupt tests and future callers stay safe.
@@ -460,6 +516,9 @@ func (e *Engine) cleanupOnInterrupt(extra func()) {
 	}
 	if e.Stager != nil {
 		_ = e.Stager.Teardown()
+	}
+	if sess := e.takeSess.Load(); sess != nil {
+		sess.Interrupt()
 	}
 	if extra != nil {
 		extra()
