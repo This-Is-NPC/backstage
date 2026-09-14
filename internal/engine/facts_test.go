@@ -135,7 +135,7 @@ func TestWriteClipFactsCleanStartImage(t *testing.T) {
 		startSnapshot: "theme-installed",
 	}
 	s := &scene.Scene{VMStart: &scene.VMStart{Mode: "clean", Snapshot: "theme-installed"}}
-	if err := e.writeClipFacts(clip, s, "1.0.0", facts.ResultOK); err != nil {
+	if err := e.writeClipFacts(clip, s, "1.0.0", facts.ResultOK, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := readFacts(t, clip)
