@@ -3,7 +3,9 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -177,25 +179,49 @@ func listProject(out io.Writer, p *scene.Project) error {
 }
 
 func playCmd() *cobra.Command {
-	return &cobra.Command{
+	var adopt bool
+	c := &cobra.Command{
 		Use:   "play SCENE",
 		Short: "Stage the scene, record it, and write an mp4",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			return runScene(args[0], engine.Options{Context: c.Context(), Record: true, Speed: 1})
+			opts := engine.Options{Context: c.Context(), Record: true, Speed: 1, Adopt: adopt}
+			if adopt {
+				opts.ConfirmAdopt = func(snapshot string) error {
+					return confirmSnapshotName(c.InOrStdin(), c.ErrOrStderr(), snapshot)
+				}
+			}
+			return runScene(args[0], opts)
 		},
 	}
+	c.Flags().BoolVar(&adopt, "adopt", false, "replace a snapshot that has no origin after typing its name")
+	return c
 }
 
 func rehearseCmd() *cobra.Command {
-	return &cobra.Command{
+	var replaceState bool
+	c := &cobra.Command{
 		Use:   "rehearse SCENE",
 		Short: "Dry-run the scene fast, without recording",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			return runScene(args[0], engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed})
+			return runScene(args[0], engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed, ReplaceState: replaceState})
 		},
 	}
+	c.Flags().BoolVar(&replaceState, "replace-state", false, "let a rehearsal replace a snapshot a recording made")
+	return c
+}
+
+func confirmSnapshotName(in io.Reader, errOut io.Writer, snapshot string) error {
+	fmt.Fprintf(errOut, "Replace snapshot %s? Type its name: ", snapshot)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(line) != snapshot {
+		return errors.New("adoption cancelled")
+	}
+	return nil
 }
 
 func setupCmd() *cobra.Command {
