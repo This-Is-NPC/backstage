@@ -10,8 +10,11 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 3. Prepare cuts and rates as lossless FFV1 tracks, and mix stereo 48 kHz audio.
 4. Read PNG frames sequentially through FFmpeg pipes with bounded frame buffers.
 5. Pass the selected frames and time to the embedded Chromium HTML runtime.
+   Render calls `drawTimed`; Check and initialize keep using `draw`. Measured
+   draw includes image load and the final `requestAnimationFrame`.
 6. Capture the composed frames and encode H.264/yuv420p; mux AAC when selected.
-7. Publish the MP4 and companion facts containing configuration and input hashes.
+7. Publish the MP4 and companion facts containing configuration, input hashes
+   and render `timings` (phase seconds, per-frame p95, intermediate bytes).
 
 `model.go` owns validation and timing, `media.go` owns FFmpeg preparation,
 `render.go` owns Chromium and export, and `preview.go` owns preview and template

@@ -114,7 +114,8 @@ backstage render complete
 Preview renders first, then opens playback, seek and frame-step controls. Wait
 for that initial render; Ctrl-C closes its temporary server. Inspect the final
 frame to confirm that the animation finishes and the viewer can read the result.
-The export is `exports/complete.mp4` with a companion `.facts.json`.
+The export is `exports/complete.mp4` with a companion `.facts.json` that records
+input hashes and render `timings`.
 
 ## 5. Customize and reuse
 

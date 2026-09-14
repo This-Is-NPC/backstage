@@ -176,5 +176,10 @@ It is not a live editor. Check the final animation state and that audio/captions
 follow the intended clock before exporting.
 
 Output defaults to `exports/NAME.mp4`; `--out` overrides the project-relative
-path. Companion facts record inputs and tool versions. Source recordings remain
+path. Companion facts record inputs, tool versions and a `timings` object
+beside `render` (phase seconds, per-frame total/mean/max/p95, intermediate
+bytes). Progress ends with `>> render timings: ...`. Source input hashes stay
+the same; `builtin:runtime.html` changes only because the runtime adds
+`drawTimed`. Measured draw includes image load and the final
+`requestAnimationFrame`, not pure canvas cost. Source recordings remain
 unchanged; failed exports do not replace an existing MP4.

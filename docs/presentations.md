@@ -171,7 +171,19 @@ match today's project-relative paths.
 slots without decoding every video frame. Runtime errors can still occur later
 inside custom code; these abort the export. The final MP4 is replaced only when
 rendering and encoding succeed. A companion `.facts.json` records configuration,
-resolved dimensions, source/resource hashes and tool versions.
+resolved dimensions, source/resource hashes and tool versions. A successful
+export also writes a `timings` object beside `render`: phase seconds
+(`renderer-start-seconds`, `prepare-track-seconds`, `audio-seconds`,
+`audio-part-seconds`, `encode-seconds`, `mux-seconds`, `metadata-seconds`,
+`total-seconds`), per-frame stages (`decode`, `transfer`, `draw`, `screenshot`,
+`encode-write`) with total, mean, max, p95 and frame count, and intermediate
+byte sizes (`track-bytes`, `audio-part-bytes`, `mix-wav-bytes`,
+`video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`).
+Absent phases and missing files are omitted. Progress ends with
+`>> render timings: ...`. Source and template input hashes stay the same;
+`builtin:runtime.html` changes only because the runtime adds `drawTimed`.
+Measured draw includes what `draw` itself waits for — image load and the final
+`requestAnimationFrame` — not pure canvas cost.
 
 Visual reproducibility assumes fixed inputs, browser, fonts and tool versions;
 MP4 byte identity across environments is not promised. The renderer uses bounded
