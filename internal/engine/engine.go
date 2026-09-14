@@ -633,6 +633,9 @@ func (e *Engine) mergeCapture(r machine.ReplaceResult) {
 	if r.CaptureFallback != nil {
 		e.timings.CaptureFallback = r.CaptureFallback
 	}
+	if r.CatalogWaitSeconds != nil {
+		e.timings.CatalogWaitSeconds = r.CatalogWaitSeconds
+	}
 }
 
 func (e *Engine) logSessionTimings() {

@@ -53,6 +53,7 @@ func TestRunCleanVMEndWritesAllTimings(t *testing.T) {
 			CaptureApparentBytes: iptr(42949672960),
 			CaptureMode:          &mode,
 			ImageDepth:           &depth,
+			CatalogWaitSeconds:   fptr(0.4),
 		}, nil
 	}
 	t.Cleanup(func() { replaceTakeState = prev })
@@ -79,6 +80,7 @@ func TestRunCleanVMEndWritesAllTimings(t *testing.T) {
 	if got.Timings.ImageDepth == nil || *got.Timings.ImageDepth != 1 {
 		t.Fatalf("depth %+v", got.Timings.ImageDepth)
 	}
+	assertFloat(t, got.Timings.CatalogWaitSeconds, 0.4)
 	if got.Timings.StagePhases["up"] != 0.2 || got.Timings.StagePhases["omarchy"] != 1.1 {
 		t.Fatalf("phases %+v", got.Timings.StagePhases)
 	}
