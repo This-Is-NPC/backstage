@@ -350,6 +350,7 @@ Normal `go test ./...` never creates VMs. On a prepared host, explicitly run:
 BACKSTAGE_VM_INSTALL_TEST=1 go test ./internal/machine -run TestRealOmarchyStages -v -timeout 70m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealOmarchyStages -v -timeout 70m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/engine -run TestRealVMEndProducerConsumer -v -timeout 180m -count=1
+BACKSTAGE_VM_INTEGRATION=1 go test ./internal/cli -run TestRealParallelStages -v -count=1 -timeout 150m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealDeltaImages -v -timeout 90m -count=1
 BACKSTAGE_IMAGE_DEPTH=8 BACKSTAGE_VM_DEPTH_MEASURE=1 go test ./internal/machine -run TestMeasureImageDepthChain -v -timeout 120m -count=1
 ```
@@ -358,6 +359,16 @@ BACKSTAGE_IMAGE_DEPTH=8 BACKSTAGE_VM_DEPTH_MEASURE=1 go test ./internal/machine 
 Its context is 150 minutes; `-timeout` must be larger or the default 10
 minute test timeout panics and skips `Cleanup`, leaving an `accept-*`
 stage behind.
+
+`TestRealParallelStages` creates two `accept-*-a` / `accept-*-b` stages
+and records four missing scenes with `play --stale --json`. It builds
+`cmd/backstage` and runs that binary as the parent so the scheduler's
+children are real CLI processes, not the `go test` executable. Its
+context is 120 minutes; `-timeout` must be 150m or the default 10
+minute test timeout panics and skips `Cleanup`. Job logs use a
+temporary `XDG_STATE_HOME`; the stage store stays the real
+`XDG_DATA_HOME`. Both stages are deleted in `Cleanup`, including when
+`Create` leaves a partial record.
 
 The first command tests installation and recording without requiring clone
 customization. The second also checks snapshot contents, clone identity,
