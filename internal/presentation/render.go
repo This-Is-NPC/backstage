@@ -93,13 +93,25 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 	return r, nil
 }
 func (r *Renderer) eval(fn string, value any) error {
+	_, err := r.evalNumber(fn, value, false)
+	return err
+}
+
+func (r *Renderer) evalNumber(fn string, value any, read bool) (float64, error) {
 	b, err := json.Marshal(value)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
 	defer cancel()
-	return chromedp.Run(ctx, chromedp.Evaluate("window."+fn+"("+string(b)+")", nil, func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) }))
+	expr := "window." + fn + "(" + string(b) + ")"
+	await := func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) }
+	if !read {
+		return 0, chromedp.Run(ctx, chromedp.Evaluate(expr, nil, await))
+	}
+	var ms float64
+	err = chromedp.Run(ctx, chromedp.Evaluate(expr, &ms, await))
+	return ms, err
 }
 func (r *Renderer) Close() {
 	if r.cancel != nil {
@@ -112,17 +124,51 @@ func (r *Renderer) Close() {
 		_ = r.server.Close()
 	}
 }
-func (r *Renderer) frame(t float64, frames map[string][]byte) ([]byte, error) {
+
+type frameTimes struct {
+	transfer, draw, screenshot time.Duration
+}
+
+func encodeImages(frames map[string][]byte) map[string]string {
 	images := map[string]string{}
 	for id, b := range frames {
 		images[id] = base64.StdEncoding.EncodeToString(b)
 	}
-	if err := r.eval("draw", map[string]any{"time": t, "images": images}); err != nil {
+	return images
+}
+
+func (r *Renderer) frame(t float64, frames map[string][]byte) ([]byte, error) {
+	if err := r.eval("draw", map[string]any{"time": t, "images": encodeImages(frames)}); err != nil {
 		return nil, err
 	}
 	var shot []byte
 	err := chromedp.Run(r.ctx, chromedp.CaptureScreenshot(&shot))
 	return shot, err
+}
+
+// frameTimed calls drawTimed. Measured draw includes image load and the final requestAnimationFrame.
+func (r *Renderer) frameTimed(t float64, frames map[string][]byte) ([]byte, frameTimes, error) {
+	var st frameTimes
+	t0 := time.Now()
+	images := encodeImages(frames)
+	t1 := time.Now()
+	ms, err := r.evalNumber("drawTimed", map[string]any{"time": t, "images": images}, true)
+	if err != nil {
+		return nil, st, err
+	}
+	t2 := time.Now()
+	jsDraw := time.Duration(ms * float64(time.Millisecond))
+	st.draw = jsDraw
+	overhead := t2.Sub(t1) - jsDraw
+	if overhead < 0 {
+		overhead = 0
+	}
+	st.transfer = t1.Sub(t0) + overhead
+	shotAt := time.Now()
+	var shot []byte
+	err = chromedp.Run(r.ctx, chromedp.CaptureScreenshot(&shot))
+	st.screenshot = time.Since(shotAt)
+	return shot, st, err
 }
 
 // Check exercises template initialization and a frame at every transition boundary.
@@ -141,6 +187,7 @@ func Check(ctx context.Context, p *Plan) error {
 }
 
 func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err error) {
+	started := time.Now()
 	if progress == nil {
 		progress = io.Discard
 	}
@@ -155,11 +202,14 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 		return err
 	}
 	defer os.RemoveAll(work)
+	var timings renderTimings
 	fmt.Fprintln(progress, ">> validate HTML templates")
+	rendererAt := time.Now()
 	r, err := NewRenderer(ctx, p)
 	if err != nil {
 		return err
 	}
+	timings.RendererStartSeconds = roundSec(time.Since(rendererAt))
 	defer r.Close()
 	decoders := map[string]*decoder{}
 	defer func() {
@@ -167,22 +217,38 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 			d.close()
 		}
 	}()
+	trackPaths := map[string]string{}
+	prepare := map[string]float64{}
 	for i, id := range sortedKeys(p.Tracks) {
 		fmt.Fprintf(progress, ">> prepare track %s\n", id)
+		prepAt := time.Now()
 		path, e := prepareTrack(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS)
 		if e != nil {
 			return e
 		}
+		prepare[id] = roundSec(time.Since(prepAt))
+		trackPaths[id] = path
 		d, e := newDecoder(ctx, path)
 		if e != nil {
 			return e
 		}
 		decoders[id] = d
 	}
+	if len(prepare) > 0 {
+		timings.PrepareTrackSeconds = prepare
+	}
 	fmt.Fprintln(progress, ">> prepare audio")
-	audio, err := p.mix(ctx, work)
+	mixAt := time.Now()
+	audio, parts, err := p.mix(ctx, work)
 	if err != nil {
 		return err
+	}
+	if audio != "" {
+		sec := roundSec(time.Since(mixAt))
+		timings.AudioSeconds = &sec
+		if len(parts) > 0 {
+			timings.AudioPartSeconds = parts
+		}
 	}
 	video := filepath.Join(work, "video.mp4")
 	encoder := command(ctx, "ffmpeg", "-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "2", video)
@@ -192,6 +258,7 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	if err != nil {
 		return err
 	}
+	encodeAt := time.Now()
 	if err = encoder.Start(); err != nil {
 		return err
 	}
@@ -203,12 +270,15 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 			_ = encoder.Wait()
 		}
 	}()
+	var decodeH, transferH, drawH, shotH, writeH msHist
+	var decodedPNG, screenshotBytes int64
 	for n := 0; n < p.Frames; n++ {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
 		t := float64(n) / float64(p.FPS)
 		frames := map[string][]byte{}
+		decodeAt := time.Now()
 		for _, id := range sortedKeys(p.Tracks) {
 			tr := p.Tracks[id]
 			local := t - tr.Start
@@ -221,14 +291,22 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 				return e
 			}
 			frames[id] = b
+			decodedPNG += int64(len(b))
 		}
-		shot, e := r.frame(t, frames)
+		decodeH.add(time.Since(decodeAt))
+		shot, st, e := r.frameTimed(t, frames)
 		if e != nil {
 			return fmt.Errorf("frame %d: %w", n, e)
 		}
+		transferH.add(st.transfer)
+		drawH.add(st.draw)
+		shotH.add(st.screenshot)
+		screenshotBytes += int64(len(shot))
+		writeAt := time.Now()
 		if _, e = pipe.Write(shot); e != nil {
 			return e
 		}
+		writeH.add(time.Since(writeAt))
 		if n%p.FPS == 0 {
 			fmt.Fprintf(progress, ">> render %d/%d frames\n", n, p.Frames)
 		}
@@ -239,22 +317,36 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	if err != nil {
 		return fmt.Errorf("encode: %w: %s", err, stderr.String())
 	}
+	timings.EncodeSeconds = roundSec(time.Since(encodeAt))
 	final := video
 	if audio != "" {
 		final = filepath.Join(work, "final.mp4")
+		muxAt := time.Now()
 		if err = run(ctx, "ffmpeg", "-v", "error", "-y", "-i", video, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", num(p.Document.Duration), "-movflags", "+faststart", final); err != nil {
 			return err
 		}
+		sec := roundSec(time.Since(muxAt))
+		timings.MuxSeconds = &sec
 	}
-	if err = r.metadata(work); err != nil {
+	timings.Decode = decodeH.snapshot()
+	timings.Transfer = transferH.snapshot()
+	timings.Draw = drawH.snapshot()
+	timings.Screenshot = shotH.snapshot()
+	timings.EncodeWrite = writeH.snapshot()
+	timings.DecodedPNGBytes = decodedPNG
+	timings.ScreenshotBytes = screenshotBytes
+	collectWorkBytes(&timings, work, p, trackPaths)
+	if err = r.metadata(work, &timings, started); err != nil {
 		return err
 	}
+	fmt.Fprint(progress, timings.progressLine(p.Frames))
 	if err = os.Rename(final, out); err != nil {
 		return err
 	}
 	return os.Rename(filepath.Join(work, "facts.json"), strings.TrimSuffix(out, filepath.Ext(out))+".facts.json")
 }
-func (r *Renderer) metadata(dir string) error {
+func (r *Renderer) metadata(dir string, timings *renderTimings, started time.Time) error {
+	metaAt := time.Now()
 	inputs := map[string]string{}
 	for rel, path := range r.plan.Inputs {
 		inputs[rel] = path
@@ -299,7 +391,9 @@ func (r *Renderer) metadata(dir string) error {
 		}
 		versions[filepath.Base(name)] = strings.SplitN(string(b), "\n", 2)[0]
 	}
-	data := map[string]any{"version": 1, "presentation": r.plan.Name, "configuration": r.plan.Document, "render": map[string]int{"w": r.plan.Width, "h": r.plan.Height, "fps": r.plan.FPS, "frames": r.plan.Frames}, "inputs": hashes, "tools": versions}
+	timings.MetadataSeconds = roundSec(time.Since(metaAt))
+	timings.TotalSeconds = roundSec(time.Since(started))
+	data := map[string]any{"version": 1, "presentation": r.plan.Name, "configuration": r.plan.Document, "render": map[string]int{"w": r.plan.Width, "h": r.plan.Height, "fps": r.plan.FPS, "frames": r.plan.Frames}, "inputs": hashes, "tools": versions, "timings": timings}
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err

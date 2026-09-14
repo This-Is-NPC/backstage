@@ -250,18 +250,21 @@ func tempo(rate float64) string {
 	}
 	return strings.Join(append(s, "atempo="+num(rate)), ",")
 }
-func (p *Plan) mix(ctx context.Context, dir string) (string, error) {
+func (p *Plan) mix(ctx context.Context, dir string) (string, []namedSeconds, error) {
 	if len(p.AudioParts) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	args := []string{"-v", "error", "-y", "-threads", "1"}
 	var paths []string
+	var parts []namedSeconds
 	for i, a := range p.AudioParts {
 		path := filepath.Join(dir, fmt.Sprintf("audio-%d.wav", i))
 		filter := "atrim=start=" + num(a.From) + ":end=" + num(a.To) + ",asetpts=PTS-STARTPTS," + tempo(a.Rate) + ",aresample=48000,aformat=channel_layouts=stereo"
+		started := time.Now()
 		if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-i", a.Path, "-vn", "-af", filter, "-c:a", "pcm_s16le", path); err != nil {
-			return "", err
+			return "", nil, err
 		}
+		parts = append(parts, namedSeconds{ID: a.ID, Seconds: roundSec(time.Since(started))})
 		if a.Loop {
 			args = append(args, "-stream_loop", "-1")
 		}
@@ -287,7 +290,7 @@ func (p *Plan) mix(ctx context.Context, dir string) (string, error) {
 	filters = append(filters, fmt.Sprintf("%samix=inputs=%d:normalize=0,alimiter=limit=0.95:level=0:latency=1,apad,atrim=duration=%s[mix]", inputs.String(), len(paths), num(p.Document.Duration)))
 	path := filepath.Join(dir, "mix.wav")
 	args = append(args, "-filter_complex_threads", "1", "-filter_complex", strings.Join(filters, ";"), "-map", "[mix]", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-t", num(p.Document.Duration), path)
-	return path, run(ctx, "ffmpeg", args...)
+	return path, parts, run(ctx, "ffmpeg", args...)
 }
 
 // Prepare each selected track once. FFV1 retains frames without storing PNG sequences.
