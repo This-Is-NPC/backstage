@@ -47,7 +47,7 @@ func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, p
 				return nil, fmt.Errorf("cannot record from rehearsal snapshot %q", snapshot)
 			}
 		}
-		release, err := m.Store.LockMany("image-catalog")
+		release, err := m.Store.LockWait(ctx, "image-catalog")
 		if err != nil {
 			return nil, err
 		}

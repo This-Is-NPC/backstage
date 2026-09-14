@@ -407,16 +407,68 @@ func (s *Store) List() ([]*Record, error) {
 	return result, nil
 }
 
+// HeldLock is one flock file returned by LockHold.
+type HeldLock struct {
+	Name string
+	File *os.File
+}
+
+// LockPath is the flock file for a stage or for image-catalog.
+func (s *Store) LockPath(name string) string {
+	return filepath.Join(s.Root, "locks", name+".lock")
+}
+
+// catalogWaitNotify is called when LockWait starts or finishes waiting
+// for image-catalog. A child job uses it to report progress.
+var catalogWaitNotify func(waiting bool)
+
+// SetCatalogWaitNotify sets the image-catalog wait hook for this process.
+func SetCatalogWaitNotify(fn func(waiting bool)) {
+	catalogWaitNotify = fn
+}
+
+func notifyCatalogWait(waiting bool) {
+	if catalogWaitNotify != nil {
+		catalogWaitNotify(waiting)
+	}
+}
+
 // LockMany uses a fixed order and nonblocking flock. Process death releases it.
 func (s *Store) LockMany(names ...string) (func(), error) {
+	held, err := s.lockMany(names...)
+	if err != nil {
+		return nil, err
+	}
+	return releaseHeld(held), nil
+}
+
+// LockHold is LockMany that also returns the open lock files so a parent
+// can inherit them into a child with ExtraFiles.
+func (s *Store) LockHold(names ...string) ([]HeldLock, func(), error) {
+	held, err := s.lockMany(names...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return held, releaseHeld(held), nil
+}
+
+func releaseHeld(held []HeldLock) func() {
+	return func() {
+		for _, h := range held {
+			_ = h.File.Close()
+		}
+	}
+}
+
+func (s *Store) lockMany(names ...string) ([]HeldLock, error) {
 	if err := s.Init(); err != nil {
 		return nil, err
 	}
 	sort.Strings(names)
-	files := []*os.File{}
+	var held []HeldLock
 	release := func() {
-		for _, f := range files {
-			_ = f.Close()
+		for _, h := range held {
+			_ = h.File.Close()
 		}
 	}
 	seen := map[string]bool{}
@@ -429,7 +481,7 @@ func (s *Store) LockMany(names ...string) (func(), error) {
 			release()
 			return nil, err
 		}
-		f, err := os.OpenFile(filepath.Join(s.Root, "locks", name+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+		f, err := os.OpenFile(s.LockPath(name), os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
 			release()
 			return nil, err
@@ -439,9 +491,9 @@ func (s *Store) LockMany(names ...string) (func(), error) {
 			release()
 			return nil, &BusyError{Name: name}
 		}
-		files = append(files, f)
+		held = append(held, HeldLock{Name: name, File: f})
 	}
-	return release, nil
+	return held, nil
 }
 
 // LockWait is LockMany that retries while a name is busy. The wait is
@@ -451,6 +503,9 @@ func (s *Store) LockWait(ctx context.Context, names ...string) (func(), error) {
 	for {
 		release, err := s.LockMany(names...)
 		if err == nil {
+			if printed {
+				notifyCatalogWait(false)
+			}
 			return release, nil
 		}
 		if ctx.Err() != nil {
@@ -463,6 +518,7 @@ func (s *Store) LockWait(ctx context.Context, names ...string) (func(), error) {
 			for _, name := range names {
 				if name == "image-catalog" {
 					fmt.Println(">> waiting for image-catalog")
+					notifyCatalogWait(true)
 					break
 				}
 			}

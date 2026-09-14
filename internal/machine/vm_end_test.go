@@ -91,6 +91,86 @@ func TestLockWaitAcquiresAfterReleaseAndRespectsCancel(t *testing.T) {
 	release()
 }
 
+func TestBeginWaitsForCatalog(t *testing.T) {
+	m := testManager(t)
+	r := testRecord("demo")
+	if err := m.Store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := m.Store.LockMany("image-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Begin(context.Background(), r, "clean", "initial", "", "/proj", false)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		hold()
+		t.Fatalf("Begin returned while catalog held: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	hold()
+	select {
+	case err := <-done:
+		if errors.Is(err, ErrBusy) {
+			t.Fatal("Begin failed busy after the catalog was released")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Begin stuck after catalog release")
+	}
+}
+
+func TestBeginCatalogWaitRespectsCancel(t *testing.T) {
+	m := testManager(t)
+	r := testRecord("demo")
+	if err := m.Store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := m.Store.LockMany("image-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Begin(ctx, r, "clean", "initial", "", "/proj", false)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Begin returned while catalog held: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Begin ignored cancel")
+	}
+}
+
+func TestLockHoldKeepsSameFile(t *testing.T) {
+	m := testManager(t)
+	held, release, err := m.Store.LockHold("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if len(held) != 1 || held[0].Name != "demo" || held[0].File == nil {
+		t.Fatalf("held: %+v", held)
+	}
+	if _, err := m.Store.LockMany("demo"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("outsider: %v", err)
+	}
+}
+
 func TestCaptureErrorRemovesPartialImage(t *testing.T) {
 	m, r := captureReady(t, "demo")
 	var dest string
