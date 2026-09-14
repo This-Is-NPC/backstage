@@ -748,3 +748,147 @@ func (m *Manager) Collect() error {
 	}
 	return nil
 }
+
+var captureStageImage = func(m *Manager, ctx context.Context, r *Record) (*Image, error) {
+	return m.capture(ctx, r)
+}
+
+var commitStageRecord = func(s *Store, r *Record) error {
+	return s.Save(r)
+}
+
+var collectUnusedImages = func(m *Manager) error {
+	return m.Collect()
+}
+
+// ReplaceResult is a committed snapshot replacement. Warning is set when
+// collection failed after the record was saved; the new snapshot stays.
+type ReplaceResult struct {
+	Image   *Image
+	Warning string
+}
+
+// ReplaceSnapshot captures the stopped guest and commits the mapping and
+// origin in one record write. The caller holds the stage lock. image-catalog
+// is taken here, the same way Begin locks around Restore.
+func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, origin SnapshotOrigin, adopt bool) (ReplaceResult, error) {
+	if err := checkReplace(r, name, origin, adopt); err != nil {
+		return ReplaceResult{}, err
+	}
+	if r.Status != "ready" {
+		return ReplaceResult{}, errors.New("only ready stages can be snapshotted")
+	}
+	release, err := m.Store.LockMany("image-catalog")
+	if err != nil {
+		return ReplaceResult{}, err
+	}
+	defer release()
+	if err := m.Stop(ctx, r, false); err != nil {
+		return ReplaceResult{}, err
+	}
+	img, err := captureStageImage(m, ctx, r)
+	if err != nil {
+		return ReplaceResult{}, err
+	}
+	prevSnaps := cloneStringMap(r.Snapshots)
+	prevOrigins := cloneOriginMap(r.SnapshotOrigins)
+	if r.Snapshots == nil {
+		r.Snapshots = map[string]string{}
+	}
+	if r.SnapshotOrigins == nil {
+		r.SnapshotOrigins = map[string]SnapshotOrigin{}
+	}
+	origin.Image = img.ID
+	if origin.Made.IsZero() {
+		origin.Made = img.Created
+	}
+	r.Snapshots[name] = img.ID
+	r.SnapshotOrigins[name] = origin
+	if err := commitStageRecord(m.Store, r); err != nil {
+		r.Snapshots = prevSnaps
+		r.SnapshotOrigins = prevOrigins
+		return ReplaceResult{}, err
+	}
+	if err := collectUnusedImages(m); err != nil {
+		return ReplaceResult{Image: img, Warning: pendingCleanup(err)}, nil
+	}
+	return ReplaceResult{Image: img}, nil
+}
+
+// DeleteSnapshot removes a named state and its origin, then collects unused
+// images. The caller holds the stage lock and image-catalog.
+func (m *Manager) DeleteSnapshot(r *Record, name string) (string, error) {
+	if name == "initial" {
+		return "", errors.New("cannot delete the initial snapshot")
+	}
+	if err := ValidateName(name); err != nil {
+		return "", err
+	}
+	if _, ok := r.Snapshots[name]; !ok {
+		return "", fmt.Errorf("snapshot %q not found", name)
+	}
+	prevSnaps := cloneStringMap(r.Snapshots)
+	prevOrigins := cloneOriginMap(r.SnapshotOrigins)
+	delete(r.Snapshots, name)
+	if r.SnapshotOrigins != nil {
+		delete(r.SnapshotOrigins, name)
+	}
+	if err := commitStageRecord(m.Store, r); err != nil {
+		r.Snapshots = prevSnaps
+		r.SnapshotOrigins = prevOrigins
+		return "", err
+	}
+	if err := collectUnusedImages(m); err != nil {
+		return pendingCleanup(err), nil
+	}
+	return "", nil
+}
+
+func checkReplace(r *Record, name string, origin SnapshotOrigin, adopt bool) error {
+	if name == "initial" {
+		return errors.New("cannot replace the initial snapshot")
+	}
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	if _, exists := r.Snapshots[name]; !exists {
+		return nil
+	}
+	current, ok := originOf(r, name)
+	if !ok {
+		if adopt {
+			return nil
+		}
+		return fmt.Errorf("snapshot %q has no origin; adopt it to replace", name)
+	}
+	if current.Project != origin.Project || current.Scene != origin.Scene {
+		return fmt.Errorf("snapshot %q belongs to another scene", name)
+	}
+	return nil
+}
+
+func pendingCleanup(err error) string {
+	return fmt.Sprintf("pending cleanup: %v", err)
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneOriginMap(in map[string]SnapshotOrigin) map[string]SnapshotOrigin {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]SnapshotOrigin, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}

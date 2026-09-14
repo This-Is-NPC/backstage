@@ -64,6 +64,29 @@ type Source struct {
 	Image   string `json:"image,omitempty"`
 }
 
+const (
+	TakeRecording = "recording"
+	TakeRehearsal = "rehearsal"
+)
+
+// SnapshotOrigin records who made a named disk state.
+type SnapshotOrigin struct {
+	Project      string    `json:"project"`
+	Scene        string    `json:"scene"`
+	InputsSHA256 string    `json:"inputs-sha256"`
+	StartImage   string    `json:"start-image"`
+	Image        string    `json:"image"`
+	Take         string    `json:"take"`
+	Made         time.Time `json:"made"`
+	Backstage    string    `json:"backstage"`
+}
+
+// SnapshotInfo is the --origins view of one named state.
+type SnapshotInfo struct {
+	Image  string          `json:"image"`
+	Origin *SnapshotOrigin `json:"origin"`
+}
+
 type Continuity struct {
 	Project   string `json:"project"`
 	Scene     string `json:"scene"`
@@ -72,23 +95,46 @@ type Continuity struct {
 }
 
 type Record struct {
-	Schema     int               `json:"schema"`
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Domain     string            `json:"domain"`
-	URI        string            `json:"uri"`
-	Disk       string            `json:"disk"`
-	NVRAM      string            `json:"nvram"`
-	Firmware   string            `json:"firmware"`
-	Video      string            `json:"video"`
-	Spec       Spec              `json:"spec"`
-	Source     Source            `json:"source"`
-	Status     string            `json:"status"`
-	Phase      string            `json:"phase"`
-	LastError  string            `json:"last-error,omitempty"`
-	Created    time.Time         `json:"created"`
-	Snapshots  map[string]string `json:"snapshots"`
-	Continuity *Continuity       `json:"continuity,omitempty"`
+	Schema          int                       `json:"schema"`
+	ID              string                    `json:"id"`
+	Name            string                    `json:"name"`
+	Domain          string                    `json:"domain"`
+	URI             string                    `json:"uri"`
+	Disk            string                    `json:"disk"`
+	NVRAM           string                    `json:"nvram"`
+	Firmware        string                    `json:"firmware"`
+	Video           string                    `json:"video"`
+	Spec            Spec                      `json:"spec"`
+	Source          Source                    `json:"source"`
+	Status          string                    `json:"status"`
+	Phase           string                    `json:"phase"`
+	LastError       string                    `json:"last-error,omitempty"`
+	Created         time.Time                 `json:"created"`
+	Snapshots       map[string]string         `json:"snapshots"`
+	SnapshotOrigins map[string]SnapshotOrigin `json:"snapshot-origins,omitempty"`
+	Continuity      *Continuity               `json:"continuity,omitempty"`
+}
+
+// SnapshotInfo reports each saved state and its origin, if any.
+func (r *Record) SnapshotInfo() map[string]SnapshotInfo {
+	out := make(map[string]SnapshotInfo, len(r.Snapshots))
+	for name, id := range r.Snapshots {
+		info := SnapshotInfo{Image: id}
+		if o, ok := originOf(r, name); ok {
+			cp := o
+			info.Origin = &cp
+		}
+		out[name] = info
+	}
+	return out
+}
+
+func originOf(r *Record, name string) (SnapshotOrigin, bool) {
+	if r == nil || r.SnapshotOrigins == nil {
+		return SnapshotOrigin{}, false
+	}
+	o, ok := r.SnapshotOrigins[name]
+	return o, ok
 }
 
 type Credentials struct {
