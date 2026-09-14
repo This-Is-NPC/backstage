@@ -84,12 +84,14 @@ func TestRealStateGroup(t *testing.T) {
 	if grouped.err != nil {
 		t.Fatalf("play use --with-deps: %v\nstdout:\n%s\nstderr:\n%s", grouped.err, grouped.stdout, grouped.stderr)
 	}
+	logRunDocument(t, "part1", grouped)
 	byScene := requireOKScenes(t, grouped.stdout, "make-a", "make-b", "use")
 	requireProducersBeforeUse(t, grouped.evs, "make-a", "make-b")
 	t.Logf("grouped jobs: %+v", byScene)
 
 	a1 := loadLinked(t, m, nameA)
 	b1 := loadLinked(t, m, nameB)
+	logLinkedGenerations(t, "part1", a1, b1)
 	if a1.origin.Generation != b1.origin.Generation {
 		t.Fatalf("grouped generations A=%s B=%s", a1.origin.Generation, b1.origin.Generation)
 	}
@@ -99,13 +101,15 @@ func TestRealStateGroup(t *testing.T) {
 	if useStart.IsZero() {
 		t.Fatalf("use never reached running: %s", formatStamped(grouped.evs))
 	}
-	requireSilentMemberRestored(t, ctx, m, nameB, useStart)
+	skipped := requireSilentMemberRestored(t, ctx, m, nameB, useStart)
+	requireSilentMemberFacts(t, ws, nameB, skipped)
 	if sceneOverlapsStage(runningSpans(grouped.evs), "use", nameB) {
 		t.Fatalf("use overlapped a job on %s:%s", nameB, formatSpans(runningSpans(grouped.evs)))
 	}
 	requireRunFinished(t, m, nameA, nameB, &pgid)
 
 	isolated := runBackstage(t, ctx, &pgid, bin, "play", makeBPath)
+	logRunDocument(t, "part2-make-b", isolated)
 	if isolated.err != nil {
 		t.Fatalf("play make-b: %v\nstdout:\n%s\nstderr:\n%s", isolated.err, isolated.stdout, isolated.stderr)
 	}
@@ -115,6 +119,7 @@ func TestRealStateGroup(t *testing.T) {
 	pgid.Store(0)
 	aAfter := loadLinked(t, m, nameA)
 	bAfter := loadLinked(t, m, nameB)
+	logLinkedGenerations(t, "part2", aAfter, bAfter)
 	if aAfter.origin.Generation != gen1 {
 		t.Fatalf("isolated make-b changed A's generation %s → %s", gen1, aAfter.origin.Generation)
 	}
@@ -126,6 +131,7 @@ func TestRealStateGroup(t *testing.T) {
 	beforeA := mustDiskPrints(t, aAfter.rec)
 	beforeB := mustDiskPrints(t, bAfter.rec)
 	refused := runBackstage(t, ctx, &pgid, bin, "play", usePath)
+	logRunDocument(t, "part2-use-refused", refused)
 	if refused.err == nil {
 		t.Fatalf("play use after isolated remake: want non-zero exit\nstdout:\n%s\nstderr:\n%s", refused.stdout, refused.stderr)
 	}
@@ -146,12 +152,15 @@ func TestRealStateGroup(t *testing.T) {
 	}
 
 	recompose := runBackstage(t, ctx, &pgid, bin, "play", usePath, "--with-deps", "--json")
+	logRunDocument(t, "part3", recompose)
 	if recompose.err != nil {
 		t.Fatalf("recompose play use --with-deps: %v\nstdout:\n%s\nstderr:\n%s", recompose.err, recompose.stdout, recompose.stderr)
 	}
 	requireOKScenes(t, recompose.stdout, "make-a", "make-b", "use")
 	a2 := loadLinked(t, m, nameA)
 	b2 := loadLinked(t, m, nameB)
+	logLinkedGenerations(t, "part3", a2, b2)
+	requireUseGroupFacts(t, ws, a2.origin.Generation, a2, b2)
 	if a2.origin.Generation != b2.origin.Generation {
 		t.Fatalf("recomposed generations A=%s B=%s", a2.origin.Generation, b2.origin.Generation)
 	}
@@ -354,9 +363,35 @@ func loadLinked(t *testing.T, m *machine.Manager, stage string) linkedSnap {
 	return linkedSnap{rec: rec, origin: o}
 }
 
+func logLinkedGenerations(t *testing.T, part string, a, b linkedSnap) {
+	t.Helper()
+	t.Logf("%s generations A=%s B=%s", part, a.origin.Generation, b.origin.Generation)
+}
+
+func logRunDocument(t *testing.T, label string, run backstageRun) {
+	t.Helper()
+	if rep, err := parseFinalJobReport(run.stdout); err == nil {
+		body, err := json.Marshal(rep)
+		if err != nil {
+			t.Fatalf("%s marshal: %v", label, err)
+		}
+		t.Logf("%s final document: %s", label, body)
+		return
+	}
+	t.Logf("%s stdout:\n%s", label, run.stdout)
+	if run.stderr != "" {
+		t.Logf("%s stderr:\n%s", label, run.stderr)
+	}
+}
+
 func requireUseGroupFacts(t *testing.T, ws, gen string, a, b linkedSnap) {
 	t.Helper()
 	got := readSceneFacts(t, ws, "use")
+	body, err := json.Marshal(got.GroupMembers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("use group-members: %s", body)
 	if len(got.GroupMembers) != 2 {
 		t.Fatalf("group-members: %+v", got.GroupMembers)
 	}
@@ -404,7 +439,29 @@ func readProvisionTimings(t *testing.T, m *machine.Manager, name string) []timed
 	return out
 }
 
-func requireSilentMemberRestored(t *testing.T, ctx context.Context, m *machine.Manager, nameB string, useStart time.Time) {
+func requireSilentMemberFacts(t *testing.T, ws, nameB string, skipped bool) {
+	t.Helper()
+	got := readSceneFacts(t, ws, "use")
+	body, err := json.Marshal(got.GroupMembers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mem := range got.GroupMembers {
+		if mem.Stage != nameB {
+			continue
+		}
+		if skipped && !mem.RestoreSkipped {
+			t.Fatalf("silent %s skipped restore but group-member restore-skipped=false: %s", nameB, body)
+		}
+		if !skipped && mem.RestoreSkipped {
+			t.Fatalf("silent %s restored but group-member restore-skipped=true: %s", nameB, body)
+		}
+		return
+	}
+	t.Fatalf("no group-member %s: %s", nameB, body)
+}
+
+func requireSilentMemberRestored(t *testing.T, ctx context.Context, m *machine.Manager, nameB string, useStart time.Time) bool {
 	t.Helper()
 	lines := readProvisionTimings(t, m, nameB)
 	cut := useStart.Truncate(time.Second)
@@ -447,6 +504,7 @@ func requireSilentMemberRestored(t *testing.T, ctx context.Context, m *machine.M
 	if state != "shut off" {
 		t.Fatalf("silent member %s state %q, want shut off", nameB, state)
 	}
+	return strings.Contains(restoreText, "restore-skipped")
 }
 
 func sceneOverlapsStage(spans []runSpan, scene, stage string) bool {
