@@ -6,6 +6,10 @@ ffprobe must be available. Resources are local; no Node.js is required.
 
 ## Project And Timeline
 
+A leaf may inherit `templates` and `presentations` from an ancestor
+`backstage.json`. Relative references inside the template (CSS, scripts, fonts,
+images) keep working as long as they stay inside the workspace.
+
 Add project registration (merge these keys into the existing backstage.json):
 
 ```json

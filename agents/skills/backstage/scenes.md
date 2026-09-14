@@ -65,7 +65,8 @@ the stage opens for you.
 
 ## Visual Scenes And Narration
 
-A visual scene declares `type: "visual"`, project-relative HTML `entry` and a
+A visual scene declares `type: "visual"`, a leaf-relative HTML `entry` (`..`
+may reach a file in the workspace) and a
 positive `duration`. It does not accept VM, recording layout, steps or reset
 configuration. Use it as a presentation event, not with play or rehearse.
 

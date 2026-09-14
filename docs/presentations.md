@@ -155,6 +155,13 @@ independent positions. Source cues beyond the final duration are clipped.
 
 ## Output and validation
 
+When a presentation or its template is inherited from an ancestor
+`backstage.json`, relative references inside the template (CSS, scripts, fonts,
+images) keep working as long as they stay inside the workspace. Requests that
+leave the workspace, including through symlinks, are refused. Companion facts
+record input hashes under workspace-relative keys; without `extends` those keys
+match today's project-relative paths.
+
 `render --check` probes inputs and checks timing, template initialization and
 slots without decoding every video frame. Runtime errors can still occur later
 inside custom code; these abort the export. The final MP4 is replaced only when

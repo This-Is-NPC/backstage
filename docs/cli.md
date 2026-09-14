@@ -16,6 +16,7 @@ backstage <command> [args]
 | `backstage render NAME` | compose existing media into an MP4 |
 | `backstage preview NAME` | render a temporary preview and open playback controls |
 | `backstage template init NAME` | create an editable presentation template |
+| `backstage config show` | print the merged configuration and the file each key came from |
 | `backstage --version` | print the version |
 
 `--project DIR` is a persistent flag on every command: it sets the project
@@ -139,6 +140,16 @@ backstage template init NAME [--project DIR]
 Creates `templates/NAME/template.html` and a sample `visual.html`. NAME must be a
 single directory name; an existing directory is refused. Register the template
 in `backstage.json` and reference visual HTML from a visual scene.
+
+## config show
+
+```bash
+backstage config show [--project DIR]
+```
+
+Prints the workspace, the leaf project, any `extends` value, the merged
+effective configuration, and the file that supplied each key. Keys filled only
+by defaults are marked `[default]`. Use it to debug an inheritance chain.
 
 See [Compose a presentation](how-to-compose-presentations.md) for the workflow,
 [Presentations](presentations.md) for the JSON, and [Templates](templates.md) for

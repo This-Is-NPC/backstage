@@ -23,7 +23,7 @@ records ordered steps against a staged layout.
 | Field | Meaning |
 |---|---|
 | `type` | `recording` (default) or `visual` |
-| `entry` | project-relative HTML entry, required for visual scenes |
+| `entry` | leaf-relative HTML entry, required for visual scenes; `..` may reach the workspace |
 | `duration` | available duration in seconds, required for visual scenes |
 | `narration` | language and named text/audio cues |
 | `audio` | named reusable audio assets: `{ "name": { "file": "assets/sound.wav" } }` |

@@ -14,7 +14,7 @@ narrates on screen, records) and produces the same take every time.
 | # | Requirement |
 |---|-------------|
 | F1 | Parse a **scene** (JSON): an ordered list of steps plus the layout to stage. |
-| F2 | Resolve a **project** by walking up from the scene to the nearest `backstage.json`. |
+| F2 | Resolve a **project** by walking up from the scene to the nearest `backstage.json`, then merge any ancestor files named by `extends`. The topmost file is the workspace root. |
 | F3 | Stage a **layout**: open the configured panes (cwd/cmd/size) in a single fullscreen window. |
 | F4 | Run **hooks** before a take: `setup` for a fresh scene, otherwise `reset`. |
 | F5 | Drive panes by **name**: type commands, type literal text, send named keys. |

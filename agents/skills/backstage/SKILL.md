@@ -31,7 +31,7 @@ Read the matching guide before writing or changing anything:
 ## The Shape Of A Project
 
 ```
-backstage.json     recording settings, vms, templates, presentations
+backstage.json     recording settings, vms, templates, presentations; may extend an ancestor
 scenes/*.json      recording or visual scenes; narration and audio assets
 presentations/     JSON timelines that reuse media
 templates/         editable HTML/CSS
@@ -53,6 +53,7 @@ backstage render NAME --check   # validate existing media and template slots
 backstage render NAME           # export a presentation from existing media
 backstage preview NAME          # render first, then open playback controls
 backstage template init NAME    # create an editable HTML template
+backstage config show           # merged configuration and the file each key came from
 backstage kill                  # strike the set
 ```
 

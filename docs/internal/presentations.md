@@ -25,8 +25,14 @@ editor. Templates receive global and event-local times and must reconstruct
 state when asked to render an arbitrary instant.
 
 Use a temporary browser profile with its sandbox enabled. Serve resources only
-on loopback, restrict paths and symlinks to the project, and block external
-resource requests. Runtime images, fonts and scripts are local. Cancellation
+on loopback, resolve configuration and scene files through `InputPath`, then
+serve them from workspace-relative `/asset/` URLs. The handler uses the same
+confinement helper with the workspace as base and boundary. Normalized requests
+outside that route are refused. A template or visual entry that cannot be
+resolved inside the workspace is an error from `NewRenderer`, not a silent
+fallback. Relative CSS, script, font and image references inside an inherited
+template stay under the workspace. Block external resource requests. Runtime
+images, fonts and scripts are local. Cancellation
 terminates subprocesses and removes work directories; an unfinished export does
 not replace an existing output.
 
