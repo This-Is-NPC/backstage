@@ -214,6 +214,16 @@ that includes a cached OS base is always complete. `Create` and `Clone`
 keep `initial` as a complete schema 1 image and never promote a cached
 base. An unknown key in `machines/settings.json` is an error before
 Stop; doctor reports it.
+`play --with-deps` and `play --stale` run takes on different stages at
+once, limited by the host CPU and memory budget (`Spec` versus
+`NumCPU` and `MemAvailable` minus 2 GiB). `--stale` also records the
+consumers of every planned take so one run converges. A take on the host display
+never overlaps a VM take. `--jobs 1` is serial. `--jobs` and `--json`
+need `--with-deps` or `--stale`. Each take is a child
+process with its own log. `Create` and `Clone` still hold the catalog
+for the whole verb. A clean restore waits for `image-catalog` instead
+of failing if another stage holds it.
+
 `stage snapshot` and `vm-end` stop the guest first, then take
 `image-catalog` only around the decision/marker and the catalog
 commit. `qemu-img convert` runs without that lock, so two stages can

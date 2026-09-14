@@ -43,7 +43,10 @@ Choose the scene's starting state explicitly when it matters:
   and `rehearse --with-deps` walk that chain from declared producers, keep
   a `continue` pair adjacent on the stage, refuse a replacement that
   belongs to another scene before the lock, and do not treat `--adopt` or
-  `--replace-state` as implied for a producer.
+  `--replace-state` as implied for a producer. Different managed stages
+  may record at once; a host take never overlaps a VM. `--stale` uses the
+  same scheduler and also records downstream consumers. A clean restore waits for `image-catalog`. Create and
+  Clone still hold the catalog for the whole verb.
 
 Rehearse a whole continuation chain before recording that chain. Never continue
 a recording from a rehearsal. Restore/reboot/SSH access invalidates continuity.

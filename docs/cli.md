@@ -103,6 +103,9 @@ Errors section. Conflicts are written once to the command output.
 backstage play path/to/scene.json
 backstage play path/to/scene.json --adopt
 backstage play path/to/scene.json --with-deps
+backstage play path/to/scene.json --with-deps --jobs 1
+backstage play --stale
+backstage play --stale tutorials/pt --json
 ```
 
 Finds the project (`backstage.json` above the scene), runs the `reset`/`setup`
@@ -119,20 +122,37 @@ not take this flag.
 
 `--with-deps` prints a plan, then records stale or missing producers (and any
 producer beneath one that will run) before the scene. It needs a scene under
-`<project>/scenes`. It reserves every stage in that plan first. A consumer of
-a manual snapshot is fine; a producer that would replace one, or replace a
-snapshot that belongs to another scene, stops the plan before the lock. The
-scene that remakes a snapshot is its declared `vm-end` producer; the origin
-is only used to detect errors and staleness. `--adopt` on this command
-applies only to the scene you named, and the typed confirmation happens
-before the lock. Ctrl-C at that prompt exits 130 without taking a lock
-or starting a take. A scene or project error on the chain stops the
-command before any lock; an error off the chain is a warning. The first
-failure stops the rest and lists which snapshots this run already saved.
-Ctrl-C during a take prints that same report first (the take in progress
-is `interrupted`) and exits 130, even if the take returns
-`context canceled` before the engine guard does. A cancel between takes
-lists the next step as `interrupted before` and as not run.
+`<project>/scenes`. It reserves every stage in that plan first and hands each
+lock to a child process for that stage. Takes on different stages run together
+when the host budget allows. A take that uses the host display never overlaps
+another host take or any VM take. `--jobs N` caps how many takes run at once;
+`--jobs 1` is the old serial order. `--json` writes one `job.progress` line
+per status change, a `plan.warning` line for each plan warning, and a final
+JSON report that repeats those warnings. `--jobs` and `--json` need
+`--with-deps` or `--stale`. Each job logs to
+`${XDG_STATE_HOME:-~/.local/state}/backstage/jobs/<run>/<job>.log`; only the
+20 newest runs are kept. A consumer of a manual snapshot is fine; a producer
+that would replace one, or replace a snapshot that belongs to another scene,
+stops the plan before the lock. The scene that remakes a snapshot is its
+declared `vm-end` producer; the origin is only used to detect errors and
+staleness. `--adopt` on this command applies only to the scene you named, and
+the typed confirmation happens before the lock. Ctrl-C at that prompt exits
+130 without taking a lock or starting a take. A scene or project error on the
+chain stops the command before any lock; an error off the chain is a warning.
+The first failure starts no new job; running jobs finish and dependents stay
+`not-run`. Ctrl-C sends SIGINT to every child, waits, prints that same report
+once (the take in progress is `interrupted`) and exits 130. A cancel between
+takes lists the next step as `interrupted before` and as not run. A busy
+`image-catalog` makes a clean restore wait; it does not fail the take.
+
+`--stale [DIR]` records every scene in the workspace that `--with-deps`
+would seed (`missing`, `stale:*`, and a recording whose state is still a
+rehearsal), plus the same upstream and continue closure and the consumers
+of every planned take (including scenes that are still `ok` and would go
+stale after the run). The same refusals apply to that final set before
+any lock. `--adopt` applies to each seeded scene, not to a scene that
+entered only as a downstream consumer; type every snapshot name when more
+than one must be replaced.
 
 ## rehearse
 
@@ -140,6 +160,7 @@ lists the next step as `interrupted before` and as not run.
 backstage rehearse path/to/scene.json
 backstage rehearse path/to/scene.json --replace-state
 backstage rehearse path/to/scene.json --with-deps
+backstage rehearse --stale
 ```
 
 Same as `play` but skips recording and compresses delays, so you can validate
@@ -147,10 +168,11 @@ flow and targeting quickly before a real take. `--replace-state` lets a
 rehearsal overwrite a snapshot a recording made. Without it, that replacement
 is refused before the take starts. Produce does not take this flag.
 
-`--with-deps` uses the same plan and lock as `play --with-deps`. It never
-implies `--replace-state`: the plan stops before a take that would replace a
-recording snapshot unless you pass the flag. A `continue` scene in the plan
-keeps its predecessor immediately before it on that stage.
+`--with-deps` and `--stale` use the same plan, locks and scheduler as
+`play`. It never implies `--replace-state`: the plan stops before a take
+that would replace a recording snapshot unless you pass the flag. A
+`continue` scene waits for its predecessor even when that predecessor is
+on another stage.
 
 ## produce
 
