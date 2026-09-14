@@ -40,6 +40,11 @@ func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, p
 		if snapshot == "" {
 			snapshot = "initial"
 		}
+		if recording {
+			if o, ok := originOf(r, snapshot); ok && o.Take == TakeRehearsal {
+				return nil, fmt.Errorf("cannot record from rehearsal snapshot %q", snapshot)
+			}
+		}
 		release, err := m.Store.LockMany("image-catalog")
 		if err != nil {
 			return nil, err

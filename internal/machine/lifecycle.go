@@ -384,35 +384,64 @@ func (m *Manager) capture(ctx context.Context, r *Record) (*Image, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	id := randomID()
 	i := &Image{Schema: Schema, ID: id, Disk: m.diskPath(id, "-image.qcow2"), NVRAM: m.diskPath(id, "-image.fd"), Firmware: r.Firmware, Spec: r.Spec, Source: r.Source, Created: time.Now().UTC()}
-	if _, err := m.run(ctx, "qemu-img", "convert", "-O", "qcow2", r.Disk, i.Disk); err != nil {
+	var created []string
+	fail := func(err error) (*Image, error) {
+		for n := len(created) - 1; n >= 0; n-- {
+			_ = os.RemoveAll(created[n])
+		}
 		return nil, err
 	}
+	if _, err := m.run(ctx, "qemu-img", "convert", "-O", "qcow2", r.Disk, i.Disk); err != nil {
+		created = append(created, i.Disk)
+		return fail(err)
+	}
+	created = append(created, i.Disk)
 	if err := os.Chmod(i.Disk, 0o600); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if err := protectCapturedDisk(i.Disk); err != nil {
-		_ = os.Remove(i.Disk)
-		return nil, err
+		return fail(err)
 	}
 	if err := copyFile(r.NVRAM, i.NVRAM, 0o600); err != nil {
-		return nil, err
+		created = append(created, i.NVRAM)
+		return fail(err)
 	}
+	created = append(created, i.NVRAM)
 	keyDir := filepath.Join(m.Store.Root, "images", id)
 	if err := os.MkdirAll(keyDir, 0o700); err != nil {
-		return nil, err
+		return fail(err)
 	}
+	created = append(created, keyDir)
 	i.Credentials = Credentials{Password: c.Password, Key: filepath.Join(keyDir, "id_ed25519")}
 	for _, suffix := range []string{"", ".pub"} {
 		if err := copyFile(c.Key+suffix, i.Credentials.Key+suffix, 0o600); err != nil {
-			return nil, err
+			return fail(err)
 		}
 	}
-	if err := atomicJSON(filepath.Join(m.Store.Root, "images", id+".json"), i); err != nil {
-		return nil, err
+	jsonPath := filepath.Join(m.Store.Root, "images", id+".json")
+	if err := atomicJSON(jsonPath, i); err != nil {
+		return fail(err)
+	}
+	created = append(created, jsonPath)
+	if err := ctx.Err(); err != nil {
+		return fail(err)
 	}
 	return i, nil
+}
+
+func removeCapturedImage(m *Manager, i *Image) {
+	if i == nil {
+		return
+	}
+	for _, path := range []string{i.Disk, i.NVRAM, filepath.Join(m.Store.Root, "images", i.ID+".json")} {
+		_ = os.Remove(path)
+	}
+	_ = os.RemoveAll(filepath.Join(m.Store.Root, "images", i.ID))
 }
 
 func (m *Manager) Snapshot(ctx context.Context, r *Record, name string) error {
@@ -782,7 +811,7 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	if r.Status != "ready" {
 		return ReplaceResult{}, errors.New("only ready stages can be snapshotted")
 	}
-	release, err := m.Store.LockMany("image-catalog")
+	release, err := m.Store.LockWait(ctx, "image-catalog")
 	if err != nil {
 		return ReplaceResult{}, err
 	}
@@ -792,6 +821,10 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	}
 	img, err := captureStageImage(m, ctx, r)
 	if err != nil {
+		return ReplaceResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		removeCapturedImage(m, img)
 		return ReplaceResult{}, err
 	}
 	prevSnaps := cloneStringMap(r.Snapshots)
@@ -809,8 +842,15 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	r.Snapshots[name] = img.ID
 	r.SnapshotOrigins[name] = origin
 	if err := commitStageRecord(m.Store, r); err != nil {
+		if errors.Is(err, ErrCommitted) {
+			if cerr := collectUnusedImages(m); cerr != nil {
+				return ReplaceResult{Image: img, Warning: pendingCleanup(errors.Join(err, cerr))}, nil
+			}
+			return ReplaceResult{Image: img, Warning: pendingCleanup(err)}, nil
+		}
 		r.Snapshots = prevSnaps
 		r.SnapshotOrigins = prevOrigins
+		removeCapturedImage(m, img)
 		return ReplaceResult{}, err
 	}
 	if err := collectUnusedImages(m); err != nil {
@@ -838,6 +878,12 @@ func (m *Manager) DeleteSnapshot(r *Record, name string) (string, error) {
 		delete(r.SnapshotOrigins, name)
 	}
 	if err := commitStageRecord(m.Store, r); err != nil {
+		if errors.Is(err, ErrCommitted) {
+			if cerr := collectUnusedImages(m); cerr != nil {
+				return pendingCleanup(errors.Join(err, cerr)), nil
+			}
+			return pendingCleanup(err), nil
+		}
 		r.Snapshots = prevSnaps
 		r.SnapshotOrigins = prevOrigins
 		return "", err
@@ -846,6 +892,11 @@ func (m *Manager) DeleteSnapshot(r *Record, name string) (string, error) {
 		return pendingCleanup(err), nil
 	}
 	return "", nil
+}
+
+// CheckReplace reports whether name may be replaced by origin.
+func CheckReplace(r *Record, name string, origin SnapshotOrigin, adopt bool) error {
+	return checkReplace(r, name, origin, adopt)
 }
 
 func checkReplace(r *Record, name string, origin SnapshotOrigin, adopt bool) error {

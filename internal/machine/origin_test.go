@@ -226,7 +226,65 @@ func TestReplaceSnapshotCaptureFailureKeepsPrevious(t *testing.T) {
 	assertUnchanged(t, m, "ready", old, origin)
 }
 
-func TestReplaceSnapshotWriteFailureKeepsPreviousAndLeavesOrphan(t *testing.T) {
+func TestAtomicWriteSyncFailureIsCommitted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stage.json")
+	prev := syncParentDir
+	syncParentDir = func(*os.File) error { return errors.New("dir sync failed") }
+	t.Cleanup(func() { syncParentDir = prev })
+	if err := atomicWrite(path, []byte("{}\n"), 0o600); !errors.Is(err, ErrCommitted) {
+		t.Fatalf("committed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "{}\n" {
+		t.Fatalf("bytes: %q", got)
+	}
+}
+
+func TestReplaceSnapshotCommitSyncFailureKeepsNewImage(t *testing.T) {
+	m, r := captureReady(t, "demo")
+	old := randomID()
+	writeCatalogImage(t, m, old)
+	origin := testOrigin("/proj", "alpha")
+	origin.Image = old
+	r.Snapshots["ready"] = old
+	r.SnapshotOrigins = map[string]SnapshotOrigin{"ready": origin}
+	if err := m.Store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	commitStageRecord = func(s *Store, rec *Record) error {
+		prev := syncParentDir
+		syncParentDir = func(*os.File) error { return errors.New("dir sync failed") }
+		defer func() { syncParentDir = prev }()
+		return s.Save(rec)
+	}
+	t.Cleanup(func() { commitStageRecord = (*Store).Save })
+	result, err := m.ReplaceSnapshot(context.Background(), r, "ready", testOrigin("/proj", "alpha"), false)
+	if err != nil {
+		t.Fatalf("sync after rename is a warning: %v", err)
+	}
+	if result.Image == nil || result.Warning == "" || !strings.Contains(result.Warning, "dir sync failed") {
+		t.Fatalf("result: %+v", result)
+	}
+	if r.Snapshots["ready"] != result.Image.ID {
+		t.Fatalf("in-memory mapping: %s", r.Snapshots["ready"])
+	}
+	got, err := m.Store.Load("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Snapshots["ready"] != result.Image.ID {
+		t.Fatalf("disk mapping: %s", got.Snapshots["ready"])
+	}
+	if _, err := m.Store.Image(result.Image.ID); err != nil {
+		t.Fatalf("new image: %v", err)
+	}
+}
+
+func TestReplaceSnapshotWriteFailureRemovesCapturedImage(t *testing.T) {
 	m, r := captureReady(t, "demo")
 	old := randomID()
 	writeCatalogImage(t, m, old)
@@ -261,8 +319,8 @@ func TestReplaceSnapshotWriteFailureKeepsPreviousAndLeavesOrphan(t *testing.T) {
 	if orphan == "" {
 		t.Fatal("capture did not produce an image")
 	}
-	if _, err := m.Store.Image(orphan); err != nil {
-		t.Fatal("orphan image missing", err)
+	if _, err := m.Store.Image(orphan); !os.IsNotExist(err) {
+		t.Fatalf("captured image remains: %v", err)
 	}
 }
 
@@ -315,6 +373,56 @@ func TestReplaceSnapshotCollectFailureKeepsNewAndLaterMutationCleansOrphan(t *te
 	}
 	if _, err := m.Store.Image(result.Image.ID); err != nil {
 		t.Fatal("lost the committed image", err)
+	}
+}
+
+func TestDeleteSnapshotCommitSyncFailureKeepsRemoval(t *testing.T) {
+	m := testManager(t)
+	r := testRecord("demo")
+	keep := randomID()
+	gone := randomID()
+	writeCatalogImage(t, m, keep)
+	writeCatalogImage(t, m, gone)
+	origin := testOrigin("/proj", "alpha")
+	origin.Image = gone
+	r.Snapshots["initial"] = keep
+	r.Snapshots["ready"] = gone
+	r.SnapshotOrigins = map[string]SnapshotOrigin{"ready": origin}
+	if err := m.Store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	commitStageRecord = func(s *Store, rec *Record) error {
+		prev := syncParentDir
+		syncParentDir = func(*os.File) error { return errors.New("dir sync failed") }
+		defer func() { syncParentDir = prev }()
+		return s.Save(rec)
+	}
+	t.Cleanup(func() { commitStageRecord = (*Store).Save })
+	warn, err := m.DeleteSnapshot(r, "ready")
+	if err != nil {
+		t.Fatalf("sync after rename is a warning: %v", err)
+	}
+	if warn == "" || !strings.Contains(warn, "dir sync failed") {
+		t.Fatalf("warning: %q", warn)
+	}
+	if _, ok := r.Snapshots["ready"]; ok {
+		t.Fatal("in-memory mapping remains")
+	}
+	got, err := m.Store.Load("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Snapshots["ready"]; ok {
+		t.Fatal("disk mapping remains")
+	}
+	if _, ok := got.SnapshotOrigins["ready"]; ok {
+		t.Fatal("origin remains")
+	}
+	if _, err := m.Store.Image(gone); !os.IsNotExist(err) {
+		t.Fatalf("collect did not run: %v", err)
+	}
+	if _, err := m.Store.Image(keep); err != nil {
+		t.Fatal("deleted initial", err)
 	}
 }
 

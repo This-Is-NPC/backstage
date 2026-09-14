@@ -3,6 +3,7 @@
 package machine
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,50 @@ const Schema = 1
 const Recipe = "1"
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
+
+// ErrBusy is returned by LockMany when a lock is already held.
+var ErrBusy = errors.New("stage/resource is busy")
+
+// ErrCommitted means atomicWrite already renamed the pending file into
+// place. The destination holds the new bytes; only the directory sync
+// failed. errors.Is(err, ErrCommitted) is true.
+var ErrCommitted = errors.New("atomic write already renamed")
+
+// BusyError names the held lock. errors.Is(err, ErrBusy) is true.
+type BusyError struct {
+	Name string
+}
+
+// CommittedError wraps a post-rename failure. The file is already durable
+// enough for a later Load; callers must not roll the write back.
+type CommittedError struct {
+	Err error
+}
+
+func (e *BusyError) Error() string {
+	return fmt.Sprintf("stage/resource %s is busy", e.Name)
+}
+
+func (e *BusyError) Is(target error) bool {
+	return target == ErrBusy
+}
+
+func (e *CommittedError) Error() string {
+	if e.Err == nil {
+		return ErrCommitted.Error()
+	}
+	return fmt.Sprintf("%s: %v", ErrCommitted, e.Err)
+}
+
+func (e *CommittedError) Unwrap() error { return e.Err }
+
+func (e *CommittedError) Is(target error) bool {
+	return target == ErrCommitted
+}
+
+var syncParentDir = func(dir *os.File) error {
+	return dir.Sync()
+}
 
 func ValidateName(name string) error {
 	if !namePattern.MatchString(name) || name == "image-catalog" {
@@ -226,10 +271,13 @@ func atomicWrite(path string, b []byte, mode os.FileMode) (err error) {
 	}
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
-		return err
+		return &CommittedError{Err: err}
 	}
 	defer dir.Close()
-	return dir.Sync()
+	if err = syncParentDir(dir); err != nil {
+		return &CommittedError{Err: err}
+	}
+	return nil
 }
 
 func readJSON(path string, v any) error {
@@ -368,9 +416,46 @@ func (s *Store) LockMany(names ...string) (func(), error) {
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 			_ = f.Close()
 			release()
-			return nil, fmt.Errorf("stage/resource %s is busy", name)
+			return nil, &BusyError{Name: name}
 		}
 		files = append(files, f)
 	}
 	return release, nil
+}
+
+// LockWait is LockMany that retries while a name is busy. The wait is
+// cancelled with ctx. One line is printed for image-catalog.
+func (s *Store) LockWait(ctx context.Context, names ...string) (func(), error) {
+	printed := false
+	for {
+		release, err := s.LockMany(names...)
+		if err == nil {
+			return release, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !errors.Is(err, ErrBusy) {
+			return nil, err
+		}
+		if !printed {
+			for _, name := range names {
+				if name == "image-catalog" {
+					fmt.Println(">> waiting for image-catalog")
+					break
+				}
+			}
+			printed = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// Origin returns the recorded producer of a named snapshot, if any.
+func (r *Record) Origin(name string) (SnapshotOrigin, bool) {
+	return originOf(r, name)
 }
