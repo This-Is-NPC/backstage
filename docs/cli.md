@@ -189,8 +189,9 @@ anywhere in the workspace, or an unreadable `backstage.json` under it
 (a discover warning), stops the command before any lock: that file may
 still name the state. `--dry-run` then prints those errors and warnings
 and exits, with no plan. A real run evaluates again after it holds the
-stage and image-catalog locks; a new error, warning or conflict there
-releases the locks and removes nothing.
+stage lock; a new error, warning or conflict there
+releases the lock and removes nothing. It waits for `image-catalog`
+only around each snapshot deletion.
 
 A snapshot is removed only when it has a readable origin inside the workspace
 and no valid scene still declares that name as `vm-end` on this stage (the
@@ -204,7 +205,7 @@ project directory is gone but still belongs to this workspace is kept as
 Reasons: `undeclared`, `initial`, `manual`, `outside-workspace` (including a
 hidden directory or a nested workspace), `missing-project`, `consumed`
 (`vm-start` `clean`), `in-use`. Each removal is `snapshot-delete`: stage
-and image-catalog locks, one commit, then `Collect`. A collection warning
+lock plus `image-catalog` around that delete, one commit, then `Collect`. A collection warning
 leaves the mapping gone. A failure mid-run prints `failed SNAPSHOT: ERROR`
 and `not attempted SNAPSHOT` (JSON: `failed` and `not-attempted`). Every
 error, including a missing argument or an unknown flag, is printed once to

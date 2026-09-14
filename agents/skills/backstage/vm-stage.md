@@ -75,8 +75,9 @@ produced snapshots no valid scene in the workspace still declares as
 `vm-end` on the stage. A broken config or scene, or an unreadable
 `backstage.json` under the workspace, stops it before any lock — also
 on `--dry-run`, which then lists those errors and warnings and prints
-no plan. A real run evaluates again under the locks and aborts without
-removing if that look fails. `--dry-run` otherwise lists the same set
+no plan. A real run evaluates again under the stage lock and aborts
+without removing if that look fails. `image-catalog` is taken only
+around each deletion. `--dry-run` otherwise lists the same set
 without locks or new files, wording removals as `would remove`. It
 keeps `initial`, manual or relative origins, an origin path that is not
 already clean (`..`, `.`, `//`), origins outside the workspace (a hidden
@@ -205,9 +206,19 @@ or `short`, or `capture-failed` when `vm-end` does not commit). A guest clip
 also records the machine; a clean start records `start-image` and
 `start-state.snapshot`. A successful `vm-end` adds `end-state`. Completed
 VM phases go in `timings` (seconds, capture bytes, `capture-mode`,
-`image-depth`, and `capture-fallback` when a delta check flattened);
-they are not an input. `boot-seconds` only when Begin booted a stopped
-domain. `vm-end` and `stage snapshot` write a qcow2 delta against the
+`image-depth`, `catalog-wait-seconds`, and `capture-fallback` when a
+delta check flattened); they are not an input. `boot-seconds` only when Begin booted a stopped
+domain. `vm-end` and `stage snapshot` stop the guest, then hold
+`image-catalog` only around the decision/marker and the catalog
+commit (`qemu-img convert` is unlocked). A marker in
+`machines/pending/` protects the parent until commit; `Collect` reads
+markers first and drops a marker whose stage record is gone, only
+when the listed paths match managed storage. Unreadable markers or
+paths outside the store stop Collect; Recover and Delete skip them
+with a warning and doctor lists them. A leftover marker after a
+committed `stage snapshot` is a warning. `capture-seconds` excludes catalog
+waits (`catalog-wait-seconds`). `Create` and `Clone` still hold the
+catalog for the whole verb. `vm-end` and `stage snapshot` write a qcow2 delta against the
 activation image when the backing chain matches the catalog, up to the
 host `max-image-depth` (`BACKSTAGE_IMAGE_DEPTH`, then
 `machines/settings.json`, then 8). That default was measured; lower

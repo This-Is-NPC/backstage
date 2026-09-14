@@ -180,7 +180,7 @@ Begin booted a stopped domain, `session-seconds` plus `stage-phases`
 complete copy. A failed or skipped phase is omitted.
 Timings do not enter `inputs-sha256` or status. The stage
 `provision.log` gets one `timing <field> <value>` line per measure;
-`stage snapshot` writes shutdown, capture, bytes, mode and depth, and
+`stage snapshot` writes shutdown, capture (without catalog waits), bytes, mode and depth, and
 `stage restore` writes the two restore times. Capture progress is
 `>> stage NAME: capture (12.3s, 4.1 GiB)`; without a measured size it
 is `>> stage NAME: capture (12.3s)`. A fallback prints
@@ -214,6 +214,24 @@ that includes a cached OS base is always complete. `Create` and `Clone`
 keep `initial` as a complete schema 1 image and never promote a cached
 base. An unknown key in `machines/settings.json` is an error before
 Stop; doctor reports it.
+`stage snapshot` and `vm-end` stop the guest first, then take
+`image-catalog` only around the decision/marker and the catalog
+commit. `qemu-img convert` runs without that lock, so two stages can
+convert at once. A marker at `machines/pending/<id>.json` names the
+new files and the parent; `Collect` reads every marker before any
+`Remove` (an unreadable marker stops the scan). A marker whose stage
+has no record is leftover: `Collect` removes those files and the
+marker only when the id is a catalog image id and disk, NVRAM and
+keys match the managed paths. Any other path stops Collect before
+a `Remove`; Recover and Delete warn, leave the marker, and
+`stage doctor` lists it. `Recover` and `stage delete` clear leftover
+markers for that stage without holding the catalog. An unreadable
+marker has no stage name inside it, so Recover and Delete skip it
+with a warning; `stage doctor` lists it. After a snapshot mapping
+commits, a leftover marker is a warning, not a failed snapshot. `Create` and `Clone` still hold the catalog
+for the whole verb. `capture-seconds` is decide, convert, files and
+JSON only; `provision.log` records `catalog-wait-seconds` (including
+`0`) for the waits on the catalog.
 Restore also leaves the machine stopped. These are disk states; they do
 not restore RAM, terminal processes or open windows. Use `continue` for
 live-session continuity.
@@ -247,9 +265,10 @@ walks the workspace the way `status` does. A configuration or scene error,
 or an unreadable `backstage.json` under the workspace, aborts before any
 lock — `--dry-run` included — and lists those errors and warnings, with
 no plan: the broken file may be the one that still names the state. A
-real run evaluates again under the stage and image-catalog locks and
-aborts without removing if that second look finds an error, a warning
-or a conflict. It never removes `initial`, a manual snapshot, a relative
+real run evaluates again under the stage lock and aborts without
+removing if that second look finds an error, a warning or a conflict.
+It takes `image-catalog` only around each `snapshot-delete`. It never
+removes `initial`, a manual snapshot, a relative
 or unreadable origin (a path that still has `..`, `.` or `//` is
 unreadable; the engine stores a cleaned, resolved path), an origin that
 points at a project outside this workspace (a hidden directory or a
