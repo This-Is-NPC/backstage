@@ -221,9 +221,11 @@ live-session continuity.
 The host depth limit is `max-image-depth`: environment
 `BACKSTAGE_IMAGE_DEPTH`, then
 `${XDG_DATA_HOME:-~/.local/share}/backstage/machines/settings.json`,
-then a provisional default of 4. `0` disables deltas. Doctor prints the
-effective value and its origin. A complete image has depth zero; a
-delta adds one to its parent. The next image above the limit is
+then 8. That default was measured: boot and read stayed flat through
+depth 8. Lower it with `BACKSTAGE_IMAGE_DEPTH` or
+`machines/settings.json` if a cold chain is slow. `0` disables deltas.
+Doctor prints the effective value and its origin. A complete image has
+depth zero; a delta adds one to its parent. The next image above the limit is
 complete. `Collect` keeps every ancestor of `Source.Image`, snapshots,
 the `activate.json` journal and cached bases.
 

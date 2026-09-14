@@ -131,7 +131,7 @@ func TestDoctorReportsImageDepth(t *testing.T) {
 			continue
 		}
 		found = true
-		if !c.OK || !strings.Contains(c.Detail, "4 (default)") {
+		if !c.OK || !strings.Contains(c.Detail, "8 (default)") {
 			t.Fatalf("doctor: %+v", c)
 		}
 	}

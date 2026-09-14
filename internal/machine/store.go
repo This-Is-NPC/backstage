@@ -23,9 +23,10 @@ const ImageSchema = 1
 const ImageSchemaV2 = 2
 const Recipe = "1"
 
-// DefaultMaxImageDepth is the provisional host limit. 0 disables deltas.
-// A later real-VM measurement replaces this number.
-const DefaultMaxImageDepth = 4
+// DefaultMaxImageDepth is the host limit. 0 disables deltas.
+// Measured on September 14, 2026: no boot or read regression through
+// depth 8; the host page cache was not dropped.
+const DefaultMaxImageDepth = 8
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
 

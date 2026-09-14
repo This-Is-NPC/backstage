@@ -210,7 +210,9 @@ they are not an input. `boot-seconds` only when Begin booted a stopped
 domain. `vm-end` and `stage snapshot` write a qcow2 delta against the
 activation image when the backing chain matches the catalog, up to the
 host `max-image-depth` (`BACKSTAGE_IMAGE_DEPTH`, then
-`machines/settings.json`, then 4). `0` disables deltas. A chain that
+`machines/settings.json`, then 8). That default was measured; lower
+it with `BACKSTAGE_IMAGE_DEPTH` or `machines/settings.json` if a
+cold chain is slow. `0` disables deltas. A chain that
 includes a cached OS base stays complete (`cached-base`) so the base
 is never promoted. An unreadable `bases/*.json` flattens
 (`base-cache-unreadable`) instead of failing the capture. An unknown settings key is an error; doctor
