@@ -15,7 +15,7 @@ backstage stage clone demo tutorial --snapshot product-installed
 ```
 
 The pool filesystem must support POSIX ACLs. Capture keeps catalog disks
-`0600` and adds a named read ACL for your user so a later snapshot can
+`0440` and adds a named read ACL for your user so a later snapshot can
 open them after libvirt has taken ownership. `stage doctor` probes that
 ACL and prints `sudo setfacl` commands for older unreadable images; it
 never runs `sudo`. Do not `chmod` a captured image after the ACL.
@@ -204,8 +204,21 @@ the Backstage version, when it was made, and a `result` (`ok`, `steps-failed`,
 or `short`, or `capture-failed` when `vm-end` does not commit). A guest clip
 also records the machine; a clean start records `start-image` and
 `start-state.snapshot`. A successful `vm-end` adds `end-state`. Completed
-VM phases go in `timings` (seconds and capture bytes); they are not an
-input. `boot-seconds` only when Begin booted a stopped domain. The stage
+VM phases go in `timings` (seconds, capture bytes, `capture-mode`,
+`image-depth`, and `capture-fallback` when a delta check flattened);
+they are not an input. `boot-seconds` only when Begin booted a stopped
+domain. `vm-end` and `stage snapshot` write a qcow2 delta against the
+activation image when the backing chain matches the catalog, up to the
+host `max-image-depth` (`BACKSTAGE_IMAGE_DEPTH`, then
+`machines/settings.json`, then 4). `0` disables deltas. A chain that
+includes a cached OS base stays complete (`cached-base`) so the base
+is never promoted. An unreadable `bases/*.json` flattens
+(`base-cache-unreadable`) instead of failing the capture. An unknown settings key is an error; doctor
+reports it. `Create` and `Clone` keep `initial` complete. An older
+`Collect` may delete unused schema 1 images and then stop on schema 2;
+`vm-end`, `snapshot-delete` and `prune-states` on that binary warn
+`pending cleanup` every time. Catalog disks are `0440` plus the
+named read ACL. The stage
 `provision.log` records `timing <field> <value>` for
 the same measures, including a manual `stage snapshot` and
 `stage restore`. A film is

@@ -20,17 +20,18 @@ Backstage creates a dedicated directory storage pool named `backstage-UID`,
 under `/var/lib/libvirt/images/backstage-UID`. Libvirt must permit your account
 to create this pool. Its directory must be writable by your account and
 traversable by QEMU; disks are labelled through libvirt when a domain starts.
-The pool filesystem must support POSIX ACLs. Capture writes a named read ACL
-for your user on each catalog disk (`0600`, then `user:<uid>:r` and mask `r`)
-so you can still open that image as a backing file after libvirt's DAC has
-moved the owner to `libvirt-qemu`. Libvirt restores ownership only on the
-writable overlay; it does not restore the backing chain. Doctor probes the
-pool with a temporary file (apply the ACL, read it back, delete the file) and
-lists any older catalog image you cannot read, printing a `sudo setfacl`
-command for each. Doctor never runs `sudo`. Do not `chmod` a captured image
-after that ACL: a later `chmod 0600` recomputes the mask from the group bits
-and clears the named entry. Do not run the entire Backstage CLI as root to
-work around missing permissions.
+The pool filesystem must support POSIX ACLs. Capture writes each catalog
+disk `0440`, then a named read ACL for your user (`user:<uid>:r` and
+mask `r`) so you can still open that image as a backing file after
+libvirt's DAC has moved the owner to `libvirt-qemu`. Libvirt restores
+ownership only on the writable overlay; it does not restore the backing
+chain. Doctor probes the pool with a temporary file (apply the ACL, read
+it back, delete the file) and lists any older catalog image you cannot
+read, printing a `sudo setfacl` command for each. Doctor never runs
+`sudo`. Do not `chmod` a captured image after that ACL: a later chmod
+recomputes the mask from the group bits and clears the named entry. Do
+not run the entire Backstage CLI as root to work around missing
+permissions.
 
 ## Create a stage
 
@@ -173,14 +174,17 @@ name). Host takes omit the guest fields. A guest take also records
 `restore-activate-seconds` on a clean start, `boot-seconds` only when
 Begin booted a stopped domain, `session-seconds` plus `stage-phases`
 (`up`, `omarchy`, `tools`, `desktop`, `terminal`), and on `vm-end`
-`shutdown-seconds`, `capture-seconds`, `capture-bytes` (`st_blocks*512`)
-and `capture-apparent-bytes`. A failed or skipped phase is omitted.
+`shutdown-seconds`, `capture-seconds`, `capture-bytes` (`st_blocks*512`),
+`capture-apparent-bytes`, `capture-mode` (`delta` or `complete`),
+`image-depth`, and `capture-fallback` when a delta check fell back to a
+complete copy. A failed or skipped phase is omitted.
 Timings do not enter `inputs-sha256` or status. The stage
 `provision.log` gets one `timing <field> <value>` line per measure;
-`stage snapshot` writes shutdown, capture and bytes, and
+`stage snapshot` writes shutdown, capture, bytes, mode and depth, and
 `stage restore` writes the two restore times. Capture progress is
 `>> stage NAME: capture (12.3s, 4.1 GiB)`; without a measured size it
-is `>> stage NAME: capture (12.3s)`. A timing-log write
+is `>> stage NAME: capture (12.3s)`. A fallback prints
+`>> stage NAME: capture complete (reason)` first. A timing-log write
 failure is a warning on stderr and does not fail the take.
 VM takes start recording after staging even with `produce --show-staging`;
 installation and disk restoration are not part of the recorded clip.
@@ -197,10 +201,31 @@ backstage stage clone demo tutorial --snapshot product-installed
 backstage stage restore tutorial initial
 ```
 
-Snapshots shut down the VM cleanly and save a standalone disk plus matching
-UEFI variables. Restore also leaves the machine stopped. These are disk states;
-they do not restore RAM, terminal processes or open windows. Use `continue` for
+Snapshots shut down the VM cleanly and save a disk plus matching UEFI
+variables. `vm-end` and `stage snapshot` write a qcow2 delta against
+`Record.Source.Image` when the active overlay's backing path is
+byte-identical to that image and the catalog parent chain matches
+`qemu-img info --backing-chain`. Otherwise they flatten to a complete
+image and log why (`backing-path-mismatch`, `backing-chain-mismatch`,
+`missing-ancestor`, `repeated-ancestor`, `catalog-parent-mismatch`,
+`incomplete-chain`, `depth-limit`, `cached-base`, or
+`base-cache-unreadable`). A catalog chain
+that includes a cached OS base is always complete. `Create` and `Clone`
+keep `initial` as a complete schema 1 image and never promote a cached
+base. An unknown key in `machines/settings.json` is an error before
+Stop; doctor reports it.
+Restore also leaves the machine stopped. These are disk states; they do
+not restore RAM, terminal processes or open windows. Use `continue` for
 live-session continuity.
+
+The host depth limit is `max-image-depth`: environment
+`BACKSTAGE_IMAGE_DEPTH`, then
+`${XDG_DATA_HOME:-~/.local/share}/backstage/machines/settings.json`,
+then a provisional default of 4. `0` disables deltas. Doctor prints the
+effective value and its origin. A complete image has depth zero; a
+delta adds one to its parent. The next image above the limit is
+complete. `Collect` keeps every ancestor of `Source.Image`, snapshots,
+the `activate.json` journal and cached bases.
 
 `stage snapshots` prints the name-to-image map. `--origins` prints each name as
 `{ image, origin }`. `origin` is `null` for a manual snapshot (`stage snapshot`
@@ -247,6 +272,20 @@ those files are copied**, just like other snapshot contents.
 Clones keep the original disk size. Resizing, live snapshots, remote hosts and
 other guest operating systems are outside this version.
 
+## Compatibility
+
+Image records use schema 1 for a complete image and schema 2 for a
+delta or a parent that has been promoted. The stage `Record` schema is
+unchanged. An older `Collect` deletes unused schema 1 images it finds
+before the first unused schema 2 record, then stops; that is safe
+because a schema 1 image never has a child. `stage delete` therefore
+fails at the end after those unused schema 1 images are gone (the
+stage directory is already gone). On an older binary, `vm-end`,
+`snapshot-delete` and `prune-states` warn `pending cleanup` every time,
+because `Collect` errors on schema 2. `clean` start, `stage restore`
+and `stage clone` refuse a snapshot whose image is schema 2. Upgrade,
+then collect.
+
 ## Failure, recovery and deletion
 
 ```bash
@@ -280,6 +319,8 @@ Normal `go test ./...` never creates VMs. On a prepared host, explicitly run:
 BACKSTAGE_VM_INSTALL_TEST=1 go test ./internal/machine -run TestRealOmarchyStages -v -timeout 70m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealOmarchyStages -v -timeout 70m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/engine -run TestRealVMEndProducerConsumer -v -timeout 180m -count=1
+BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealDeltaImages -v -timeout 90m -count=1
+BACKSTAGE_VM_DEPTH_MEASURE=1 go test ./internal/machine -run TestMeasureImageDepthChain -v -timeout 90m -count=1
 ```
 
 `TestRealVMEndProducerConsumer` installs a stage and records two takes.
