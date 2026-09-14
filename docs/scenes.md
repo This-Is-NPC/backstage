@@ -78,6 +78,15 @@ backstage rehearse scenes/01-installing.json
 ```
 
 The steps run with short delays and no recorder. Correct the flow first.
+A rehearsal writes no clip and no facts.
+
+## Facts
+
+Every recording writes `<out>/<name>.facts.json` beside the clip. The sidecar
+names the Backstage version and a `result`: `ok`, `steps-failed` if a step
+failed, or `short` if the take is materially shorter than the recorder ran.
+A failed or short take is still kept. A guest take also records the machine
+it was filmed on; a clean start records the restored image and snapshot name.
 
 ## Do not narrate what the screen shows
 

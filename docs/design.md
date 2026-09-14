@@ -153,8 +153,12 @@ them. Backstage says it first.
 
 ## Provenance
 
-Backstage writes a `.facts.json` file beside each guest clip. The file records
-the domain, the accounts, the address, and the Omarchy version.
+Backstage writes a `.facts.json` file beside every recorded clip, on the host
+and on a VM. The file records the Backstage version, when the take was made,
+and whether the take finished (`ok`), a step failed (`steps-failed`), or the
+clip came back short (`short`). A guest clip also records the domain, the
+accounts, the address, the Omarchy version, and, on a clean start, the
+restored image and snapshot name.
 
 A film is evidence. That file is the difference between a take that you can
 produce again and a take that you can only record again.

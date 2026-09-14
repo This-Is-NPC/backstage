@@ -46,6 +46,10 @@ moves on early records the next command being typed over the last one's output.
 
 Measure the real thing once and write that number down.
 
+`play` writes `<out>/<name>.facts.json` beside every take: the Backstage
+version and `result` (`ok`, `steps-failed`, or `short`). A guest take also
+records the machine. `rehearse` writes neither a clip nor facts.
+
 ## Do Not Type Shell Metacharacters
 
 Typing goes through a virtual keyboard. A trailing `&`, a redirect, or a pipe

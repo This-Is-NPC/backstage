@@ -151,7 +151,9 @@ the host's own cursor in the film.
 
 ## Provenance
 
-Each clip gets a `.facts.json` beside it: the domain, the accounts, the address
-and the guest's Omarchy version. A film is evidence, and evidence has a
-provenance. That file is the difference between a take that can be reproduced
+Every recorded clip gets a `.facts.json` beside it, on the host and on a VM:
+the Backstage version, when it was made, and a `result` (`ok`, `steps-failed`,
+or `short`). A guest clip also records the machine; a clean start records
+`start-image` and `start-state.snapshot`. A film is evidence, and evidence has
+a provenance. That file is the difference between a take that can be reproduced
 and one that can only be re-shot.
