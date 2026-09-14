@@ -16,10 +16,16 @@ type fakeVMStager struct {
 	fakeStager
 	g       *guest.Guest
 	omarchy string
+	phases  map[string]float64
+	session *float64
 }
 
 func (f *fakeVMStager) RecordingGuest() (*guest.Guest, string) {
 	return f.g, f.omarchy
+}
+
+func (f *fakeVMStager) SessionTimings() (map[string]float64, *float64) {
+	return f.phases, f.session
 }
 
 func readFacts(t *testing.T, clip string) facts.Facts {
@@ -63,6 +69,9 @@ func TestHostTakeWritesFacts(t *testing.T) {
 	}
 	if got.Made == "" {
 		t.Fatal("host facts missing made")
+	}
+	if got.Timings != nil {
+		t.Fatalf("host take must omit timings: %+v", got.Timings)
 	}
 	want, err := scene.InputsDigest(e.Project, s, scene.DigestOptions{Speed: 0.0001})
 	if err != nil {

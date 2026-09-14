@@ -3,6 +3,7 @@ package stage
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/This-Is-NPC/backstage/internal/guest"
@@ -31,11 +32,22 @@ type VM struct {
 	// Omarchy is the version the guest reported, filled by Setup. The engine
 	// writes it beside the clip so a take can be reproduced rather than only re-shot.
 	Omarchy string
+	// Now, if set, is the clock for phase durations. Nil uses time.Now.
+	Now func() time.Time
+	// Phases is each Setup phase that completed, including "up".
+	Phases map[string]float64
+	// SessionSeconds is omarchy+tools+desktop+terminal. It excludes "up".
+	SessionSeconds *float64
 }
 
 // RecordingGuest returns the guest and the Omarchy version recorded at Setup.
 func (v *VM) RecordingGuest() (*guest.Guest, string) {
 	return v.Guest, v.Omarchy
+}
+
+// SessionTimings returns completed Setup phases and the session sum (no "up").
+func (v *VM) SessionTimings() (map[string]float64, *float64) {
+	return v.Phases, v.SessionSeconds
 }
 
 // NewVM returns a stager for one guest.
@@ -49,40 +61,78 @@ func NewVM(g *guest.Guest) *VM {
 // a machine this cannot drive is a change nobody asked for; provision before
 // prepare, because preparing needs the keyboard it installs; prepare before the
 // terminal, because a locked session swallows the keystroke that would open it.
-func (v *VM) Setup(layout scene.Layout, _ *scene.Project) (*scene.Manifest, error) {
+func (v *VM) now() time.Time {
+	if v != nil && v.Now != nil {
+		return v.Now()
+	}
+	return time.Now()
+}
+
+func (v *VM) Setup(layout scene.Layout, proj *scene.Project) (*scene.Manifest, error) {
+	return v.setup(layout, func(name string) error {
+		switch name {
+		case "up":
+			return v.Guest.Start(v.Patience)
+		case "omarchy":
+			version, err := v.Guest.AssertOmarchy()
+			v.Omarchy = version
+			return err
+		case "tools":
+			return v.Guest.Provision()
+		case "desktop":
+			return v.Guest.Prepare()
+		case "terminal":
+			return v.Guest.OpenTerminal()
+		default:
+			return fmt.Errorf("unknown stage phase %s", name)
+		}
+	})
+}
+
+func (v *VM) setup(layout scene.Layout, do func(string) error) (*scene.Manifest, error) {
 	// Each phase is timed and said out loud, because the cost of a vm stage is
 	// not one number: a guest that is already up is seconds and a cold boot is
 	// minutes, and somebody deciding whether to keep a stage between takes
 	// needs to see which of the two they are paying for.
-	phase := func(name string, do func() error) error {
-		began := time.Now()
-		if err := do(); err != nil {
+	v.Phases = map[string]float64{}
+	v.SessionSeconds = nil
+	var session float64
+	phase := func(name string, inSession bool) error {
+		began := v.now()
+		if err := do(name); err != nil {
 			return err
 		}
-		fmt.Printf(">> stage %s: %s (%.1fs)\n", v.Guest.Domain, name, time.Since(began).Seconds())
+		sec := math.Round(v.now().Sub(began).Seconds()*1000) / 1000
+		v.Phases[name] = sec
+		if inSession {
+			session += sec
+			sum := math.Round(session*1000) / 1000
+			v.SessionSeconds = &sum
+		}
+		domain := ""
+		if v.Guest != nil {
+			domain = v.Guest.Domain
+		}
+		fmt.Printf(">> stage %s: %s (%.1fs)\n", domain, name, sec)
 		return nil
 	}
 
 	if !v.Continue {
-		if err := phase("up", func() error { return v.Guest.Start(v.Patience) }); err != nil {
+		if err := phase("up", false); err != nil {
 			return nil, err
 		}
 	}
-	if err := phase("omarchy", func() error {
-		version, err := v.Guest.AssertOmarchy()
-		v.Omarchy = version
-		return err
-	}); err != nil {
+	if err := phase("omarchy", true); err != nil {
 		return nil, err
 	}
 	if !v.Continue {
-		if err := phase("tools", v.Guest.Provision); err != nil {
+		if err := phase("tools", true); err != nil {
 			return nil, err
 		}
-		if err := phase("desktop", v.Guest.Prepare); err != nil {
+		if err := phase("desktop", true); err != nil {
 			return nil, err
 		}
-		if err := phase("terminal", v.Guest.OpenTerminal); err != nil {
+		if err := phase("terminal", true); err != nil {
 			return nil, err
 		}
 	}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,6 +80,7 @@ type Engine struct {
 	managedRec    *machine.Record
 	leafProject   string
 	endFacts      endFactsWrite
+	timings       facts.Timings
 }
 
 // ErrCaptureFailed is returned when vm-end cannot commit a snapshot.
@@ -111,6 +114,10 @@ var onWaitCapture = func() {}
 
 type recordingGuest interface {
 	RecordingGuest() (*guest.Guest, string)
+}
+
+type sessionTimer interface {
+	SessionTimings() (map[string]float64, *float64)
 }
 
 // New builds an Engine with the default Hyprland/gpu drivers for a project.
@@ -218,6 +225,7 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	e.startSnapshot = ""
 	e.inputsSHA256 = ""
 	e.stateSaved = false
+	e.timings = facts.Timings{}
 	e.managedRec = nil
 	e.leafProject = ""
 	e.endFacts = endFactsWrite{}
@@ -339,6 +347,7 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 			after = s.VMStart.After
 		}
 		g, err := beginManaged(e.Managed, ctx, r, s.VMStartMode(), snapshot, after, project, opts.Record)
+		e.mergeStart(e.Managed.StartTimes)
 		if err != nil {
 			return err
 		}
@@ -437,6 +446,10 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		m, err := e.Stager.Setup(layout, e.Project)
 		if err != nil {
 			return err
+		}
+		if timed, ok := e.Stager.(sessionTimer); ok {
+			e.mergeSession(timed.SessionTimings())
+			e.logSessionTimings()
 		}
 		if e.PaneDriver != nil {
 			e.pane = e.PaneDriver
@@ -575,7 +588,59 @@ func (e *Engine) writeClipFacts(clip string, s *scene.Scene, version, result str
 		f.StartImage = e.startImage
 	}
 	f.EndState = end
+	if !e.timings.Empty() {
+		t := e.timings
+		if len(t.StagePhases) > 0 {
+			t.StagePhases = maps.Clone(t.StagePhases)
+		}
+		f.Timings = &t
+	}
 	return facts.Write(facts.Path(clip), f)
+}
+
+func (e *Engine) mergeStart(t machine.StartTimes) {
+	e.timings.RestoreStopSeconds = t.RestoreStopSeconds
+	e.timings.RestoreActivateSeconds = t.RestoreActivateSeconds
+	e.timings.BootSeconds = t.BootSeconds
+}
+
+func (e *Engine) mergeSession(phases map[string]float64, session *float64) {
+	if len(phases) > 0 {
+		e.timings.StagePhases = maps.Clone(phases)
+	}
+	e.timings.SessionSeconds = session
+}
+
+func (e *Engine) mergeCapture(r machine.ReplaceResult) {
+	if r.ShutdownSeconds != nil {
+		e.timings.ShutdownSeconds = r.ShutdownSeconds
+	}
+	if r.CaptureSeconds != nil {
+		e.timings.CaptureSeconds = r.CaptureSeconds
+	}
+	if r.CaptureBytes != nil {
+		e.timings.CaptureBytes = r.CaptureBytes
+	}
+	if r.CaptureApparentBytes != nil {
+		e.timings.CaptureApparentBytes = r.CaptureApparentBytes
+	}
+}
+
+func (e *Engine) logSessionTimings() {
+	if e.Managed == nil || e.managedRec == nil {
+		return
+	}
+	if e.timings.SessionSeconds != nil {
+		e.Managed.LogTiming(e.managedRec, "session-seconds", *e.timings.SessionSeconds)
+	}
+	names := make([]string, 0, len(e.timings.StagePhases))
+	for name := range e.timings.StagePhases {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		e.Managed.LogTiming(e.managedRec, "stage-phases."+name, e.timings.StagePhases[name])
+	}
 }
 
 func (e *Engine) checkVMEnd(r *machine.Record, s *scene.Scene, project string, opts Options) error {
@@ -616,6 +681,7 @@ func (e *Engine) saveEndState(ctx context.Context, s *scene.Scene, clip string, 
 		Backstage:    opts.Version,
 	}
 	result, err := replaceTakeState(e.Managed, ctx, e.managedRec, s.VMEnd.Snapshot, origin, opts.Adopt)
+	e.mergeCapture(result)
 	if err != nil {
 		e.endFacts = endFactsWrite{
 			result: facts.ResultCaptureFailed,

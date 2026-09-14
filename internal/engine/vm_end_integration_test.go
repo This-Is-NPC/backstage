@@ -108,6 +108,10 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 	if err := eng.Run(producer, Options{Context: ctx, Record: true, Speed: 1, Version: "test"}); err != nil {
 		t.Fatal(err)
 	}
+	producerFacts := readFacts(t, filepath.Join(dir, "recordings", "make-ready.mp4"))
+	if producerFacts.Timings == nil || producerFacts.Timings.ShutdownSeconds == nil || producerFacts.Timings.CaptureSeconds == nil || producerFacts.Timings.CaptureBytes == nil {
+		t.Fatalf("producer timings: %+v", producerFacts.Timings)
+	}
 	r, err := m.Store.Load(name)
 	if err != nil {
 		t.Fatal(err)
@@ -150,5 +154,8 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 	}
 	if got.Result != facts.ResultOK {
 		t.Fatalf("consumer facts: %+v", got)
+	}
+	if got.Timings == nil || got.Timings.RestoreStopSeconds == nil || got.Timings.RestoreActivateSeconds == nil || got.Timings.BootSeconds == nil || got.Timings.SessionSeconds == nil {
+		t.Fatalf("consumer timings: %+v", got.Timings)
 	}
 }
