@@ -76,6 +76,13 @@ func (r *Result) HasError() bool {
 	return r != nil && len(r.Errors) > 0
 }
 
+// HasWarning reports a discover problem anywhere in the workspace. A
+// leaf whose backstage.json does not parse is a warning, not an error;
+// prune-states still refuses to plan, because that leaf may declare a state.
+func (r *Result) HasWarning() bool {
+	return r != nil && len(r.Warnings) > 0
+}
+
 // SceneStatus is one recording scene in the report.
 type SceneStatus struct {
 	Kind          string   `json:"kind,omitempty"`
@@ -133,9 +140,10 @@ func (e *ConflictError) Error() string {
 }
 
 // Evaluation is the discovered workspace and every recording scene's
-// status. Report and --with-deps share it.
+// status. Report, --with-deps and prune-states share it.
 type Evaluation struct {
 	filter   string
+	root     string
 	projects []*scene.Project
 	faults   []projectFault
 	warnings []Warning
@@ -201,6 +209,7 @@ func Evaluate(opts Options) (*Evaluation, error) {
 	}
 	return &Evaluation{
 		filter:   dir,
+		root:     root,
 		projects: projects,
 		faults:   faults,
 		warnings: warnings,
