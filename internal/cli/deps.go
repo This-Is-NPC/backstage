@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"context"
-	"fmt"
 	"io"
 	"os"
 	"sort"
-	"sync"
+	"time"
 
 	"github.com/This-Is-NPC/backstage/internal/engine"
 	"github.com/This-Is-NPC/backstage/internal/machine"
@@ -16,28 +14,40 @@ import (
 type sceneRun func(path string, opts engine.Options) error
 
 type depsExec struct {
-	Store *machine.Store
-	Out   io.Writer
-	Run   sceneRun
-	Lock  func(names ...string) (func(), error)
+	Store        *machine.Store
+	Out          io.Writer
+	Run          sceneRun
+	Lock         func(names ...string) (func(), error)
+	Launch       jobLauncher
+	Jobs         int
+	JSON         bool
+	MemAvailable func() (uint64, error)
+	NumCPU       func() int
+	JobsDir      string
+	now          func() time.Time
+	runSuffix    func() (string, error)
 }
 
-func runWithDeps(out io.Writer, scenePath string, opts engine.Options, store *machine.Store, run sceneRun) error {
+func newDepsExec(out io.Writer, store *machine.Store, run sceneRun) (*depsExec, error) {
 	if store == nil {
 		var err error
 		store, err = machine.DefaultStore()
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if out == nil {
 		out = os.Stdout
 	}
-	if run == nil {
-		run = runScene
+	return &depsExec{Store: store, Out: out, Run: run}, nil
+}
+
+func runWithDeps(out io.Writer, scenePath string, opts engine.Options, store *machine.Store, run sceneRun) error {
+	d, err := newDepsExec(out, store, run)
+	if err != nil {
+		return err
 	}
-	exec := depsExec{Store: store, Out: out, Run: run, Lock: store.LockMany}
-	return exec.run(scenePath, opts)
+	return d.run(scenePath, opts)
 }
 
 func (d *depsExec) run(scenePath string, opts engine.Options) error {
@@ -55,162 +65,27 @@ func (d *depsExec) run(scenePath string, opts engine.Options) error {
 	if err != nil {
 		return err
 	}
-	writeDepsPlan(d.Out, plan)
-	for _, w := range plan.Warnings {
-		fmt.Fprintf(d.Out, ">> warning: %s: %s\n", w.Path, w.Error)
-	}
-
-	if plan.AdoptSnapshot != "" && opts.ConfirmAdopt != nil {
-		if err := opts.ConfirmAdopt(plan.AdoptSnapshot); err != nil {
-			if takeInterrupted(err, opts.Context) {
-				return interrupted(err)
-			}
-			return err
-		}
-		opts.ConfirmAdopt = func(string) error { return nil }
-	}
-
-	reserved := map[string]bool{}
-	var names []string
-	for _, st := range plan.Stages {
-		if st == "" {
-			continue
-		}
-		reserved[st] = true
-		names = append(names, st)
-	}
-	if len(names) > 0 {
-		lock := d.Lock
-		if lock == nil {
-			lock = d.Store.LockMany
-		}
-		release, err := lock(names...)
-		if err != nil {
-			return err
-		}
-		defer release()
-	}
-	opts.ReservedStages = reserved
-
-	before := snapshotImages(d.Store, plan.Stages)
-	var mu sync.Mutex
-	var ran []string
-	var failed string
-	var failErr error
-	started := map[string]bool{}
-	var midStep string
-	var interruptedID string
-	var interruptedBefore string
-	var reportOnce sync.Once
-	printReport := func() {
-		reportOnce.Do(func() {
-			mu.Lock()
-			defer mu.Unlock()
-			for _, id := range ran {
-				fmt.Fprintf(d.Out, ">> ran %s\n", id)
-			}
-			if interruptedID != "" {
-				fmt.Fprintf(d.Out, ">> interrupted %s\n", interruptedID)
-			}
-			if interruptedBefore != "" {
-				fmt.Fprintf(d.Out, ">> interrupted before %s\n", interruptedBefore)
-			}
-			if failed != "" {
-				fmt.Fprintf(d.Out, ">> failed %s: %v\n", failed, failErr)
-			}
-			for _, step := range plan.Steps {
-				if step.ID == failed || step.ID == interruptedID {
-					continue
-				}
-				if started[step.ID] && step.ID != interruptedBefore {
-					continue
-				}
-				fmt.Fprintf(d.Out, ">> not run %s\n", step.ID)
-			}
-			for _, s := range savedSince(d.Store, plan.Stages, before) {
-				fmt.Fprintf(d.Out, ">> saved %s %s %s\n", s.stage, s.snapshot, s.image)
-			}
-		})
-	}
-
-	prevInterrupt := opts.OnInterrupt
-	opts.OnInterrupt = func() {
-		mu.Lock()
-		if midStep != "" && interruptedID == "" {
-			interruptedID = midStep
-		}
-		mu.Unlock()
-		printReport()
-		if prevInterrupt != nil {
-			prevInterrupt()
-		}
-	}
-
-	ctx := opts.Context
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	for _, step := range plan.Steps {
-		if err := ctx.Err(); err != nil {
-			mu.Lock()
-			interruptedBefore = step.ID
-			failErr = interrupted(err)
-			mu.Unlock()
-			break
-		}
-		stepOpts := opts
-		if !step.Requested {
-			stepOpts.Adopt = false
-			stepOpts.ConfirmAdopt = nil
-		}
-		mu.Lock()
-		started[step.ID] = true
-		midStep = step.ID
-		mu.Unlock()
-		err := d.Run(step.Path, stepOpts)
-		mu.Lock()
-		midStep = ""
-		if interruptedID == step.ID || takeInterrupted(err, ctx) {
-			if interruptedID == "" {
-				interruptedID = step.ID
-			}
-			if failErr == nil {
-				failErr = interrupted(err)
-			}
-			mu.Unlock()
-			break
-		}
-		if err != nil {
-			failErr = err
-			failed = step.ID
-			mu.Unlock()
-			break
-		}
-		ran = append(ran, step.ID)
-		mu.Unlock()
-	}
-
-	printReport()
-	if failErr != nil {
-		return failErr
-	}
-	return nil
+	return d.schedule(plan, opts, "with-deps")
 }
 
-func writeDepsPlan(out io.Writer, plan *workspace.Plan) {
-	fmt.Fprintln(out, ">> with-deps")
-	for _, s := range plan.Steps {
-		rel := s.ProjectRel
-		if rel == "" {
-			rel = "."
-		}
-		stage := s.Stage
-		if stage == "" {
-			stage = "-"
-		}
-		fmt.Fprintf(out, "  %s  %s  %s  %s\n", s.Scene, rel, stage, s.Reason)
+func (d *depsExec) runStale(dir string, opts engine.Options) error {
+	if dir == "" {
+		dir = "."
 	}
+	kind := workspace.KindPlay
+	if !opts.Record {
+		kind = workspace.KindRehearse
+	}
+	plan, err := workspace.PlanStale(workspace.DepsOptions{
+		Options:      workspace.Options{Dir: dir, Store: d.Store},
+		Kind:         kind,
+		Adopt:        opts.Adopt,
+		ReplaceState: opts.ReplaceState,
+	})
+	if err != nil {
+		return err
+	}
+	return d.schedule(plan, opts, "stale")
 }
 
 type savedSnap struct {

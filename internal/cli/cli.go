@@ -179,46 +179,192 @@ func listProject(out io.Writer, p *scene.Project) error {
 }
 
 func playCmd() *cobra.Command {
-	var adopt, withDeps bool
+	var adopt, withDeps, jsonOut, adoptConfirmed bool
+	var jobs, reservedFD, progressFD int
+	var staleDir, reservedStage string
 	c := &cobra.Command{
-		Use:   "play SCENE",
+		Use:   "play [SCENE]",
 		Short: "Stage the scene, record it, and write an mp4",
-		Args:  cobra.ExactArgs(1),
+		Args:  playRehearseArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			opts := engine.Options{Context: c.Context(), Record: true, Speed: 1, Adopt: adopt}
-			if adopt {
+			if err := applyInternalChild(&opts, reservedStage, reservedFD, progressFD, adoptConfirmed); err != nil {
+				return err
+			}
+			if err := requireSchedulerFlags(c, withDeps); err != nil {
+				return err
+			}
+			if adopt && !adoptConfirmed {
 				opts.ConfirmAdopt = func(snapshot string) error {
-					return confirmSnapshotName(c.Context(), c.InOrStdin(), c.ErrOrStderr(), snapshot)
+					return confirmAdoptNames(c.Context(), c.InOrStdin(), c.ErrOrStderr(), snapshot)
 				}
 			}
+			d, err := newDepsExec(c.OutOrStdout(), nil, nil)
+			if err != nil {
+				return err
+			}
+			d.Jobs = jobs
+			d.JSON = jsonOut
+			if c.Flags().Changed("stale") {
+				if withDeps {
+					return fmt.Errorf("--stale cannot be used with --with-deps")
+				}
+				return d.runStale(staleDir, opts)
+			}
 			if withDeps {
-				return runWithDeps(c.OutOrStdout(), args[0], opts, nil, nil)
+				return d.run(args[0], opts)
 			}
 			return runScene(args[0], opts)
 		},
 	}
 	c.Flags().BoolVar(&adopt, "adopt", false, "replace a snapshot that has no origin after typing its name")
 	c.Flags().BoolVar(&withDeps, "with-deps", false, "record stale or missing producers first")
+	c.Flags().StringVar(&staleDir, "stale", "", "record every stale or missing scene in DIR")
+	if f := c.Flags().Lookup("stale"); f != nil {
+		f.NoOptDefVal = "."
+	}
+	c.Flags().IntVar(&jobs, "jobs", 0, "limit concurrent takes (0 = host budget only)")
+	c.Flags().BoolVar(&jsonOut, "json", false, "emit job.progress lines and a final JSON report")
+	c.Flags().StringVar(&reservedStage, "internal-reserved-stage", "", "")
+	c.Flags().IntVar(&reservedFD, "internal-reserved-fd", -1, "")
+	c.Flags().IntVar(&progressFD, "internal-progress-fd", -1, "")
+	c.Flags().BoolVar(&adoptConfirmed, "internal-adopt-confirmed", false, "")
+	_ = c.Flags().MarkHidden("internal-reserved-stage")
+	_ = c.Flags().MarkHidden("internal-reserved-fd")
+	_ = c.Flags().MarkHidden("internal-progress-fd")
+	_ = c.Flags().MarkHidden("internal-adopt-confirmed")
 	return c
 }
 
 func rehearseCmd() *cobra.Command {
-	var replaceState, withDeps bool
+	var replaceState, withDeps, jsonOut, adoptConfirmed bool
+	var jobs, reservedFD, progressFD int
+	var staleDir, reservedStage string
 	c := &cobra.Command{
-		Use:   "rehearse SCENE",
+		Use:   "rehearse [SCENE]",
 		Short: "Dry-run the scene fast, without recording",
-		Args:  cobra.ExactArgs(1),
+		Args:  playRehearseArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			opts := engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed, ReplaceState: replaceState}
+			if err := applyInternalChild(&opts, reservedStage, reservedFD, progressFD, adoptConfirmed); err != nil {
+				return err
+			}
+			if err := requireSchedulerFlags(c, withDeps); err != nil {
+				return err
+			}
+			d, err := newDepsExec(c.OutOrStdout(), nil, nil)
+			if err != nil {
+				return err
+			}
+			d.Jobs = jobs
+			d.JSON = jsonOut
+			if c.Flags().Changed("stale") {
+				if withDeps {
+					return fmt.Errorf("--stale cannot be used with --with-deps")
+				}
+				return d.runStale(staleDir, opts)
+			}
 			if withDeps {
-				return runWithDeps(c.OutOrStdout(), args[0], opts, nil, nil)
+				return d.run(args[0], opts)
 			}
 			return runScene(args[0], opts)
 		},
 	}
 	c.Flags().BoolVar(&replaceState, "replace-state", false, "let a rehearsal replace a snapshot a recording made")
 	c.Flags().BoolVar(&withDeps, "with-deps", false, "rehearse stale or missing producers first")
+	c.Flags().StringVar(&staleDir, "stale", "", "rehearse every stale or missing scene in DIR")
+	if f := c.Flags().Lookup("stale"); f != nil {
+		f.NoOptDefVal = "."
+	}
+	c.Flags().IntVar(&jobs, "jobs", 0, "limit concurrent takes (0 = host budget only)")
+	c.Flags().BoolVar(&jsonOut, "json", false, "emit job.progress lines and a final JSON report")
+	c.Flags().StringVar(&reservedStage, "internal-reserved-stage", "", "")
+	c.Flags().IntVar(&reservedFD, "internal-reserved-fd", -1, "")
+	c.Flags().IntVar(&progressFD, "internal-progress-fd", -1, "")
+	c.Flags().BoolVar(&adoptConfirmed, "internal-adopt-confirmed", false, "")
+	_ = c.Flags().MarkHidden("internal-reserved-stage")
+	_ = c.Flags().MarkHidden("internal-reserved-fd")
+	_ = c.Flags().MarkHidden("internal-progress-fd")
+	_ = c.Flags().MarkHidden("internal-adopt-confirmed")
 	return c
+}
+
+func requireSchedulerFlags(cmd *cobra.Command, withDeps bool) error {
+	if !cmd.Flags().Changed("jobs") && !cmd.Flags().Changed("json") {
+		return nil
+	}
+	if withDeps || cmd.Flags().Changed("stale") {
+		return nil
+	}
+	return fmt.Errorf("--jobs and --json require --with-deps or --stale")
+}
+
+func playRehearseArgs(cmd *cobra.Command, args []string) error {
+	if cmd.Flags().Changed("stale") {
+		if cmd.Flags().Changed("with-deps") {
+			return fmt.Errorf("--stale cannot be used with --with-deps")
+		}
+		return cobra.NoArgs(cmd, args)
+	}
+	return cobra.ExactArgs(1)(cmd, args)
+}
+
+func confirmAdoptNames(ctx context.Context, in io.Reader, errOut io.Writer, snapshot string) error {
+	names := strings.Fields(snapshot)
+	if len(names) <= 1 {
+		return confirmSnapshotName(ctx, in, errOut, snapshot)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return interrupted(err)
+	}
+	fmt.Fprintf(errOut, "Replace snapshots %s? Type their names: ", strings.Join(names, ", "))
+	type readResult struct {
+		line string
+		err  error
+	}
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(in).ReadString('\n')
+		ch <- readResult{line: line, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return interrupted(ctx.Err())
+	case got := <-ch:
+		if got.err != nil {
+			return got.err
+		}
+		gotNames := strings.Fields(got.line)
+		if !sameNameSet(gotNames, names) {
+			return errors.New("adoption cancelled")
+		}
+		return nil
+	}
+}
+
+func sameNameSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	need := map[string]int{}
+	for _, n := range want {
+		need[n]++
+	}
+	for _, n := range got {
+		need[n]--
+		if need[n] < 0 {
+			return false
+		}
+	}
+	for _, n := range need {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func confirmSnapshotName(ctx context.Context, in io.Reader, errOut io.Writer, snapshot string) error {

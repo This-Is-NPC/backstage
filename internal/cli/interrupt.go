@@ -3,9 +3,28 @@ package cli
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 const interruptExitCode = 130
+
+// parentInterruptGrace is how long finishJob waits for the parent's
+// context to cancel after a child exits 130 or dies on SIGINT/SIGTERM.
+// A real Ctrl-C hits the whole process group before the parent's
+// NotifyContext runs; without this window the child would be a run failure.
+const parentInterruptGrace = 500 * time.Millisecond
+
+func waitParentInterrupt(ctx context.Context, grace time.Duration) {
+	if ctx == nil || ctx.Err() != nil || grace <= 0 {
+		return
+	}
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+}
 
 type interruptError struct {
 	err error
