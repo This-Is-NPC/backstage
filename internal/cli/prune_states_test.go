@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -9,7 +10,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/workspace"
@@ -386,20 +389,80 @@ func TestPruneStatesLocksStageAndImageCatalog(t *testing.T) {
 		"old-theme": {Project: dir, Scene: "theme", Take: machine.TakeRecording, Image: pruneOld},
 		"ready":     {Project: dir, Scene: "setup", Take: machine.TakeRecording, Image: pruneReady},
 	})
-	var locked []string
+	var locks [][]string
 	_, err := runPrune(t, pruneStatesExec{
 		Store:  store,
 		Delete: recordDelete(new([]string), mgr),
 		Lock: func(names ...string) (func(), error) {
-			locked = append([]string{}, names...)
+			locks = append(locks, append([]string{}, names...))
+			return func() {}, nil
+		},
+		WaitCatalog: func(context.Context) (func(), error) {
+			locks = append(locks, []string{"image-catalog"})
 			return func() {}, nil
 		},
 	}, "demo", dir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(locked) != 2 || !containsName(locked, "demo") || !containsName(locked, "image-catalog") {
-		t.Fatalf("locks %v", locked)
+	if len(locks) < 2 || len(locks[0]) != 1 || locks[0][0] != "demo" {
+		t.Fatalf("stage lock first: %v", locks)
+	}
+	if !containsName(locks[0], "image-catalog") {
+		// evaluate/plan must not take the catalog
+	} else {
+		t.Fatalf("evaluate held catalog: %v", locks[0])
+	}
+	foundCat := false
+	for _, call := range locks[1:] {
+		if len(call) == 1 && call[0] == "image-catalog" {
+			foundCat = true
+		}
+		if containsName(call, "demo") && containsName(call, "image-catalog") {
+			t.Fatalf("catalog bundled with stage: %v", locks)
+		}
+	}
+	if !foundCat {
+		t.Fatalf("no per-delete catalog lock: %v", locks)
+	}
+}
+
+func TestPruneStatesEvaluateWhileCatalogHeld(t *testing.T) {
+	dir, store, mgr := pruneWorkspace(t)
+	writePruneScene(t, dir, "setup", pruneClean("setup", "", "ready"))
+	savePruneStage(t, store, map[string]string{"initial": pruneInitial, "old-theme": pruneOld, "ready": pruneReady}, map[string]machine.SnapshotOrigin{
+		"old-theme": {Project: dir, Scene: "theme", Take: machine.TakeRecording, Image: pruneOld},
+		"ready":     {Project: dir, Scene: "setup", Take: machine.TakeRecording, Image: pruneReady},
+	})
+	hold, err := store.LockMany("image-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold()
+	done := make(chan error, 1)
+	go func() {
+		_, err := runPrune(t, pruneStatesExec{
+			Store:  store,
+			Delete: recordDelete(new([]string), mgr),
+			Lock: func(names ...string) (func(), error) {
+				if containsName(names, "image-catalog") {
+					return nil, errors.New("evaluate held image-catalog")
+				}
+				return func() {}, nil
+			},
+			WaitCatalog: func(context.Context) (func(), error) {
+				return func() {}, nil
+			},
+		}, "demo", dir, false)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("evaluate waited on catalog")
 	}
 }
 
@@ -452,6 +515,151 @@ func TestPruneStatesStopsAtFirstFailure(t *testing.T) {
 	}
 	if report.CleanupWarnings == nil {
 		t.Fatal("cleanup-warnings must be a string list")
+	}
+}
+
+func TestPruneStatesCatalogWaitFailureListsSnapshotOnce(t *testing.T) {
+	dir, store, _ := pruneWorkspace(t)
+	writePruneScene(t, dir, "setup", pruneClean("setup", "", "ready"))
+	savePruneStage(t, store, map[string]string{"initial": pruneInitial, "old-a": pruneOld, "old-b": pruneHand, "ready": pruneReady}, map[string]machine.SnapshotOrigin{
+		"old-a": {Project: dir, Scene: "theme", Take: machine.TakeRecording, Image: pruneOld},
+		"old-b": {Project: dir, Scene: "gone", Take: machine.TakeRecording, Image: pruneHand},
+		"ready": {Project: dir, Scene: "setup", Take: machine.TakeRecording, Image: pruneReady},
+	})
+	jsonOut, _, err := runPruneFull(t, pruneStatesExec{
+		Store: store,
+		Lock:  func(...string) (func(), error) { return func() {}, nil },
+		WaitCatalog: func(context.Context) (func(), error) {
+			return nil, errors.New("catalog busy")
+		},
+		Delete: func(*machine.Record, string) (string, error) {
+			t.Fatal("delete ran after catalog wait failed")
+			return "", nil
+		},
+	}, []string{"--json", "--workspace", dir, "demo"})
+	if err == nil || !strings.Contains(err.Error(), "catalog busy") {
+		t.Fatalf("err %v", err)
+	}
+	report := decodePruneReport(t, jsonOut)
+	if report.Failed == nil || report.Failed.Snapshot != "old-a" || report.Failed.Error != "catalog busy" {
+		t.Fatalf("failed: %#v", report.Failed)
+	}
+	if !slices.Equal(report.NotAttempted, []string{"old-b"}) {
+		t.Fatalf("not-attempted: %v", report.NotAttempted)
+	}
+	for _, name := range report.NotAttempted {
+		if name == "old-a" {
+			t.Fatal("failed snapshot also listed as not-attempted")
+		}
+	}
+}
+
+func TestPruneStatesReleasesCatalogBetweenDeletes(t *testing.T) {
+	dir, store, mgr := pruneWorkspace(t)
+	writePruneScene(t, dir, "setup", pruneClean("setup", "", "ready"))
+	savePruneStage(t, store, map[string]string{"initial": pruneInitial, "old-a": pruneOld, "old-b": pruneHand, "ready": pruneReady}, map[string]machine.SnapshotOrigin{
+		"old-a": {Project: dir, Scene: "theme", Take: machine.TakeRecording, Image: pruneOld},
+		"old-b": {Project: dir, Scene: "gone", Take: machine.TakeRecording, Image: pruneHand},
+		"ready": {Project: dir, Scene: "setup", Take: machine.TakeRecording, Image: pruneReady},
+	})
+	var deletes atomic.Int32
+	var waits atomic.Int32
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstReturned := make(chan struct{})
+	betweenGot := make(chan struct{})
+	betweenReleased := make(chan struct{})
+	secondStarted := make(chan struct{})
+	errc := make(chan error, 1)
+	go func() {
+		_, err := runPrune(t, pruneStatesExec{
+			Store: store,
+			Lock:  store.LockMany,
+			WaitCatalog: func(ctx context.Context) (func(), error) {
+				n := waits.Add(1)
+				if n >= 2 {
+					select {
+					case <-betweenGot:
+					case <-time.After(2 * time.Second):
+						return nil, errors.New("catalog not released between deletes")
+					}
+					<-betweenReleased
+				}
+				return store.LockWait(ctx, "image-catalog")
+			},
+			Delete: func(r *machine.Record, name string) (string, error) {
+				n := deletes.Add(1)
+				if n == 1 {
+					close(firstEntered)
+					<-releaseFirst
+					warn, err := mgr.DeleteSnapshot(r, name)
+					close(firstReturned)
+					return warn, err
+				}
+				close(secondStarted)
+				return mgr.DeleteSnapshot(r, name)
+			},
+		}, "demo", dir, false)
+		errc <- err
+	}()
+	select {
+	case <-firstEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first delete did not start")
+	}
+	if rel, err := store.LockMany("image-catalog"); err == nil {
+		rel()
+		t.Fatal("catalog was free during the first delete")
+	} else if !errors.Is(err, machine.ErrBusy) {
+		t.Fatalf("during first delete: %v", err)
+	}
+	close(releaseFirst)
+	select {
+	case <-firstReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first delete did not return")
+	}
+	deadline := time.After(2 * time.Second)
+	var rel func()
+	for {
+		var err error
+		rel, err = store.LockMany("image-catalog")
+		if err == nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("LockMany did not get image-catalog between deletes")
+		case <-secondStarted:
+			t.Fatal("second delete started before the inter-delete lock")
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	close(betweenGot)
+	select {
+	case <-secondStarted:
+		rel()
+		t.Fatal("second delete started while the inter-delete lock was held")
+	default:
+	}
+	rel()
+	close(betweenReleased)
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("prune did not finish")
+	}
+	select {
+	case <-secondStarted:
+	default:
+		t.Fatal("second delete never ran")
+	}
+	if deletes.Load() != 2 || waits.Load() != 2 {
+		t.Fatalf("deletes=%d waits=%d", deletes.Load(), waits.Load())
 	}
 }
 

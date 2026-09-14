@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,11 +20,12 @@ const missingProjectHint = "use --include-missing-projects to remove snapshots f
 type pruneDelete func(r *machine.Record, name string) (string, error)
 
 type pruneStatesExec struct {
-	Store  *machine.Store
-	Delete pruneDelete
-	Lock   func(names ...string) (func(), error)
-	Out    io.Writer
-	Err    io.Writer
+	Store       *machine.Store
+	Delete      pruneDelete
+	Lock        func(names ...string) (func(), error)
+	WaitCatalog func(ctx context.Context) (func(), error)
+	Out         io.Writer
+	Err         io.Writer
 }
 
 func stagePruneStatesCmd() *cobra.Command {
@@ -69,6 +71,11 @@ func pruneStatesCmd(x pruneStatesExec) *cobra.Command {
 			if x.Lock == nil {
 				x.Lock = x.Store.LockMany
 			}
+			if x.WaitCatalog == nil {
+				x.WaitCatalog = func(ctx context.Context) (func(), error) {
+					return x.Store.LockWait(ctx, "image-catalog")
+				}
+			}
 			if x.Delete == nil {
 				m, err := machine.New()
 				if err != nil {
@@ -77,7 +84,7 @@ func pruneStatesCmd(x pruneStatesExec) *cobra.Command {
 				m.Store = x.Store
 				x.Delete = m.DeleteSnapshot
 			}
-			return x.run(args[0], workspaceDir, dryRun, asJSON, includeMissing)
+			return x.run(c.Context(), args[0], workspaceDir, dryRun, asJSON, includeMissing)
 		},
 	}
 	c.Flags().StringVar(&workspaceDir, "workspace", "", "workspace directory (same discovery as status)")
@@ -132,7 +139,12 @@ func (x pruneStatesExec) failDoc(stage string, asJSON bool, err error) error {
 	return err
 }
 
-func (x pruneStatesExec) run(stage, dir string, dryRun, asJSON, includeMissing bool) error {
+func (x pruneStatesExec) run(ctx context.Context, stage, dir string, dryRun, asJSON, includeMissing bool) error {
+	if x.WaitCatalog == nil {
+		x.WaitCatalog = func(ctx context.Context) (func(), error) {
+			return x.Store.LockWait(ctx, "image-catalog")
+		}
+	}
 	if dir == "" {
 		return x.failDoc(stage, asJSON, errors.New("prune-states requires --workspace"))
 	}
@@ -153,7 +165,7 @@ func (x pruneStatesExec) run(stage, dir string, dryRun, asJSON, includeMissing b
 		return x.finishReport(writePruneReport(x.Out, asJSON, pruneReportFrom(stage, true, ev.PlanPrune(stage, rec, workspace.PruneOptions{IncludeMissingProjects: includeMissing}), nil, nil, nil)))
 	}
 
-	release, err := x.Lock(stage, "image-catalog")
+	release, err := x.Lock(stage)
 	if err != nil {
 		return x.failDoc(stage, asJSON, err)
 	}
@@ -169,7 +181,14 @@ func (x pruneStatesExec) run(stage, dir string, dryRun, asJSON, includeMissing b
 	plan := ev.PlanPrune(stage, rec, workspace.PruneOptions{IncludeMissingProjects: includeMissing})
 	var warnings []string
 	for i, d := range plan.Remove {
+		cat, err := x.WaitCatalog(ctx)
+		if err != nil {
+			report := pruneReportFrom(stage, false, workspace.PrunePlan{Remove: removedSoFar(plan, d), Keep: plan.Keep}, warnings, &pruneFailure{Snapshot: d.Snapshot, Error: err.Error()}, notAttempted(plan.Remove, i+1))
+			_ = writePruneReport(x.Out, asJSON, report)
+			return x.fail(err)
+		}
 		warn, err := x.Delete(rec, d.Snapshot)
+		cat()
 		if err != nil {
 			report := pruneReportFrom(stage, false, workspace.PrunePlan{Remove: removedSoFar(plan, d), Keep: plan.Keep}, warnings, &pruneFailure{Snapshot: d.Snapshot, Error: err.Error()}, notAttempted(plan.Remove, i+1))
 			_ = writePruneReport(x.Out, asJSON, report)
