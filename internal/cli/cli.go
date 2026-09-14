@@ -16,8 +16,10 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/This-Is-NPC/backstage/internal/engine"
+	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/production"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 	"github.com/This-Is-NPC/backstage/internal/scene"
@@ -180,15 +182,20 @@ func listProject(out io.Writer, p *scene.Project) error {
 
 func playCmd() *cobra.Command {
 	var adopt, withDeps, jsonOut, adoptConfirmed, stale bool
-	var jobs, reservedFD, progressFD int
-	var reservedStage string
+	var jobs, progressFD int
+	var reservedStages []string
+	var reservedFDs []int
+	var stateGen string
 	c := &cobra.Command{
 		Use:   "play [SCENE | --stale [DIR]]",
 		Short: "Stage the scene, record it, and write an mp4",
 		Args:  playRehearseArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			opts := engine.Options{Context: c.Context(), Record: true, Speed: 1, Adopt: adopt}
-			if err := applyInternalChild(&opts, reservedStage, reservedFD, progressFD, adoptConfirmed); err != nil {
+			if err := refuseSchedulerChildFlags(c, withDeps); err != nil {
+				return err
+			}
+			if err := applyInternalChild(&opts, reservedStages, reservedFDs, progressFD, adoptConfirmed, stateGen); err != nil {
 				return err
 			}
 			if err := requireSchedulerFlags(c, withDeps); err != nil {
@@ -226,28 +233,35 @@ func playCmd() *cobra.Command {
 	c.Flags().BoolVar(&stale, "stale", false, "record every stale or missing scene; optional DIR argument defaults to .")
 	c.Flags().IntVar(&jobs, "jobs", 0, "limit concurrent takes (0 = host budget only)")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit job.progress lines and a final JSON report")
-	c.Flags().StringVar(&reservedStage, "internal-reserved-stage", "", "")
-	c.Flags().IntVar(&reservedFD, "internal-reserved-fd", -1, "")
+	c.Flags().StringArrayVar(&reservedStages, "internal-reserved-stage", nil, "")
+	c.Flags().IntSliceVar(&reservedFDs, "internal-reserved-fd", nil, "")
 	c.Flags().IntVar(&progressFD, "internal-progress-fd", -1, "")
+	c.Flags().StringVar(&stateGen, "internal-state-generation", "", "")
 	c.Flags().BoolVar(&adoptConfirmed, "internal-adopt-confirmed", false, "")
 	_ = c.Flags().MarkHidden("internal-reserved-stage")
 	_ = c.Flags().MarkHidden("internal-reserved-fd")
 	_ = c.Flags().MarkHidden("internal-progress-fd")
+	_ = c.Flags().MarkHidden("internal-state-generation")
 	_ = c.Flags().MarkHidden("internal-adopt-confirmed")
 	return c
 }
 
 func rehearseCmd() *cobra.Command {
 	var replaceState, withDeps, jsonOut, adoptConfirmed, stale bool
-	var jobs, reservedFD, progressFD int
-	var reservedStage string
+	var jobs, progressFD int
+	var reservedStages []string
+	var reservedFDs []int
+	var stateGen string
 	c := &cobra.Command{
 		Use:   "rehearse [SCENE | --stale [DIR]]",
 		Short: "Dry-run the scene fast, without recording",
 		Args:  playRehearseArgs,
 		RunE: func(c *cobra.Command, args []string) error {
 			opts := engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed, ReplaceState: replaceState}
-			if err := applyInternalChild(&opts, reservedStage, reservedFD, progressFD, adoptConfirmed); err != nil {
+			if err := refuseSchedulerChildFlags(c, withDeps); err != nil {
+				return err
+			}
+			if err := applyInternalChild(&opts, reservedStages, reservedFDs, progressFD, adoptConfirmed, stateGen); err != nil {
 				return err
 			}
 			if err := requireSchedulerFlags(c, withDeps); err != nil {
@@ -280,15 +294,58 @@ func rehearseCmd() *cobra.Command {
 	c.Flags().BoolVar(&stale, "stale", false, "rehearse every stale or missing scene; optional DIR argument defaults to .")
 	c.Flags().IntVar(&jobs, "jobs", 0, "limit concurrent takes (0 = host budget only)")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit job.progress lines and a final JSON report")
-	c.Flags().StringVar(&reservedStage, "internal-reserved-stage", "", "")
-	c.Flags().IntVar(&reservedFD, "internal-reserved-fd", -1, "")
+	c.Flags().StringArrayVar(&reservedStages, "internal-reserved-stage", nil, "")
+	c.Flags().IntSliceVar(&reservedFDs, "internal-reserved-fd", nil, "")
 	c.Flags().IntVar(&progressFD, "internal-progress-fd", -1, "")
+	c.Flags().StringVar(&stateGen, "internal-state-generation", "", "")
 	c.Flags().BoolVar(&adoptConfirmed, "internal-adopt-confirmed", false, "")
 	_ = c.Flags().MarkHidden("internal-reserved-stage")
 	_ = c.Flags().MarkHidden("internal-reserved-fd")
 	_ = c.Flags().MarkHidden("internal-progress-fd")
+	_ = c.Flags().MarkHidden("internal-state-generation")
 	_ = c.Flags().MarkHidden("internal-adopt-confirmed")
 	return c
+}
+
+func changedInternalFlags(cmd *cobra.Command) []string {
+	var names []string
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if strings.HasPrefix(f.Name, "internal-") && f.Changed {
+			names = append(names, f.Name)
+		}
+	})
+	sort.Strings(names)
+	return names
+}
+
+func refuseSchedulerChildFlags(cmd *cobra.Command, withDeps bool) error {
+	names := changedInternalFlags(cmd)
+	if len(names) == 0 {
+		return nil
+	}
+	if cmd.Flags().Changed("internal-state-generation") {
+		gen, err := cmd.Flags().GetString("internal-state-generation")
+		if err != nil {
+			return err
+		}
+		if gen != "" && !engine.ValidStateGeneration(gen) {
+			return fmt.Errorf("internal-state-generation: must be 32 lowercase hex digits")
+		}
+	}
+	if withDeps || cmd.Flags().Changed("stale") {
+		return fmt.Errorf("--%s cannot be used with --with-deps or --stale", names[0])
+	}
+	var payload []string
+	for _, name := range names {
+		if name == "internal-reserved-stage" || name == "internal-reserved-fd" {
+			continue
+		}
+		payload = append(payload, name)
+	}
+	if len(payload) > 0 && (!cmd.Flags().Changed("internal-reserved-stage") || !cmd.Flags().Changed("internal-reserved-fd")) {
+		return fmt.Errorf("--%s requires --internal-reserved-stage and --internal-reserved-fd", payload[0])
+	}
+	return nil
 }
 
 func requireSchedulerFlags(cmd *cobra.Command, withDeps bool) error {
@@ -495,6 +552,16 @@ func runScene(scenePath string, opts engine.Options) error {
 	if err := s.Validate(p); err != nil {
 		return err
 	}
+	if err := requireGenerationLock(p, s, opts); err != nil {
+		return err
+	}
+	release, err := reserveSceneStages(p, s, &opts)
+	if err != nil {
+		return err
+	}
+	if release != nil {
+		defer release()
+	}
 	eng, err := engine.NewForScene(p, s)
 	if err != nil {
 		return err
@@ -503,6 +570,64 @@ func runScene(scenePath string, opts engine.Options) error {
 		opts.Version = binVersion
 	}
 	return eng.Run(s, opts)
+}
+
+func requireGenerationLock(p *scene.Project, s *scene.Scene, opts engine.Options) error {
+	if opts.StateGeneration != "" && !engine.ValidStateGeneration(opts.StateGeneration) {
+		return fmt.Errorf("internal-state-generation: must be 32 lowercase hex digits")
+	}
+	if opts.StateGeneration == "" && len(opts.ReservedStages) == 0 {
+		return nil
+	}
+	if s.VM == "" {
+		return fmt.Errorf("internal child flags require a reserved lock on the scene stage")
+	}
+	cfg := p.VMs[s.VM]
+	if cfg.Stage == "" {
+		return fmt.Errorf("internal child flags require a reserved lock on the scene stage")
+	}
+	if !opts.ReservedStages[cfg.Stage] {
+		if opts.StateGeneration != "" {
+			return fmt.Errorf("internal-state-generation requires a reserved lock on %s", cfg.Stage)
+		}
+		return fmt.Errorf("internal child flags require a reserved lock on %s", cfg.Stage)
+	}
+	return nil
+}
+
+func reserveSceneStages(p *scene.Project, s *scene.Scene, opts *engine.Options) (func(), error) {
+	names := scene.StartGroupStages(p, s)
+	if len(names) == 0 {
+		return nil, nil
+	}
+	var missing []string
+	for _, name := range names {
+		if opts.ReservedStages[name] {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if len(missing) == 0 {
+		return nil, nil
+	}
+	store, err := machine.DefaultStore()
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Init(); err != nil {
+		return nil, err
+	}
+	release, err := store.LockMany(missing...)
+	if err != nil {
+		return nil, err
+	}
+	if opts.ReservedStages == nil {
+		opts.ReservedStages = map[string]bool{}
+	}
+	for _, name := range missing {
+		opts.ReservedStages[name] = true
+	}
+	return release, nil
 }
 
 // loadProjectFrom resolves a project config from an explicit dir or by searching

@@ -51,6 +51,7 @@ type jobSpec struct {
 	Step     workspace.PlanStep
 	Opts     engine.Options
 	Lock     *os.File
+	Locks    map[string]*os.File
 	Progress *os.File
 	Log      *os.File
 	LogPath  string
@@ -59,6 +60,7 @@ type jobSpec struct {
 type jobState struct {
 	id      string
 	step    workspace.PlanStep
+	lanes   []string
 	status  string
 	phase   string
 	host    bool
@@ -114,6 +116,9 @@ type jobReportItem struct {
 }
 
 func (d *depsExec) schedule(plan *workspace.Plan, opts engine.Options, title string) error {
+	if err := requirePlanLanes(plan); err != nil {
+		return err
+	}
 	if d.Out == nil {
 		d.Out = os.Stdout
 	}
@@ -176,6 +181,9 @@ func (d *depsExec) schedule(plan *workspace.Plan, opts engine.Options, title str
 		}
 	}
 	opts.ReservedStages = reserved
+	if opts.StateGeneration == "" {
+		opts.StateGeneration = engine.NewStateGeneration()
+	}
 
 	before := snapshotImages(d.Store, plan.Stages)
 	runID, runDir, runLock, err := d.createRunDir()
@@ -203,6 +211,7 @@ func (d *depsExec) schedule(plan *workspace.Plan, opts engine.Options, title str
 		j := &jobState{
 			id:     fmt.Sprintf("job-%d", i+1),
 			step:   step,
+			lanes:  jobLanes(step),
 			status: jobQueued,
 			host:   step.Stage == "",
 		}
@@ -295,12 +304,24 @@ func (d *depsExec) schedule(plan *workspace.Plan, opts engine.Options, title str
 		}
 		return false
 	}
-	laneBusy := func(stage string) bool {
-		if stage == "" {
-			return false
-		}
+	occupiedLanes := func() map[string]bool {
+		held := map[string]bool{}
 		for _, j := range jobs {
-			if j.step.Stage == stage && (j.status == jobRunning || j.status == jobWaiting) {
+			if j.status != jobRunning && j.status != jobWaiting {
+				continue
+			}
+			for _, lane := range j.lanes {
+				if lane != "" {
+					held[lane] = true
+				}
+			}
+		}
+		return held
+	}
+	laneBusy := func(lanes []string) bool {
+		held := occupiedLanes()
+		for _, lane := range lanes {
+			if lane != "" && held[lane] {
 				return true
 			}
 		}
@@ -426,6 +447,7 @@ func (d *depsExec) schedule(plan *workspace.Plan, opts engine.Options, title str
 		if lockByName != nil && j.step.Stage != "" {
 			spec.Lock = lockByName[j.step.Stage]
 		}
+		spec.Locks = childLocks(j.step, lockByName)
 		proc, err := launch(ctx, spec)
 		if err != nil {
 			_ = pw.Close()
@@ -479,7 +501,7 @@ func (d *depsExec) schedule(plan *workspace.Plan, opts engine.Options, title str
 				if hostBusy() {
 					continue
 				}
-				if laneBusy(j.step.Stage) {
+				if laneBusy(j.lanes) {
 					continue
 				}
 				if !budgetOK(j) {
@@ -1031,9 +1053,7 @@ func execLauncher(_ context.Context, spec jobSpec) (jobProc, error) {
 	}
 	args := []string{verb, spec.Path}
 	extra := childExtraFiles(spec)
-	if spec.Lock != nil && spec.Step.Stage != "" {
-		args = append(args, "--internal-reserved-stage", spec.Step.Stage, "--internal-reserved-fd", "3")
-	}
+	args = append(args, reservedChildArgs(spec)...)
 	if spec.Progress != nil {
 		args = append(args, "--internal-progress-fd", strconv.Itoa(3+lockExtraCount(spec)))
 	}
@@ -1059,9 +1079,88 @@ func execLauncher(_ context.Context, spec jobSpec) (jobProc, error) {
 	return &execProc{cmd: cmd, null: null}, nil
 }
 
+func requirePlanLanes(plan *workspace.Plan) error {
+	if plan == nil {
+		return nil
+	}
+	for _, step := range plan.Steps {
+		if step.Group == "" {
+			continue
+		}
+		if len(step.Lanes) == 0 {
+			return fmt.Errorf("%s: group %q missing member lanes", step.ID, step.Group)
+		}
+	}
+	return nil
+}
+
+func jobLanes(step workspace.PlanStep) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, name := range step.Lanes {
+		add(name)
+	}
+	add(step.Stage)
+	sort.Strings(out)
+	return out
+}
+
+func childLocks(step workspace.PlanStep, lockByName map[string]*os.File) map[string]*os.File {
+	out := map[string]*os.File{}
+	if lockByName == nil {
+		return out
+	}
+	for _, name := range jobLanes(step) {
+		if f := lockByName[name]; f != nil {
+			out[name] = f
+		}
+	}
+	return out
+}
+
+func reservedChildArgs(spec jobSpec) []string {
+	var args []string
+	names := make([]string, 0, len(spec.Locks))
+	for name := range spec.Locks {
+		if spec.Locks[name] != nil {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 && spec.Lock != nil && spec.Step.Stage != "" {
+		names = []string{spec.Step.Stage}
+	}
+	sort.Strings(names)
+	fd := 3
+	for _, name := range names {
+		args = append(args, "--internal-reserved-stage", name, "--internal-reserved-fd", strconv.Itoa(fd))
+		fd++
+	}
+	if spec.Opts.StateGeneration != "" {
+		args = append(args, "--internal-state-generation", spec.Opts.StateGeneration)
+	}
+	return args
+}
+
 func childExtraFiles(spec jobSpec) []*os.File {
 	var extra []*os.File
-	if spec.Lock != nil && spec.Step.Stage != "" {
+	names := make([]string, 0, len(spec.Locks))
+	for name := range spec.Locks {
+		if spec.Locks[name] != nil {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		extra = append(extra, spec.Locks[name])
+	}
+	if len(extra) == 0 && spec.Lock != nil && spec.Step.Stage != "" {
 		extra = append(extra, spec.Lock)
 	}
 	if spec.Progress != nil {
@@ -1071,10 +1170,16 @@ func childExtraFiles(spec jobSpec) []*os.File {
 }
 
 func lockExtraCount(spec jobSpec) int {
-	if spec.Lock != nil && spec.Step.Stage != "" {
+	n := 0
+	for _, f := range spec.Locks {
+		if f != nil {
+			n++
+		}
+	}
+	if n == 0 && spec.Lock != nil && spec.Step.Stage != "" {
 		return 1
 	}
-	return 0
+	return n
 }
 
 type execProc struct {
@@ -1140,16 +1245,39 @@ func attachCatalogProgress(fd int) {
 	})
 }
 
-func applyInternalChild(opts *engine.Options, stage string, lockFD, progressFD int, adoptConfirmed bool) error {
-	if stage != "" || lockFD >= 0 {
-		if err := verifyReservedStage(nil, stage, lockFD); err != nil {
+func applyInternalChild(opts *engine.Options, stages []string, lockFDs []int, progressFD int, adoptConfirmed bool, generation string) error {
+	if generation != "" {
+		if !engine.ValidStateGeneration(generation) {
+			return fmt.Errorf("internal-state-generation: must be 32 lowercase hex digits")
+		}
+		if len(stages) == 0 || len(lockFDs) == 0 {
+			return fmt.Errorf("internal-state-generation requires --internal-reserved-stage and --internal-reserved-fd")
+		}
+	}
+	if len(stages) != len(lockFDs) {
+		if len(stages) == 1 && len(lockFDs) == 0 {
+			return fmt.Errorf("reserved stage %s: missing lock fd", stages[0])
+		}
+		if len(stages) > 0 || len(lockFDs) > 0 {
+			return fmt.Errorf("reserved stage: names and fds must pair")
+		}
+	}
+	for i, stage := range stages {
+		fd := -1
+		if i < len(lockFDs) {
+			fd = lockFDs[i]
+		}
+		if err := verifyReservedStage(nil, stage, fd); err != nil {
 			return err
 		}
-		holdInternalFD(lockFD, stage)
+		holdInternalFD(fd, stage)
 		if opts.ReservedStages == nil {
 			opts.ReservedStages = map[string]bool{}
 		}
 		opts.ReservedStages[stage] = true
+	}
+	if generation != "" {
+		opts.StateGeneration = generation
 	}
 	if progressFD >= 0 {
 		attachCatalogProgress(progressFD)

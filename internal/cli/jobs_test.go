@@ -66,7 +66,7 @@ func runHoldLockHelper() int {
 
 func runSpawnSleepHelper() int {
 	opts := engine.Options{}
-	if err := applyInternalChild(&opts, "demo", 3, -1, false); err != nil {
+	if err := applyInternalChild(&opts, []string{"demo"}, []int{3}, -1, false, ""); err != nil {
 		return 1
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=TestMain")
