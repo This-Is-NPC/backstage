@@ -44,12 +44,15 @@ func TestRunCleanVMEndWritesAllTimings(t *testing.T) {
 	}
 	prev := replaceTakeState
 	replaceTakeState = func(*machine.Manager, context.Context, *machine.Record, string, machine.SnapshotOrigin, bool) (machine.ReplaceResult, error) {
+		mode, depth := "delta", 1
 		return machine.ReplaceResult{
 			Image:                &machine.Image{ID: "captured"},
 			ShutdownSeconds:      fptr(6.7),
 			CaptureSeconds:       fptr(22.4),
 			CaptureBytes:         iptr(4402343936),
 			CaptureApparentBytes: iptr(42949672960),
+			CaptureMode:          &mode,
+			ImageDepth:           &depth,
 		}, nil
 	}
 	t.Cleanup(func() { replaceTakeState = prev })
@@ -69,6 +72,12 @@ func TestRunCleanVMEndWritesAllTimings(t *testing.T) {
 	assertFloat(t, got.Timings.CaptureSeconds, 22.4)
 	if got.Timings.CaptureBytes == nil || *got.Timings.CaptureBytes != 4402343936 {
 		t.Fatalf("bytes %+v", got.Timings.CaptureBytes)
+	}
+	if got.Timings.CaptureMode == nil || *got.Timings.CaptureMode != "delta" {
+		t.Fatalf("mode %+v", got.Timings.CaptureMode)
+	}
+	if got.Timings.ImageDepth == nil || *got.Timings.ImageDepth != 1 {
+		t.Fatalf("depth %+v", got.Timings.ImageDepth)
 	}
 	if got.Timings.StagePhases["up"] != 0.2 || got.Timings.StagePhases["omarchy"] != 1.1 {
 		t.Fatalf("phases %+v", got.Timings.StagePhases)

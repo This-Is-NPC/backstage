@@ -624,6 +624,15 @@ func (e *Engine) mergeCapture(r machine.ReplaceResult) {
 	if r.CaptureApparentBytes != nil {
 		e.timings.CaptureApparentBytes = r.CaptureApparentBytes
 	}
+	if r.CaptureMode != nil {
+		e.timings.CaptureMode = r.CaptureMode
+	}
+	if r.ImageDepth != nil {
+		e.timings.ImageDepth = r.ImageDepth
+	}
+	if r.CaptureFallback != nil {
+		e.timings.CaptureFallback = r.CaptureFallback
+	}
 }
 
 func (e *Engine) logSessionTimings() {

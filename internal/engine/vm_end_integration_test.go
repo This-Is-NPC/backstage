@@ -165,7 +165,8 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 	}
 	requireProvisionTimings(t, filepath.Join(m.Store.Dir(name), "provision.log"),
 		"shutdown-seconds", "capture-seconds", "capture-bytes",
-		"restore-stop-seconds", "restore-activate-seconds", "boot-seconds", "session-seconds")
+		"restore-stop-seconds", "restore-activate-seconds", "boot-seconds", "session-seconds",
+		"capture-mode", "image-depth")
 }
 
 func logClipTimings(t *testing.T, label string, tm *facts.Timings) {
