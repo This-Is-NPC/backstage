@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/This-Is-NPC/backstage/internal/machine"
+	"github.com/This-Is-NPC/backstage/internal/scene"
 )
 
 // Status names, in evaluation precedence. The first that applies wins.
@@ -131,10 +132,23 @@ func (e *ConflictError) Error() string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-// Report discovers the workspace at Dir, loads every project whose chain
-// reaches that root, and evaluates recording scenes. Visual scenes are
-// omitted. Dir limits the printed scenes, not dependency resolution.
-func Report(opts Options) (*Result, error) {
+// Evaluation is the discovered workspace and every recording scene's
+// status. Report and --with-deps share it.
+type Evaluation struct {
+	filter   string
+	projects []*scene.Project
+	faults   []projectFault
+	warnings []Warning
+	nodes    []node
+	order    []node
+	eval     *evaluator
+	status   map[string]SceneStatus
+}
+
+// Evaluate discovers the workspace at Dir, loads every project whose
+// chain reaches that root, and evaluates recording scenes. Visual
+// scenes are omitted. Cycles and duplicate producers fail the call.
+func Evaluate(opts Options) (*Evaluation, error) {
 	dir := opts.Dir
 	if dir == "" {
 		wd, err := os.Getwd()
@@ -182,19 +196,46 @@ func Report(opts Options) (*Result, error) {
 		}
 		byID[n.id] = st
 	}
+	if warnings == nil {
+		warnings = []Warning{}
+	}
+	return &Evaluation{
+		filter:   dir,
+		projects: projects,
+		faults:   faults,
+		warnings: warnings,
+		nodes:    nodes,
+		order:    order,
+		eval:     eval,
+		status:   byID,
+	}, nil
+}
+
+// Report is the DIR-filtered status view of Evaluate.
+func Report(opts Options) (*Result, error) {
+	ev, err := Evaluate(opts)
+	if err != nil {
+		return nil, err
+	}
+	return ev.Result()
+}
+
+// Result applies the starting-directory scene filter. Errors from the
+// whole workspace stay in the list.
+func (e *Evaluation) Result() (*Result, error) {
 	var projectDirs []string
-	for _, p := range projects {
+	for _, p := range e.projects {
 		projectDirs = append(projectDirs, p.Dir)
 	}
-	for _, f := range faults {
+	for _, f := range e.faults {
 		projectDirs = append(projectDirs, f.Dir)
 	}
 	errs := []SceneStatus{}
-	for _, f := range faults {
+	for _, f := range e.faults {
 		errs = append(errs, f.status())
 	}
-	for _, n := range order {
-		st := byID[n.id]
+	for _, n := range e.order {
+		st := e.status[n.id]
 		if st.Status != Error {
 			continue
 		}
@@ -202,27 +243,24 @@ func Report(opts Options) (*Result, error) {
 		errs = append(errs, st)
 	}
 	scenes := []SceneStatus{}
-	for _, n := range order {
-		if !inScope(n.project.Dir, dir, projectDirs) {
+	for _, n := range e.order {
+		if !inScope(n.project.Dir, e.filter, projectDirs) {
 			continue
 		}
-		st := byID[n.id]
+		st := e.status[n.id]
 		if st.Status == Error {
 			continue
 		}
 		scenes = append(scenes, st)
 	}
-	labels, err := eval.labels()
+	labels, err := e.eval.labels()
 	if err != nil {
 		return nil, err
 	}
 	if labels == nil {
 		labels = []StateLabel{}
 	}
-	if warnings == nil {
-		warnings = []Warning{}
-	}
-	return &Result{Scenes: scenes, Errors: errs, States: labels, Warnings: warnings}, nil
+	return &Result{Scenes: scenes, Errors: errs, States: labels, Warnings: e.warnings}, nil
 }
 
 func (f projectFault) status() SceneStatus {

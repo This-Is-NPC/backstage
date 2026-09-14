@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -133,36 +134,89 @@ func loadRecordingScenes(root string, projects []*scene.Project) ([]node, error)
 			return nil, err
 		}
 		sort.Strings(files)
+		var batch []node
 		for _, path := range files {
 			s, err := scene.LoadScene(path)
 			if err != nil {
 				name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-				nodes = append(nodes, errorNode(root, p, &scene.Scene{Name: name}, err))
+				batch = append(batch, errorNode(root, p, &scene.Scene{Name: name}, path, err))
 				continue
 			}
 			if s.Type == "visual" {
 				continue
 			}
 			if err := s.Validate(p); err != nil {
-				nodes = append(nodes, errorNode(root, p, s, err))
+				batch = append(batch, errorNode(root, p, s, path, err))
 				continue
 			}
-			nodes = append(nodes, newNode(root, p, s))
+			batch = append(batch, newNode(root, p, s, path))
 		}
+		nodes = append(nodes, markDuplicateSceneNames(root, p, batch)...)
 	}
 	return nodes, nil
 }
 
-func errorNode(root string, p *scene.Project, s *scene.Scene, err error) node {
-	n := newNode(root, p, s)
+func markDuplicateSceneNames(root string, p *scene.Project, batch []node) []node {
+	byName := map[string][]node{}
+	for _, n := range batch {
+		if n.scene == nil || n.scene.Name == "" {
+			continue
+		}
+		byName[n.scene.Name] = append(byName[n.scene.Name], n)
+	}
+	var names []string
+	for name, group := range byName {
+		if len(group) > 1 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	msg := map[string]string{}
+	for _, name := range names {
+		var files []string
+		for _, n := range byName[name] {
+			files = append(files, sceneFileLabel(p, n.path))
+		}
+		sort.Strings(files)
+		msg[name] = fmt.Sprintf("duplicate scene name %s: %s", name, strings.Join(files, ", "))
+	}
+	out := make([]node, 0, len(batch))
+	for _, n := range batch {
+		if n.scene != nil {
+			if errText, ok := msg[n.scene.Name]; ok {
+				dup := errors.New(errText)
+				if n.loadErr != nil {
+					n.loadErr = fmt.Errorf("%s; %s", n.loadErr.Error(), errText)
+				} else {
+					n.loadErr = dup
+				}
+				n.id = n.id + "@" + filepath.Base(n.path)
+			}
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func sceneFileLabel(p *scene.Project, path string) string {
+	if p != nil {
+		if rel, err := filepath.Rel(p.Dir, path); err == nil {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(path)
+}
+
+func errorNode(root string, p *scene.Project, s *scene.Scene, path string, err error) node {
+	n := newNode(root, p, s, path)
 	n.loadErr = err
 	return n
 }
 
-func newNode(root string, p *scene.Project, s *scene.Scene) node {
+func newNode(root string, p *scene.Project, s *scene.Scene, path string) node {
 	rel := projectRel(root, p.Dir)
 	id := rel + "/" + s.Name
-	return node{id: id, project: p, scene: s, projectRel: rel}
+	return node{id: id, project: p, scene: s, projectRel: rel, path: path}
 }
 
 func projectRel(root, dir string) string {

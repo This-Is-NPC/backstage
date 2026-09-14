@@ -11,6 +11,7 @@ type node struct {
 	project    *scene.Project
 	scene      *scene.Scene
 	projectRel string
+	path       string
 	loadErr    error
 }
 

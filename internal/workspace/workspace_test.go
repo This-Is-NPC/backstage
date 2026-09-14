@@ -87,6 +87,10 @@ func reuseScene(name string) string {
 	return `{"name":"` + name + `","layout":"solo","vm":"laptop","vm-start":{"mode":"reuse"},"steps":[{"action":"wait","delay-after":0.05}]}`
 }
 
+func reuseProducer(name, end string) string {
+	return `{"name":"` + name + `","layout":"solo","vm":"laptop","vm-start":{"mode":"reuse"},"vm-end":{"snapshot":"` + end + `"},"steps":[{"action":"wait","delay-after":0.05}]}`
+}
+
 func badLayoutProducer(name, end string) string {
 	body := `{"name":"` + name + `","layout":"missing-layout","vm":"laptop","vm-start":{"mode":"clean"}`
 	if end != "" {
@@ -1241,6 +1245,140 @@ func TestInvalidConfigOnChainIsProjectError(t *testing.T) {
 	}
 	if len(limited.Scenes) != 1 || limited.Scenes[0].Scene != "use" {
 		t.Fatalf("status pt scenes: %+v", limited.Scenes)
+	}
+}
+
+func TestDuplicateSceneNameIsSceneError(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeBaseProject(t, dir)
+	writeScene(t, dir, "c", cleanScene("c", "", ""))
+	writeFile(t, filepath.Join(dir, "scenes", "c-copy.json"), cleanScene("c", "", ""))
+	writeScene(t, dir, "host", hostScene("host"))
+	res, err := Report(Options{Dir: dir, Store: store})
+	if err != nil {
+		t.Fatalf("duplicate names must be rows, not a report abort: %v", err)
+	}
+	if !res.HasError() {
+		t.Fatal("HasError")
+	}
+	var dups []SceneStatus
+	for _, st := range res.Errors {
+		if strings.Contains(st.Error, "duplicate scene name c") {
+			dups = append(dups, st)
+		}
+	}
+	if len(dups) != 2 {
+		t.Fatalf("want two duplicate-name rows: %+v", res.Errors)
+	}
+	text := dups[0].Error + dups[1].Error
+	if !strings.Contains(text, "c.json") || !strings.Contains(text, "c-copy.json") {
+		t.Fatalf("must name both files: %s", text)
+	}
+	ev, err := Evaluate(Options{Dir: dir, Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, n := range ev.nodes {
+		if n.scene == nil || n.scene.Name != "c" {
+			continue
+		}
+		base := filepath.Base(n.path)
+		if !strings.Contains(n.id, base) {
+			t.Fatalf("id %q must include %s", n.id, base)
+		}
+		if other, ok := ids[n.id]; ok {
+			t.Fatalf("duplicate id %q for %s and %s", n.id, other, n.path)
+		}
+		ids[n.id] = n.path
+	}
+	if len(ids) != 2 {
+		t.Fatalf("want two distinct ids, got %v", ids)
+	}
+	for _, s := range res.Scenes {
+		if s.Scene == "c" {
+			t.Fatal("duplicate name must live in the errors section")
+		}
+	}
+	if statusOf(t, res, "host").Scene != "host" {
+		t.Fatalf("host dropped: %+v", res.Scenes)
+	}
+}
+
+func TestDuplicateNameKeepsJSONError(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeBaseProject(t, dir)
+	writeFile(t, filepath.Join(dir, "scenes", "intro.json"), "{")
+	writeFile(t, filepath.Join(dir, "scenes", "intro-v2.json"), cleanScene("intro", "", ""))
+	ev, err := Evaluate(Options{Dir: dir, Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := ev.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.HasError() {
+		t.Fatal("HasError")
+	}
+	var broken, copy node
+	for _, n := range ev.nodes {
+		switch filepath.Base(n.path) {
+		case "intro.json":
+			broken = n
+		case "intro-v2.json":
+			copy = n
+		}
+	}
+	if broken.loadErr == nil || copy.loadErr == nil {
+		t.Fatal("both files must be scene errors")
+	}
+	got := broken.loadErr.Error()
+	if !strings.Contains(got, "duplicate scene name intro") {
+		t.Fatalf("broken json must keep the duplicate: %s", got)
+	}
+	if !strings.Contains(got, "unexpected end of JSON") && !strings.Contains(got, "invalid character") {
+		t.Fatalf("broken json must keep the syntax error: %s", got)
+	}
+	if !strings.Contains(copy.loadErr.Error(), "duplicate scene name intro") {
+		t.Fatalf("valid namesake: %v", copy.loadErr)
+	}
+}
+
+func TestDuplicateNameKeepsValidateError(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeBaseProject(t, dir)
+	writeFile(t, filepath.Join(dir, "scenes", "bad.json"), badLayoutProducer("dup", ""))
+	writeScene(t, dir, "ok", hostScene("dup"))
+	ev, err := Evaluate(Options{Dir: dir, Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := ev.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.HasError() {
+		t.Fatal("HasError")
+	}
+	var bad node
+	for _, n := range ev.nodes {
+		if filepath.Base(n.path) == "bad.json" {
+			bad = n
+		}
+	}
+	if bad.loadErr == nil {
+		t.Fatal("validate failure missing")
+	}
+	got := bad.loadErr.Error()
+	if !strings.Contains(got, "duplicate scene name dup") {
+		t.Fatalf("must keep the duplicate: %s", got)
+	}
+	if !strings.Contains(got, "layout") && !strings.Contains(got, "missing-layout") {
+		t.Fatalf("must keep the validation error: %s", got)
 	}
 }
 
