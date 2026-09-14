@@ -23,6 +23,7 @@ const (
 	ReasonUpstreamRerun   = "upstream re-run"
 	ReasonContinueSession = "continue session"
 	ReasonDownstream      = "downstream"
+	ReasonGroupSibling    = "group-sibling"
 )
 
 // DepsOptions name the scene to play or rehearse and the command flags.
@@ -44,6 +45,11 @@ type PlanStep struct {
 	Reason     string
 	Path       string
 	Requested  bool
+	// Group is the vm-start group, if this take restores one.
+	Group string
+	// Lanes are the exclusive scheduler stages for this take, computed
+	// when the plan is built (the filmed stage plus start-group members).
+	Lanes []string
 	// Needs are other plan step IDs that must finish first (same-stage
 	// producers and continue.after, which may be another stage).
 	Needs []string
@@ -149,21 +155,7 @@ func underDir(parent, path string) bool {
 }
 
 func (e *Evaluation) plan(target node, opts DepsOptions) (*Plan, error) {
-	chain, chainIDs := e.walkChain(target)
-	if errs := e.chainErrors(chainIDs, chain); len(errs) > 0 {
-		return nil, &ChainError{Errors: errs}
-	}
-	for _, n := range chain {
-		st := e.status[n.id]
-		if st.Status == BlockedNoProducer {
-			snap := n.startSnapshot()
-			if snap == "" {
-				snap = "start state"
-			}
-			return nil, fmt.Errorf("%s: %s does not exist and no scene makes it", n.id, snap)
-		}
-	}
-
+	chain, _ := e.walkChain(target)
 	selected := map[string]string{}
 	for _, n := range chain {
 		if n.id == target.id {
@@ -173,39 +165,7 @@ func (e *Evaluation) plan(target node, opts DepsOptions) (*Plan, error) {
 			selected[n.id] = reason
 		}
 	}
-	changed := true
-	for changed {
-		changed = false
-		for _, n := range chain {
-			if n.id == target.id || selected[n.id] != "" {
-				continue
-			}
-			for _, pred := range e.predecessors(n) {
-				if selected[pred.id] != "" {
-					selected[n.id] = ReasonUpstreamRerun
-					changed = true
-					break
-				}
-			}
-		}
-	}
-	changed = true
-	for changed {
-		changed = false
-		for _, n := range append(append([]node{}, chain...), target) {
-			if n.id != target.id && selected[n.id] == "" {
-				continue
-			}
-			pred, ok := e.continuePred(n)
-			if !ok || pred.id == target.id {
-				continue
-			}
-			if selected[pred.id] == "" {
-				selected[pred.id] = ReasonContinueSession
-				changed = true
-			}
-		}
-	}
+	e.closeWithDeps(selected, target.id, opts.Kind)
 
 	var picked []node
 	for _, n := range e.order {
@@ -213,10 +173,15 @@ func (e *Evaluation) plan(target node, opts DepsOptions) (*Plan, error) {
 			picked = append(picked, n)
 		}
 	}
+	chainIDs, err := e.refuseSet(picked)
+	if err != nil {
+		return nil, err
+	}
 	ordered, err := arrangeContinues(picked, e.nodes)
 	if err != nil {
 		return nil, err
 	}
+	ordered = moveRequestedLast(ordered, target.id)
 	requested := map[string]bool{target.id: true}
 	adoptSnaps, err := e.flagGates(ordered, requested, opts)
 	if err != nil {
@@ -241,45 +206,17 @@ func (e *Evaluation) planStale(opts DepsOptions) (*Plan, error) {
 	for id, reason := range seeded {
 		selected[id] = reason
 	}
-	e.closeStale(selected)
-
-	chainIDs := map[string]bool{}
-	var chain []node
-	seenChain := map[string]bool{}
-	for _, n := range e.order {
-		if selected[n.id] == "" {
-			continue
-		}
-		c, ids := e.walkChain(n)
-		for id := range ids {
-			chainIDs[id] = true
-		}
-		for _, x := range c {
-			if seenChain[x.id] {
-				continue
-			}
-			seenChain[x.id] = true
-			chain = append(chain, x)
-		}
-	}
-	if errs := e.chainErrors(chainIDs, chain); len(errs) > 0 {
-		return nil, &ChainError{Errors: errs}
-	}
-	for _, n := range chain {
-		if e.status[n.id].Status == BlockedNoProducer {
-			snap := n.startSnapshot()
-			if snap == "" {
-				snap = "start state"
-			}
-			return nil, fmt.Errorf("%s: %s does not exist and no scene makes it", n.id, snap)
-		}
-	}
+	e.closeStale(selected, opts.Kind)
 
 	var picked []node
 	for _, n := range e.order {
 		if selected[n.id] != "" {
 			picked = append(picked, n)
 		}
+	}
+	chainIDs, err := e.refuseSet(picked)
+	if err != nil {
+		return nil, err
 	}
 	ordered, err := arrangeContinues(picked, e.nodes)
 	if err != nil {
@@ -296,9 +233,12 @@ func (e *Evaluation) planStale(opts DepsOptions) (*Plan, error) {
 	return e.finishPlan(ordered, selected, requested, chainIDs, adoptSnaps), nil
 }
 
-func (e *Evaluation) closeStale(selected map[string]string) {
+func (e *Evaluation) closeStale(selected map[string]string, kind Kind) {
 	for {
-		changed := false
+		changed := e.closeGroupSiblings(selected, "")
+		if e.seedEnteredChains(selected, "", kind) {
+			changed = true
+		}
 		for _, n := range e.order {
 			if selected[n.id] == "" || skipPlanNode(n) {
 				continue
@@ -348,6 +288,180 @@ func (e *Evaluation) closeStale(selected map[string]string) {
 
 func skipPlanNode(n node) bool {
 	return n.scene == nil || n.scene.Type == "visual" || n.loadErr != nil
+}
+
+func (e *Evaluation) closeWithDeps(selected map[string]string, extra string, kind Kind) {
+	for {
+		changed := e.closeGroupSiblings(selected, extra)
+		if e.seedEnteredChains(selected, extra, kind) {
+			changed = true
+		}
+		for _, n := range e.order {
+			if selected[n.id] == "" && n.id != extra {
+				continue
+			}
+			pred, ok := e.continuePred(n)
+			if !ok || pred.id == extra || selected[pred.id] != "" || skipPlanNode(pred) {
+				continue
+			}
+			selected[pred.id] = ReasonContinueSession
+			changed = true
+		}
+		for _, n := range e.selectedUniverse(selected, extra) {
+			if n.id == extra || selected[n.id] != "" {
+				continue
+			}
+			for _, pred := range e.predecessors(n) {
+				if selected[pred.id] == "" {
+					continue
+				}
+				selected[n.id] = ReasonUpstreamRerun
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			return
+		}
+	}
+}
+
+func (e *Evaluation) selectedUniverse(selected map[string]string, extra string) []node {
+	seen := map[string]bool{}
+	var out []node
+	for _, n := range e.order {
+		if n.id != extra && selected[n.id] == "" {
+			continue
+		}
+		c, _ := e.walkChain(n)
+		for _, x := range c {
+			if seen[x.id] {
+				continue
+			}
+			seen[x.id] = true
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func (e *Evaluation) refuseSet(picked []node) (map[string]bool, error) {
+	chainIDs := map[string]bool{}
+	var chain []node
+	seen := map[string]bool{}
+	for _, n := range picked {
+		c, ids := e.walkChain(n)
+		for id := range ids {
+			chainIDs[id] = true
+		}
+		for _, x := range c {
+			if seen[x.id] {
+				continue
+			}
+			seen[x.id] = true
+			chain = append(chain, x)
+		}
+	}
+	if errs := e.chainErrors(chainIDs, chain); len(errs) > 0 {
+		return nil, &ChainError{Errors: errs}
+	}
+	if err := e.refuseNoProducer(chain); err != nil {
+		return nil, err
+	}
+	return chainIDs, nil
+}
+
+func (e *Evaluation) refuseNoProducer(chain []node) error {
+	for _, n := range chain {
+		if e.status[n.id].Status != BlockedNoProducer {
+			continue
+		}
+		snap := n.startSnapshot()
+		if snap == "" {
+			snap = "start state"
+		}
+		return fmt.Errorf("%s: %s does not exist and no scene makes it", n.id, snap)
+	}
+	return nil
+}
+
+func (e *Evaluation) groupSiblings(n node) []node {
+	if skipPlanNode(n) || n.project == nil || n.scene.EndGroup() == "" {
+		return nil
+	}
+	snap := n.endSnapshot()
+	if snap == "" {
+		return nil
+	}
+	group := n.scene.EndGroup()
+	members, err := n.project.GroupMembers(group)
+	if err != nil {
+		return nil
+	}
+	stages := map[string]bool{}
+	for _, m := range members {
+		stages[m.Stage] = true
+	}
+	var out []node
+	for _, m := range e.order {
+		if m.id == n.id || skipPlanNode(m) || m.project == nil {
+			continue
+		}
+		if !sameProject(n.project.Dir, m.project.Dir) {
+			continue
+		}
+		if m.scene.EndGroup() != group || m.endSnapshot() != snap {
+			continue
+		}
+		if !stages[m.stage()] {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func (e *Evaluation) seedEnteredChains(selected map[string]string, extra string, kind Kind) bool {
+	changed := false
+	for _, n := range e.order {
+		if selected[n.id] == "" && n.id != extra {
+			continue
+		}
+		if skipPlanNode(n) {
+			continue
+		}
+		chain, _ := e.walkChain(n)
+		for _, x := range chain {
+			if x.id == extra || selected[x.id] != "" || skipPlanNode(x) {
+				continue
+			}
+			if reason := e.seedReason(x, kind); reason != "" {
+				selected[x.id] = reason
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func (e *Evaluation) closeGroupSiblings(selected map[string]string, extra string) bool {
+	changed := false
+	for _, n := range e.order {
+		if selected[n.id] == "" && n.id != extra {
+			continue
+		}
+		if skipPlanNode(n) {
+			continue
+		}
+		for _, sib := range e.groupSiblings(n) {
+			if selected[sib.id] != "" || skipPlanNode(sib) || sib.id == extra {
+				continue
+			}
+			selected[sib.id] = ReasonGroupSibling
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (e *Evaluation) consumers(n node) []node {
@@ -410,11 +524,19 @@ func (e *Evaluation) finishPlan(ordered []node, selected map[string]string, requ
 			Reason:     reason,
 			Path:       n.path,
 			Requested:  req,
+			Group:      startGroupName(n),
+			Lanes:      stepLanes(n),
 			Needs:      needs,
 		})
 		if st := n.stage(); st != "" && !seenStage[st] {
 			seenStage[st] = true
 			stages = append(stages, st)
+		}
+		for _, st := range scene.StartGroupStages(n.project, n.scene) {
+			if st != "" && !seenStage[st] {
+				seenStage[st] = true
+				stages = append(stages, st)
+			}
 		}
 	}
 	sort.Strings(stages)
@@ -429,6 +551,54 @@ func (e *Evaluation) finishPlan(ordered []node, selected map[string]string, requ
 		AdoptSnapshot:  adopt,
 		AdoptSnapshots: adoptSnaps,
 	}
+}
+
+func moveRequestedLast(ordered []node, targetID string) []node {
+	if targetID == "" {
+		return ordered
+	}
+	var rest []node
+	var target node
+	found := false
+	for _, n := range ordered {
+		if n.id == targetID {
+			target = n
+			found = true
+			continue
+		}
+		rest = append(rest, n)
+	}
+	if !found {
+		return ordered
+	}
+	return append(rest, target)
+}
+
+func startGroupName(n node) string {
+	if n.scene == nil {
+		return ""
+	}
+	return n.scene.StartGroup()
+}
+
+func stepLanes(n node) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	add(n.stage())
+	if n.project != nil && n.scene != nil {
+		for _, st := range scene.StartGroupStages(n.project, n.scene) {
+			add(st)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (e *Evaluation) walkChain(target node) ([]node, map[string]bool) {
@@ -459,9 +629,19 @@ func (e *Evaluation) predecessors(n node) []node {
 		seen[p.id] = true
 		out = append(out, p)
 	}
-	if snap := n.startSnapshot(); snap != "" && n.stage() != "" {
-		if p, ok := e.eval.made[producerKey(n.stage(), snap)]; ok {
-			add(p)
+	if snap := n.startSnapshot(); snap != "" {
+		if n.scene != nil && n.scene.StartGroup() != "" && n.project != nil {
+			if members, err := n.project.GroupMembers(n.scene.StartGroup()); err == nil {
+				for _, m := range members {
+					if p, ok := e.eval.made[producerKey(m.Stage, snap)]; ok {
+						add(p)
+					}
+				}
+			}
+		} else if n.stage() != "" {
+			if p, ok := e.eval.made[producerKey(n.stage(), snap)]; ok {
+				add(p)
+			}
 		}
 	}
 	if pred, ok := e.continuePred(n); ok {

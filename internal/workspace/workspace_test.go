@@ -955,6 +955,7 @@ func TestSelfProducerIsCycle(t *testing.T) {
 func TestPrecedenceAdjacentPairs(t *testing.T) {
 	want := []string{
 		Error, BlockedNoProducer, BlockedStateMissing, BlockedRehearsalState,
+		BlockedGroupIncomplete,
 		Missing, StaleInputs, StaleStateMismatch, StaleStartState,
 		StaleUpstream, Unverifiable, OK,
 	}

@@ -52,14 +52,31 @@ func (e *Evaluation) PlanPrune(stage string, rec *machine.Record, opts PruneOpti
 	declared := map[string]bool{}
 	consumed := map[string]bool{}
 	for _, n := range e.nodes {
-		if n.loadErr != nil || n.stage() != stage {
+		if n.loadErr != nil {
 			continue
 		}
-		if snap := n.endSnapshot(); snap != "" {
-			declared[snap] = true
+		if n.stage() == stage {
+			if snap := n.endSnapshot(); snap != "" {
+				declared[snap] = true
+			}
+			if snap := n.startSnapshot(); snap != "" {
+				consumed[snap] = true
+			}
 		}
-		if snap := n.startSnapshot(); snap != "" {
-			consumed[snap] = true
+		if n.scene != nil && n.scene.StartGroup() != "" && n.project != nil && n.scene.VMStart != nil {
+			snap := n.scene.VMStart.Snapshot
+			if snap == "" {
+				continue
+			}
+			members, err := n.project.GroupMembers(n.scene.StartGroup())
+			if err != nil {
+				continue
+			}
+			for _, m := range members {
+				if m.Stage == stage {
+					consumed[snap] = true
+				}
+			}
 		}
 	}
 	names := make([]string, 0, len(rec.Snapshots))

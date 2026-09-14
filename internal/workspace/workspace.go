@@ -16,20 +16,21 @@ import (
 
 // Status names, in evaluation precedence. The first that applies wins.
 const (
-	Error                 = "error"
-	BlockedNoProducer     = "blocked:no-producer"
-	BlockedStateMissing   = "blocked:state-missing"
-	BlockedRehearsalState = "blocked:rehearsal-state"
-	Missing               = "missing"
-	StaleInputs           = "stale:inputs"
-	StaleStateMismatch    = "stale:state-mismatch"
-	StaleStartState       = "stale:start-state"
-	StaleUpstream         = "stale:upstream"
-	Unverifiable          = "unverifiable"
-	OK                    = "ok"
-	ManualLabel           = "manual"
-	KindSceneError        = "scene-error"
-	KindConfigError       = "config-error"
+	Error                  = "error"
+	BlockedNoProducer      = "blocked:no-producer"
+	BlockedStateMissing    = "blocked:state-missing"
+	BlockedRehearsalState  = "blocked:rehearsal-state"
+	BlockedGroupIncomplete = "blocked:group-incomplete"
+	Missing                = "missing"
+	StaleInputs            = "stale:inputs"
+	StaleStateMismatch     = "stale:state-mismatch"
+	StaleStartState        = "stale:start-state"
+	StaleUpstream          = "stale:upstream"
+	Unverifiable           = "unverifiable"
+	OK                     = "ok"
+	ManualLabel            = "manual"
+	KindSceneError         = "scene-error"
+	KindConfigError        = "config-error"
 )
 
 var precedence = []string{
@@ -37,6 +38,7 @@ var precedence = []string{
 	BlockedNoProducer,
 	BlockedStateMissing,
 	BlockedRehearsalState,
+	BlockedGroupIncomplete,
 	Missing,
 	StaleInputs,
 	StaleStateMismatch,
@@ -85,23 +87,33 @@ func (r *Result) HasWarning() bool {
 
 // SceneStatus is one recording scene in the report.
 type SceneStatus struct {
-	Kind          string   `json:"kind,omitempty"`
-	Scene         string   `json:"scene,omitempty"`
-	Project       string   `json:"project"`
-	ProjectRel    string   `json:"-"`
-	Status        string   `json:"status"`
-	Reasons       []string `json:"reasons"`
-	Error         string   `json:"error,omitempty"`
-	Clip          string   `json:"clip,omitempty"`
-	Facts         string   `json:"facts,omitempty"`
-	StableClip    string   `json:"stable-clip,omitempty"`
-	StableFacts   string   `json:"stable-facts,omitempty"`
-	Stage         string   `json:"stage,omitempty"`
-	StartSnapshot string   `json:"start-snapshot,omitempty"`
-	EndSnapshot   string   `json:"end-snapshot,omitempty"`
-	Detail        string   `json:"-"`
-	upstreamName  string
-	upstreamStat  string
+	Kind           string   `json:"kind,omitempty"`
+	Scene          string   `json:"scene,omitempty"`
+	Project        string   `json:"project"`
+	ProjectRel     string   `json:"-"`
+	Status         string   `json:"status"`
+	Reasons        []string `json:"reasons"`
+	Error          string   `json:"error,omitempty"`
+	Clip           string   `json:"clip,omitempty"`
+	Facts          string   `json:"facts,omitempty"`
+	StableClip     string   `json:"stable-clip,omitempty"`
+	StableFacts    string   `json:"stable-facts,omitempty"`
+	Stage          string   `json:"stage,omitempty"`
+	StartSnapshot  string   `json:"start-snapshot,omitempty"`
+	EndSnapshot    string   `json:"end-snapshot,omitempty"`
+	Group          string   `json:"group,omitempty"`
+	Generation     string   `json:"generation,omitempty"`
+	GroupMember    string   `json:"group-member,omitempty"`
+	Detail         string   `json:"-"`
+	upstreamName   string
+	upstreamStat   string
+	memberStage    string
+	memberKind     string
+	memberProblems []memberProblem
+}
+
+type memberProblem struct {
+	alias, stage, kind string
 }
 
 // StateLabel names a snapshot on a stage as manual or as its producer.
