@@ -79,9 +79,9 @@ func groupEngine(t *testing.T, dir string, aliases ...string) (*Engine, *machine
 	restores := 0
 	begins := 0
 	prevRestore := restoreGroupMember
-	restoreGroupMember = func(_ *machine.Manager, _ context.Context, _ *machine.Record, _, _ string) error {
+	restoreGroupMember = func(_ *machine.Manager, _ context.Context, _ *machine.Record, _, _ string) (bool, error) {
 		restores++
-		return nil
+		return false, nil
 	}
 	prevBegin := beginManaged
 	beginManaged = func(_ *machine.Manager, _ context.Context, _ *machine.Record, mode, snapshot, _, _ string, _ bool) (*guest.Guest, error) {
@@ -165,12 +165,12 @@ func TestSecondRestoreFailureDoesNotBoot(t *testing.T) {
 	dir := t.TempDir()
 	e, _, _, begins := groupEngine(t, dir, "laptop", "server", "tablet")
 	n := 0
-	restoreGroupMember = func(_ *machine.Manager, _ context.Context, _ *machine.Record, _, _ string) error {
+	restoreGroupMember = func(_ *machine.Manager, _ context.Context, _ *machine.Record, _, _ string) (bool, error) {
 		n++
 		if n == 2 {
-			return errors.New("restore failed")
+			return false, errors.New("restore failed")
 		}
-		return nil
+		return false, nil
 	}
 	err := e.Run(groupConsumer(), Options{Speed: 0.0001})
 	if err == nil || !strings.Contains(err.Error(), "restore failed") {
@@ -279,6 +279,32 @@ func TestGroupConsumerWritesFactsMembers(t *testing.T) {
 	if _, ok := seen["house-server"]; !ok {
 		t.Fatal("silent missing from facts")
 	}
+	if seen["house-server"].RestoreSkipped || seen["house-laptop"].RestoreSkipped {
+		t.Fatalf("stub restore marked skipped: %+v", got.GroupMembers)
+	}
+}
+
+func TestSilentSkipMarksFactsRestoreSkipped(t *testing.T) {
+	dir := t.TempDir()
+	e, _, _, _ := groupEngine(t, dir)
+	restoreGroupMember = func(_ *machine.Manager, _ context.Context, _ *machine.Record, _, _ string) (bool, error) {
+		return true, nil
+	}
+	clip := filepath.Join(dir, "use.mp4")
+	if err := e.Run(groupConsumer(), Options{Record: true, OutPath: clip, Speed: 0.0001, Version: "v"}); err != nil {
+		t.Fatal(err)
+	}
+	got := readFacts(t, clip)
+	seen := map[string]facts.GroupMember{}
+	for _, m := range got.GroupMembers {
+		seen[m.Stage] = m
+	}
+	if !seen["house-server"].RestoreSkipped {
+		t.Fatalf("silent skip not in facts: %+v", got.GroupMembers)
+	}
+	if seen["house-laptop"].RestoreSkipped {
+		t.Fatalf("filmed marked skipped: %+v", got.GroupMembers)
+	}
 }
 
 func TestPlayRefusesSilentRehearsalBeforeRestore(t *testing.T) {
@@ -373,14 +399,14 @@ func TestSilentActivateJournalRecoveredBeforeRestore(t *testing.T) {
 		}
 		return nil
 	}
-	restoreGroupMember = func(_ *machine.Manager, _ context.Context, r *machine.Record, _, _ string) error {
+	restoreGroupMember = func(_ *machine.Manager, _ context.Context, r *machine.Record, _, _ string) (bool, error) {
 		if r.Name == "house-server" {
 			if _, err := os.Stat(path); err == nil {
 				restoreSawJournal = true
 			}
 			*restores++
 		}
-		return nil
+		return false, nil
 	}
 	if err := e.Run(groupConsumer(), Options{Speed: 0.0001}); err != nil {
 		t.Fatal(err)

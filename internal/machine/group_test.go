@@ -79,10 +79,11 @@ func TestRestoreGroupMemberRequiresGeneration(t *testing.T) {
 	creates := 0
 	state := "shut off"
 	attachStageRunner(m, r, &state, &creates)
-	if err := m.RestoreGroupMember(context.Background(), r, "ready", "g2"); err != nil {
+	skipped, err := m.RestoreGroupMember(context.Background(), r, "ready", "g2")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if creates == 0 {
+	if skipped || creates == 0 {
 		t.Fatal("matching fingerprint but wrong generation skipped restore")
 	}
 
@@ -94,10 +95,11 @@ func TestRestoreGroupMemberRequiresGeneration(t *testing.T) {
 	creates = 0
 	state = "shut off"
 	attachStageRunner(m, r, &state, &creates)
-	if err := m.RestoreGroupMember(context.Background(), r, "ready", "g1"); err != nil {
+	skipped, err = m.RestoreGroupMember(context.Background(), r, "ready", "g1")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if creates != 0 {
+	if !skipped || creates != 0 {
 		t.Fatal("matching generation still restored")
 	}
 
@@ -196,6 +198,58 @@ func TestCheckGroupMembersEmptyGeneration(t *testing.T) {
 	var ge *GroupMemberError
 	if !asGroupErr(err, &ge) || ge.Kind != GroupGenerationKind || ge.Alias != "laptop" {
 		t.Fatalf("empty generation: %v", err)
+	}
+}
+
+func TestRestoreGroupMemberSkipLogsAndKeepsAtState(t *testing.T) {
+	m, r, _ := seedCapturedState(t, "ready")
+	r.SnapshotOrigins["ready"] = groupOrigin("household", "g1", TakeRecording)
+	if err := m.Store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	creates := 0
+	state := "shut off"
+	attachStageRunner(m, r, &state, &creates)
+	skipped, err := m.RestoreGroupMember(context.Background(), r, "ready", "g1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !skipped || creates != 0 {
+		t.Fatal("matching generation still restored")
+	}
+	if !strings.Contains(readProvisionLog(t, m, "demo"), "timing restore-skipped true") {
+		t.Fatal("skip did not log restore-skipped on the member")
+	}
+	if loadedAtState(t, m) == nil {
+		t.Fatal("skip cleared at-state")
+	}
+}
+
+func TestRestoreGroupMemberRestoreClearsAtState(t *testing.T) {
+	m, r, _ := seedCapturedState(t, "ready")
+	r.SnapshotOrigins["ready"] = groupOrigin("household", "g1", TakeRecording)
+	if err := m.Store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	creates := 0
+	state := "shut off"
+	attachStageRunner(m, r, &state, &creates)
+	skipped, err := m.RestoreGroupMember(context.Background(), r, "ready", "g2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped || creates == 0 {
+		t.Fatal("wrong generation skipped restore")
+	}
+	log := readProvisionLog(t, m, "demo")
+	if !strings.Contains(log, "timing restore-stop-seconds") || !strings.Contains(log, "timing restore-activate-seconds") {
+		t.Fatalf("restore timings: %s", log)
+	}
+	if strings.Contains(log, "timing restore-skipped") {
+		t.Fatalf("restore logged skip: %s", log)
+	}
+	if loadedAtState(t, m) != nil {
+		t.Fatal("restore left at-state")
 	}
 }
 

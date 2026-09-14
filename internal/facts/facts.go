@@ -58,10 +58,11 @@ type Facts struct {
 
 // GroupMember is one stage restored for a group start.
 type GroupMember struct {
-	Stage      string `json:"stage"`
-	Snapshot   string `json:"snapshot"`
-	Image      string `json:"image"`
-	Generation string `json:"generation"`
+	Stage          string `json:"stage"`
+	Snapshot       string `json:"snapshot"`
+	Image          string `json:"image"`
+	Generation     string `json:"generation"`
+	RestoreSkipped bool   `json:"restore-skipped,omitempty"`
 }
 
 // Timings is the cost of a guest take. Missing pointers were not measured:

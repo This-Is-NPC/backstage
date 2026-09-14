@@ -152,12 +152,14 @@ func GroupGeneration(members []GroupMemberState, snapshot string) string {
 }
 
 // RestoreGroupMember skips or restores one already-checked member. It does not boot.
-func (m *Manager) RestoreGroupMember(ctx context.Context, r *Record, snapshot, generation string) error {
+// A skip keeps at-state: the disk does not move. A restore clears at-state first.
+func (m *Manager) RestoreGroupMember(ctx context.Context, r *Record, snapshot, generation string) (bool, error) {
 	if m.canSkipRestore(ctx, r, snapshot, generation) {
-		return m.clearAtState(r)
+		m.logTiming(r, "restore-skipped", true)
+		return true, nil
 	}
 	if err := m.clearAtState(r); err != nil {
-		return err
+		return false, err
 	}
-	return restoreAfterCheck(m, ctx, r, snapshot)
+	return false, restoreAfterCheck(m, ctx, r, snapshot)
 }

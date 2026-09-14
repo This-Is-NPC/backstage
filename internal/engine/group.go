@@ -10,7 +10,7 @@ import (
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
 
-var restoreGroupMember = func(m *machine.Manager, ctx context.Context, r *machine.Record, snapshot, generation string) error {
+var restoreGroupMember = func(m *machine.Manager, ctx context.Context, r *machine.Record, snapshot, generation string) (bool, error) {
 	return m.RestoreGroupMember(ctx, r, snapshot, generation)
 }
 
@@ -93,20 +93,26 @@ func (e *Engine) prepareGroup(ctx context.Context, s *scene.Scene, opts Options)
 		return err
 	}
 	gen := machine.GroupGeneration(members, snapshot)
+	skipped := map[string]bool{}
 	for _, m := range members {
 		if m.Alias == s.VM {
 			continue
 		}
-		if err := restoreGroupMember(e.Managed, ctx, m.Record, snapshot, gen); err != nil {
+		skip, err := restoreGroupMember(e.Managed, ctx, m.Record, snapshot, gen)
+		if err != nil {
 			return err
+		}
+		if skip {
+			skipped[m.Stage] = true
 		}
 	}
 	for _, m := range members {
 		e.groupMembers = append(e.groupMembers, facts.GroupMember{
-			Stage:      m.Stage,
-			Snapshot:   snapshot,
-			Image:      m.Record.Snapshots[snapshot],
-			Generation: gen,
+			Stage:          m.Stage,
+			Snapshot:       snapshot,
+			Image:          m.Record.Snapshots[snapshot],
+			Generation:     gen,
+			RestoreSkipped: skipped[m.Stage],
 		})
 	}
 	return nil
