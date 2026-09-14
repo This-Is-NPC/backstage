@@ -76,7 +76,9 @@ backstage stage ssh demo
 backstage stage stop demo
 ```
 
-`list --json` and `inspect --json` do not disclose credentials. `stop` requests
+`list --json` and `inspect --json` do not disclose credentials. `inspect --json`
+also includes `at-state` when a `vm-end` capture is still sitting on the live
+overlay. `stop` requests
 an orderly shutdown; `stop --force` explicitly forces power off.
 
 ## Reference it from a project
@@ -171,7 +173,8 @@ user, address and Omarchy package version. A `vm-start: clean` take adds
 `start-image` (the restored image) and `start-state.snapshot` (the snapshot
 name). Host takes omit the guest fields. A guest take also records
 `timings` when a phase completed: `restore-stop-seconds` and
-`restore-activate-seconds` on a clean start, `boot-seconds` only when
+`restore-activate-seconds` on a clean start, or `restore-skipped` when
+that restore was skipped, `boot-seconds` only when
 Begin booted a stopped domain, `session-seconds` plus `stage-phases`
 (`up`, `omarchy`, `tools`, `desktop`, `terminal`), and on `vm-end`
 `shutdown-seconds`, `capture-seconds`, `capture-bytes` (`st_blocks*512`),
@@ -222,7 +225,20 @@ never overlaps a VM take. `--jobs 1` is serial. `--jobs` and `--json`
 need `--with-deps` or `--stale`. Each take is a child
 process with its own log. `Create` and `Clone` still hold the catalog
 for the whole verb. A clean restore waits for `image-catalog` instead
-of failing if another stage holds it.
+of failing if another stage holds it. When the stage is already at that
+snapshot — `vm-end` wrote `at-state`, the guest is `shut off`, and the
+live disk and NVRAM still match the captured fingerprint (path, inode,
+size, mtime and ctime in nanoseconds) — `Begin` skips Stop and
+`activate`. It does not take the catalog. Facts then omit
+`restore-stop-seconds` and `restore-activate-seconds`, record
+`restore-skipped: true`, and keep `start-image` as the captured image.
+A `--stale` or `--with-deps` consumer on the same stage is the usual
+win: it starts right after the producer. Any fingerprint mismatch, a
+domain that is not `shut off`, or a clean start from another snapshot
+clears `at-state` and restores as before. The same pre-Restore guards
+still apply, including refusing a recording from a rehearsal snapshot.
+`stage doctor` prints `at-state SNAPSHOT (fingerprint ok|stale)` when
+the field exists.
 
 `stage snapshot` and `vm-end` stop the guest first, then take
 `image-catalog` only around the decision/marker and the catalog
@@ -262,7 +278,8 @@ the `activate.json` journal and cached bases.
 or `initial`). A produced snapshot records the leaf project, scene,
 `inputs-sha256`, the start and captured images, whether the take was a
 recording or a rehearsal, when it was made, and the Backstage version.
-`inspect --json` includes `snapshot-origins` next to `snapshots`.
+`inspect --json` includes `snapshot-origins` next to `snapshots`, and
+`at-state` when a `vm-end` left the overlay at that capture.
 
 `snapshot-delete` holds the stage lock and the image catalog, refuses
 `initial`, removes the mapping and origin together, then collects unused
@@ -341,6 +358,16 @@ Deletion checks the libvirt UUID and removes only the stage's private resources.
 It does not break clones: referenced immutable images remain available. Unused
 snapshot images are collected after deletion; cached OS bases remain reusable.
 Deletion does not erase project files or recorded videos.
+
+## Compatibility
+
+A binary from before this skip ignores `at-state` (the field is
+`omitempty` and the stage schema stays 1). Its `Start` does not save the
+record, so it also skips every clearing event. If that process boots the
+guest, libvirt's dynamic ownership changes ctime even when a short boot
+leaves mtime and size alone; any write changes size or mtime. The next
+current `Begin` sees a different fingerprint, clears `at-state`, and
+restores. Manual `virsh start` is the same.
 
 ## Contributor acceptance tests
 

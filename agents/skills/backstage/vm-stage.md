@@ -28,6 +28,14 @@ Choose the scene's starting state explicitly when it matters:
 
 - `"vm-start": {"mode": "clean", "snapshot": "product-installed"}` restores
   a cold snapshot; omitting `snapshot` uses the stage's `initial` snapshot.
+  After a `vm-end` the live overlay may already be that snapshot: if the
+  guest is `shut off` and the disk plus NVRAM still match the stored
+  fingerprint (path, inode, size, mtime-ns, ctime-ns), Begin skips Stop
+  and `activate`, does not wait for `image-catalog`, and facts record
+  `restore-skipped` with `start-image` equal to the captured image. A
+  `--stale` or `--with-deps` consumer on the same stage is the usual
+  case. Any difference, or a recording from a rehearsal snapshot, restores
+  as before.
 - `"vm-start": {"mode": "reuse"}` keeps disk contents and reorganizes the
   desktop, like the existing behavior.
 - `"vm-start": {"mode": "continue", "after": "01-install"}` preserves the
@@ -45,7 +53,7 @@ Choose the scene's starting state explicitly when it matters:
   belongs to another scene before the lock, and do not treat `--adopt` or
   `--replace-state` as implied for a producer. Different managed stages
   may record at once; a host take never overlaps a VM. `--stale` uses the
-  same scheduler and also records downstream consumers. A clean restore waits for `image-catalog`. Create and
+  same scheduler and also records downstream consumers. A clean restore waits for `image-catalog` unless that skip applies. Create and
   Clone still hold the catalog for the whole verb.
 
 Rehearse a whole continuation chain before recording that chain. Never continue
@@ -71,7 +79,12 @@ installed version.
 `stage snapshots` is the name-to-image map. `--origins` adds `{ image, origin }`
 (`origin` is `null` for `initial` and any hand-made snapshot). A produced
 state records the leaf project, scene, inputs digest, images, take kind,
-time and Backstage version. `inspect --json` includes `snapshot-origins`.
+time and Backstage version. `inspect --json` includes `snapshot-origins`
+and `at-state` when a `vm-end` left the overlay at that capture.
+`stage doctor` prints `at-state SNAPSHOT (fingerprint ok|stale)` when
+the field exists. An older binary ignores `at-state` and does not clear
+it on Start; the fingerprint (ctime included) makes the next current
+Begin restore.
 `snapshot-delete` refuses `initial` and removes the mapping and origin
 together. `prune-states STAGE --workspace DIR` runs that deletion for
 produced snapshots no valid scene in the workspace still declares as
@@ -209,7 +222,8 @@ or `short`, or `capture-failed` when `vm-end` does not commit). A guest clip
 also records the machine; a clean start records `start-image` and
 `start-state.snapshot`. A successful `vm-end` adds `end-state`. Completed
 VM phases go in `timings` (seconds, capture bytes, `capture-mode`,
-`image-depth`, `catalog-wait-seconds`, and `capture-fallback` when a
+`image-depth`, `catalog-wait-seconds`, `restore-skipped` when a clean
+start found the overlay already at that snapshot, and `capture-fallback` when a
 delta check flattened); they are not an input. `boot-seconds` only when Begin booted a stopped
 domain. `vm-end` and `stage snapshot` stop the guest, then hold
 `image-catalog` only around the decision/marker and the catalog
