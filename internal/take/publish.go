@@ -34,6 +34,10 @@ type Session struct {
 	lease     *os.File
 	finished  bool
 	committed bool
+	// pairReady is true when Interrupt may keep the directory as an attempt.
+	// Play sessions start ready. Import sets it after both copies finish, so
+	// a Ctrl-C mid-copy discards a truncated .creating- directory.
+	pairReady bool
 	temps     []string
 	hook      func(string) error
 }
@@ -98,7 +102,7 @@ func beginPaths(ctx context.Context, paths Paths, now time.Time) (*Session, erro
 			}
 			return nil, err
 		}
-		return &Session{Paths: paths, ID: id, dir: pending, lease: lease}, nil
+		return &Session{Paths: paths, ID: id, dir: pending, lease: lease, pairReady: true}, nil
 	}
 	return nil, fmt.Errorf("could not create a pending take directory")
 }
@@ -189,8 +193,9 @@ func (s *Session) keepAttemptLocked() (string, error) {
 	return filepath.Join(s.dir, clipName), nil
 }
 
-// Interrupt keeps a recorded take as an attempt if the manifest is not yet
+// Interrupt keeps a complete take as an attempt if the manifest is not yet
 // committed, and always removes leftover projection or manifest temps.
+// A truncated import still inside .creating- is discarded.
 func (s *Session) Interrupt() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -198,7 +203,7 @@ func (s *Session) Interrupt() {
 	if s.committed || s.finished {
 		return
 	}
-	if s.hasClipLocked() {
+	if s.pairReady && s.hasClipLocked() {
 		_, _ = s.keepAttemptLocked()
 		return
 	}

@@ -48,6 +48,10 @@ func projectFileTracked(src, dst string, track func(string)) error {
 	return nil
 }
 
+// cloneFile copies src into dst with FICLONE or a full copy. Tests replace it
+// to force the copy path and to prove import never hardlinks or renames.
+var cloneFile = cloneOrCopy
+
 func cloneOrCopy(src string, dst *os.File) error {
 	in, err := os.Open(src)
 	if err != nil {
