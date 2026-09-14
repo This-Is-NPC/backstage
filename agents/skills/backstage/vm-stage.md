@@ -8,6 +8,8 @@ Backstage can create local Omarchy VMs through libvirt/QEMU:
 backstage stage doctor
 backstage stage create demo --omarchy latest
 backstage stage snapshot demo product-installed
+backstage stage snapshots demo --origins
+backstage stage snapshot-delete demo product-installed
 backstage stage clone demo tutorial --snapshot product-installed
 ```
 
@@ -38,10 +40,18 @@ preparation. They receive `BACKSTAGE_VM_ADDRESS`, `BACKSTAGE_VM_ADMIN`,
 `BACKSTAGE_VM_USER`, `BACKSTAGE_VM_KEY`, `BACKSTAGE_VM_KNOWN_HOSTS`,
 `BACKSTAGE_VM_DOMAIN` and `BACKSTAGE_STAGE`.
 
-`stage list`, `inspect`, `start`, `stop`, `ssh`, `snapshots`, `restore` and
-`delete` manage the machines without a project. Creation/snapshots/restoration
-leave a stage stopped. Recordings leave it running. `latest` is resolved at
-creation; existing stages keep their installed version.
+`stage list`, `inspect`, `start`, `stop`, `ssh`, `snapshots`, `restore`,
+`snapshot-delete` and `delete` manage the machines without a project.
+Creation/snapshots/restoration leave a stage stopped. Recordings leave it
+running. `latest` is resolved at creation; existing stages keep their
+installed version.
+
+`stage snapshots` is the name-to-image map. `--origins` adds `{ image, origin }`
+(`origin` is `null` for `initial` and any hand-made snapshot). A produced
+state records the leaf project, scene, inputs digest, images, take kind,
+time and Backstage version. `inspect --json` includes `snapshot-origins`.
+`snapshot-delete` refuses `initial` and removes the mapping and origin
+together.
 
 ## Existing external VMs
 

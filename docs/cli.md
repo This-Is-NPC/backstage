@@ -25,7 +25,9 @@ directory (otherwise Backstage searches up from the current directory).
 
 `stage` commands operate on the user's shared VM registry and do not require a
 project. See [Manage VM stages](how-to-manage-vm-stages.md) for their complete
-workflow and host requirements.
+workflow and host requirements. `stage snapshots` prints the name-to-image map;
+`--origins` adds each origin (`null` when the snapshot was made by hand).
+`stage snapshot-delete STAGE SNAPSHOT` removes a named state except `initial`.
 
 > ⚠️ `play`, `setup` and `produce` take over the physical display. Run on a clean desktop.
 

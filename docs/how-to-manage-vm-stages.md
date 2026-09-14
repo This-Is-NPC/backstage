@@ -148,6 +148,8 @@ installation and disk restoration are not part of the recorded clip.
 ```bash
 backstage stage snapshot demo product-installed
 backstage stage snapshots demo
+backstage stage snapshots demo --origins
+backstage stage snapshot-delete demo product-installed
 backstage stage clone demo tutorial --snapshot product-installed
 backstage stage restore tutorial initial
 ```
@@ -156,6 +158,18 @@ Snapshots shut down the VM cleanly and save a standalone disk plus matching
 UEFI variables. Restore also leaves the machine stopped. These are disk states;
 they do not restore RAM, terminal processes or open windows. Use `continue` for
 live-session continuity.
+
+`stage snapshots` prints the name-to-image map. `--origins` prints each name as
+`{ image, origin }`. `origin` is `null` for a manual snapshot (`stage snapshot`
+or `initial`). A produced snapshot records the leaf project, scene,
+`inputs-sha256`, the start and captured images, whether the take was a
+recording or a rehearsal, when it was made, and the Backstage version.
+`inspect --json` includes `snapshot-origins` next to `snapshots`.
+
+`snapshot-delete` holds the stage lock and the image catalog, refuses
+`initial`, removes the mapping and origin together, then collects unused
+images. A collection failure leaves the deletion committed and reports
+cleanup as pending; the next catalog mutation retries it.
 
 Clones use their own writable overlay and UEFI variables. Before their first
 boot, Backstage changes their domain UUID, MAC, hostname, machine ID, SSH host
