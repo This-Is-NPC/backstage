@@ -489,6 +489,286 @@ func TestPlanOffChainErrorIsWarning(t *testing.T) {
 	}
 }
 
+func TestPlanStaleSeedsMissingOnTwoStages(t *testing.T) {
+	dir, store := twoStageMissing(t)
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Steps) != 2 || len(got.Stages) != 2 {
+		t.Fatalf("stale set %v stages %v", stepSummary(got), got.Stages)
+	}
+	if len(got.Steps[0].Needs) != 0 || len(got.Steps[1].Needs) != 0 {
+		t.Fatalf("independent stages must not wait on each other: %+v", got.Steps)
+	}
+	for _, s := range got.Steps {
+		if !s.Requested || s.Reason != Missing {
+			t.Fatalf("seeded step: %+v", s)
+		}
+	}
+}
+
+func TestPlanStaleNeedsProducer(t *testing.T) {
+	dir, store := chainABC(t)
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]PlanStep{}
+	for _, s := range got.Steps {
+		byID[s.ID] = s
+	}
+	if !containsStr(byID["./b"].Needs, "./a") || !containsStr(byID["./c"].Needs, "./b") {
+		t.Fatalf("needs: a=%v b=%v c=%v", byID["./a"].Needs, byID["./b"].Needs, byID["./c"].Needs)
+	}
+}
+
+func TestPlanStaleRefusesLikeA7(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeBaseProject(t, dir)
+	writeScene(t, dir, "loop", cleanScene("loop", "ready", "ready"))
+	_, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) || len(conflict.Cycles) == 0 {
+		t.Fatalf("cycle: %v", err)
+	}
+
+	dir = t.TempDir()
+	store = testStore(t)
+	writeBaseProject(t, dir)
+	writeScene(t, dir, "one", cleanScene("one", "", "ready"))
+	writeScene(t, dir, "two", cleanScene("two", "", "ready"))
+	_, err = PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if !errors.As(err, &conflict) || len(conflict.Duplicates) == 0 {
+		t.Fatalf("duplicate: %v", err)
+	}
+
+	dir = t.TempDir()
+	store = testStore(t)
+	writeBaseProject(t, dir)
+	writeScene(t, dir, "use", cleanScene("use", "ghost", "ready"))
+	writeScene(t, dir, "next", cleanScene("next", "ready", ""))
+	_, err = PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("seeded chain no-producer: %v", err)
+	}
+
+	dir = t.TempDir()
+	store = testStore(t)
+	writeBaseProject(t, dir)
+	writeScene(t, dir, "make", cleanScene("make", "", "ready"))
+	saveStage(t, store, "demo", map[string]string{"initial": imgInitial, "ready": imgReady}, nil)
+	_, err = PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err == nil || !strings.Contains(err.Error(), "no origin") {
+		t.Fatalf("manual without adopt: %v", err)
+	}
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay, Adopt: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.AdoptSnapshots) == 0 || got.AdoptSnapshots[0] != "ready" {
+		t.Fatalf("adopt on seeded: %+v", got)
+	}
+
+	dir, store = chainABC(t)
+	saveChain(t, store, dir, true, false)
+	publishNamed(t, dir, store, "a", facts.Facts{InputsSHA256: "not-the-digest"})
+	_, err = PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindRehearse})
+	if err == nil || !strings.Contains(err.Error(), "--replace-state") {
+		t.Fatalf("rehearse recording: %v", err)
+	}
+}
+
+func TestPlanStaleDownstreamClosure(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeBaseProject(t, dir)
+	writeScene(t, dir, "a", cleanScene("a", "", "ready"))
+	writeScene(t, dir, "b", cleanScene("b", "ready", "mid"))
+	writeScene(t, dir, "c", cleanScene("c", "mid", "end"))
+	writeScene(t, dir, "d", cleanScene("d", "end", ""))
+	imgEnd := "dddddddddddddddddddddddddddddddd"
+	saveStage(t, store, "demo", map[string]string{
+		"initial": imgInitial, "ready": imgReady, "mid": imgOther, "end": imgEnd,
+	}, map[string]machine.SnapshotOrigin{
+		"ready": {Project: dir, Scene: "a", Take: machine.TakeRecording, Image: imgReady},
+		"mid":   {Project: dir, Scene: "b", Take: machine.TakeRecording, Image: imgOther},
+		"end":   {Project: dir, Scene: "c", Take: machine.TakeRecording, Image: imgEnd},
+	})
+	publishNamed(t, dir, store, "a", facts.Facts{InputsSHA256: "not-the-digest"})
+	publishNamed(t, dir, store, "b", facts.Facts{})
+	publishNamed(t, dir, store, "c", facts.Facts{})
+	publishNamed(t, dir, store, "d", facts.Facts{})
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"./a stale:inputs", "./b downstream", "./c downstream", "./d downstream"}
+	if names := stepSummary(got); !equal(names, want) {
+		t.Fatalf("plan %v, want %v", names, want)
+	}
+	if !got.Steps[0].Requested || got.Steps[1].Requested || got.Steps[2].Requested || got.Steps[3].Requested {
+		t.Fatalf("only the seed is requested: %+v", got.Steps)
+	}
+	if !containsStr(got.Steps[1].Needs, "./a") || !containsStr(got.Steps[2].Needs, "./b") || !containsStr(got.Steps[3].Needs, "./c") {
+		t.Fatalf("needs: %+v", got.Steps)
+	}
+}
+
+func TestPlanStaleOKConsumerOfOKProducer(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeBaseProject(t, dir)
+	writeScene(t, dir, "make", cleanScene("make", "", "ready"))
+	writeScene(t, dir, "leaf", cleanScene("leaf", "ready", ""))
+	writeScene(t, dir, "use", cleanScene("use", "ready", ""))
+	saveStage(t, store, "demo", map[string]string{"initial": imgInitial, "ready": imgReady}, map[string]machine.SnapshotOrigin{
+		"ready": {Project: dir, Scene: "make", Take: machine.TakeRecording, Image: imgReady},
+	})
+	publishNamed(t, dir, store, "make", facts.Facts{})
+	publishNamed(t, dir, store, "use", facts.Facts{})
+	if st := statusOf(t, report(t, dir, store), "use"); st.Status != OK {
+		t.Fatalf("use %s, want ok", st.Status)
+	}
+	if st := statusOf(t, report(t, dir, store), "make"); st.Status != OK {
+		t.Fatalf("make %s, want ok", st.Status)
+	}
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"./make upstream re-run", "./leaf missing", "./use downstream"}
+	if names := stepSummary(got); !equal(names, want) {
+		t.Fatalf("plan %v, want %v", names, want)
+	}
+	if got.Steps[2].Requested || got.Steps[2].Reason != ReasonDownstream {
+		t.Fatalf("ok consumer must enter via downward closure: %+v", got.Steps[2])
+	}
+}
+
+func TestPlanStaleUpstreamWithoutDirectConsumerEdge(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeBaseProject(t, dir)
+	writeScene(t, dir, "make", cleanScene("make", "", "ready"))
+	writeScene(t, dir, "use", cleanScene("use", "ready", ""))
+	saveStage(t, store, "demo", map[string]string{"initial": imgInitial, "ready": imgReady}, map[string]machine.SnapshotOrigin{
+		"ready": {Project: dir, Scene: "make", Take: machine.TakeRecording, Image: imgReady},
+	})
+	publishNamed(t, dir, store, "use", facts.Facts{})
+	if st := statusOf(t, report(t, dir, store), "use"); st.Status != StaleUpstream {
+		t.Fatalf("use %s, want %s", st.Status, StaleUpstream)
+	}
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"./make missing", "./use downstream"}
+	if names := stepSummary(got); !equal(names, want) {
+		t.Fatalf("plan %v, want %v", names, want)
+	}
+	if got.Steps[1].Requested || got.Steps[1].Reason != ReasonDownstream {
+		t.Fatalf("stale:upstream must enter via the second close: %+v", got.Steps[1])
+	}
+}
+
+func TestPlanStaleBrokenDownstreamIsWarning(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeFile(t, filepath.Join(dir, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t", "cmd": "bash"}]}},
+		"vms": {"laptop": {"stage": "demo"}, "lab": {"stage": "lab"}}
+	}`)
+	writeScene(t, dir, "make", cleanScene("make", "", "ready"))
+	writeScene(t, dir, "bad", `{"name":"bad","layout":"missing-layout","vm":"laptop","vm-start":{"mode":"clean","snapshot":"ready"},"steps":[{"action":"wait","delay-after":0.05}]}`)
+	writeScene(t, dir, "other", `{"name":"other","layout":"solo","vm":"lab","vm-start":{"mode":"clean"},"vm-end":{"snapshot":"lab-ready"},"steps":[{"action":"wait","delay-after":0.05}]}`)
+	saveStage(t, store, "demo", map[string]string{"initial": imgInitial}, nil)
+	saveStage(t, store, "lab", map[string]string{"initial": imgOther}, nil)
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := stepSummary(got)
+	if !containsStr(names, "./make missing") || !containsStr(names, "./other missing") {
+		t.Fatalf("healthy seeds must still run: %v", names)
+	}
+	for _, s := range got.Steps {
+		if s.Scene == "bad" {
+			t.Fatalf("broken consumer must not be a step: %v", names)
+		}
+	}
+	found := false
+	for _, w := range got.Warnings {
+		if strings.Contains(w.Error, "layout") || strings.Contains(w.Path, "bad") || strings.Contains(w.Error, "missing-layout") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("broken consumer should be a warning: %+v", got.Warnings)
+	}
+}
+
+func TestPlanStaleUnrelatedNoProducerIsWarning(t *testing.T) {
+	dir, store := twoStageMissing(t)
+	writeScene(t, dir, "orphan", cleanScene("orphan", "ghost", ""))
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Steps) != 2 {
+		t.Fatalf("unrelated block must not abort stale set: %v", stepSummary(got))
+	}
+	found := false
+	for _, w := range got.Warnings {
+		if strings.Contains(w.Error, "ghost") || strings.Contains(w.Path, "orphan") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("unrelated no-producer should be a warning: %+v", got.Warnings)
+	}
+}
+
+func TestPlanStaleSkipsOK(t *testing.T) {
+	dir, store := chainABC(t)
+	saveChain(t, store, dir, true, true)
+	publishNamed(t, dir, store, "a", facts.Facts{})
+	publishNamed(t, dir, store, "b", facts.Facts{})
+	publishNamed(t, dir, store, "c", facts.Facts{})
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Steps) != 0 {
+		t.Fatalf("all ok: %v", stepSummary(got))
+	}
+}
+
+func twoStageMissing(t *testing.T) (string, *machine.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	store := testStore(t)
+	writeFile(t, filepath.Join(dir, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t", "cmd": "bash"}]}},
+		"vms": {"laptop": {"stage": "demo"}, "lab": {"stage": "lab"}}
+	}`)
+	writeScene(t, dir, "alpha", `{"name":"alpha","layout":"solo","vm":"laptop","vm-start":{"mode":"clean"},"vm-end":{"snapshot":"ready"},"steps":[{"action":"wait","delay-after":0.05}]}`)
+	writeScene(t, dir, "beta", `{"name":"beta","layout":"solo","vm":"lab","vm-start":{"mode":"clean"},"vm-end":{"snapshot":"ready"},"steps":[{"action":"wait","delay-after":0.05}]}`)
+	saveStage(t, store, "demo", map[string]string{"initial": imgInitial}, nil)
+	saveStage(t, store, "lab", map[string]string{"initial": imgOther}, nil)
+	return dir, store
+}
+
+func containsStr(got []string, want string) bool {
+	for _, s := range got {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
 func chainABC(t *testing.T) (string, *machine.Store) {
 	t.Helper()
 	dir := t.TempDir()

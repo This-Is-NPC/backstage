@@ -22,6 +22,7 @@ const (
 	ReasonRequested       = "requested"
 	ReasonUpstreamRerun   = "upstream re-run"
 	ReasonContinueSession = "continue session"
+	ReasonDownstream      = "downstream"
 )
 
 // DepsOptions name the scene to play or rehearse and the command flags.
@@ -43,14 +44,18 @@ type PlanStep struct {
 	Reason     string
 	Path       string
 	Requested  bool
+	// Needs are other plan step IDs that must finish first (same-stage
+	// producers and continue.after, which may be another stage).
+	Needs []string
 }
 
 // Plan is the ordered set of takes --with-deps will run.
 type Plan struct {
-	Steps         []PlanStep
-	Stages        []string
-	Warnings      []Warning
-	AdoptSnapshot string
+	Steps          []PlanStep
+	Stages         []string
+	Warnings       []Warning
+	AdoptSnapshot  string
+	AdoptSnapshots []string
 }
 
 // ChainError is a scene or project error on the requested scene's chain.
@@ -114,6 +119,19 @@ func PlanDeps(opts DepsOptions) (*Plan, error) {
 		return nil, fmt.Errorf("scene %q is not a recording scene in this workspace", s.Name)
 	}
 	return ev.plan(target, opts)
+}
+
+// PlanStale chooses every workspace take the A7 seed would run, plus the
+// same upstream and continue closure, with A7 refusals over the set.
+func PlanStale(opts DepsOptions) (*Plan, error) {
+	if opts.Dir == "" {
+		return nil, fmt.Errorf("stale plan needs a workspace directory")
+	}
+	ev, err := Evaluate(opts.Options)
+	if err != nil {
+		return nil, err
+	}
+	return ev.planStale(opts)
 }
 
 func (e *Evaluation) findNode(scenePath string) (node, bool) {
@@ -199,20 +217,190 @@ func (e *Evaluation) plan(target node, opts DepsOptions) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
-	adoptSnap, err := e.flagGates(ordered, target, opts)
+	requested := map[string]bool{target.id: true}
+	adoptSnaps, err := e.flagGates(ordered, requested, opts)
 	if err != nil {
 		return nil, err
 	}
 
+	return e.finishPlan(ordered, selected, requested, chainIDs, adoptSnaps), nil
+}
+
+func (e *Evaluation) planStale(opts DepsOptions) (*Plan, error) {
+	seeded := map[string]string{}
+	for _, n := range e.order {
+		if n.scene == nil || n.scene.Type == "visual" || n.loadErr != nil {
+			continue
+		}
+		if reason := e.seedReason(n, opts.Kind); reason != "" {
+			seeded[n.id] = reason
+		}
+	}
+
+	selected := map[string]string{}
+	for id, reason := range seeded {
+		selected[id] = reason
+	}
+	e.closeStale(selected)
+
+	chainIDs := map[string]bool{}
+	var chain []node
+	seenChain := map[string]bool{}
+	for _, n := range e.order {
+		if selected[n.id] == "" {
+			continue
+		}
+		c, ids := e.walkChain(n)
+		for id := range ids {
+			chainIDs[id] = true
+		}
+		for _, x := range c {
+			if seenChain[x.id] {
+				continue
+			}
+			seenChain[x.id] = true
+			chain = append(chain, x)
+		}
+	}
+	if errs := e.chainErrors(chainIDs, chain); len(errs) > 0 {
+		return nil, &ChainError{Errors: errs}
+	}
+	for _, n := range chain {
+		if e.status[n.id].Status == BlockedNoProducer {
+			snap := n.startSnapshot()
+			if snap == "" {
+				snap = "start state"
+			}
+			return nil, fmt.Errorf("%s: %s does not exist and no scene makes it", n.id, snap)
+		}
+	}
+
+	var picked []node
+	for _, n := range e.order {
+		if selected[n.id] != "" {
+			picked = append(picked, n)
+		}
+	}
+	ordered, err := arrangeContinues(picked, e.nodes)
+	if err != nil {
+		return nil, err
+	}
+	requested := map[string]bool{}
+	for id := range seeded {
+		requested[id] = true
+	}
+	adoptSnaps, err := e.flagGates(ordered, requested, opts)
+	if err != nil {
+		return nil, err
+	}
+	return e.finishPlan(ordered, selected, requested, chainIDs, adoptSnaps), nil
+}
+
+func (e *Evaluation) closeStale(selected map[string]string) {
+	for {
+		changed := false
+		for _, n := range e.order {
+			if selected[n.id] == "" || skipPlanNode(n) {
+				continue
+			}
+			if pred, ok := e.continuePred(n); ok && selected[pred.id] == "" && !skipPlanNode(pred) {
+				selected[pred.id] = ReasonContinueSession
+				changed = true
+			}
+			for _, p := range e.predecessors(n) {
+				if selected[p.id] != "" || skipPlanNode(p) {
+					continue
+				}
+				if pred, ok := e.continuePred(n); ok && pred.id == p.id {
+					continue
+				}
+				selected[p.id] = ReasonUpstreamRerun
+				changed = true
+			}
+			for _, c := range e.consumers(n) {
+				if selected[c.id] != "" || skipPlanNode(c) {
+					continue
+				}
+				if e.status[c.id].Status == StaleUpstream {
+					continue
+				}
+				selected[c.id] = ReasonDownstream
+				changed = true
+			}
+		}
+		for _, m := range e.order {
+			if selected[m.id] != "" || skipPlanNode(m) {
+				continue
+			}
+			if e.status[m.id].Status != StaleUpstream {
+				continue
+			}
+			if e.upstreamSelected(m, selected) {
+				selected[m.id] = ReasonDownstream
+				changed = true
+			}
+		}
+		if !changed {
+			return
+		}
+	}
+}
+
+func skipPlanNode(n node) bool {
+	return n.scene == nil || n.scene.Type == "visual" || n.loadErr != nil
+}
+
+func (e *Evaluation) consumers(n node) []node {
+	var out []node
+	for _, m := range e.order {
+		if m.id == n.id || skipPlanNode(m) {
+			continue
+		}
+		for _, p := range e.predecessors(m) {
+			if p.id == n.id {
+				out = append(out, m)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (e *Evaluation) upstreamSelected(n node, selected map[string]string) bool {
+	for _, p := range e.predecessors(n) {
+		if selected[p.id] != "" {
+			return true
+		}
+	}
+	for _, p := range e.originLinked(n) {
+		if selected[p.id] != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Evaluation) finishPlan(ordered []node, selected map[string]string, requested map[string]bool, chainIDs map[string]bool, adoptSnaps []string) *Plan {
+	inPlan := map[string]bool{}
+	for _, n := range ordered {
+		inPlan[n.id] = true
+	}
 	steps := make([]PlanStep, 0, len(ordered))
 	seenStage := map[string]bool{}
 	var stages []string
 	for _, n := range ordered {
 		reason := selected[n.id]
-		req := n.id == target.id
-		if req {
+		req := requested[n.id]
+		if req && reason == "" {
 			reason = ReasonRequested
 		}
+		var needs []string
+		for _, p := range e.predecessors(n) {
+			if inPlan[p.id] {
+				needs = append(needs, p.id)
+			}
+		}
+		sort.Strings(needs)
 		steps = append(steps, PlanStep{
 			ID:         n.id,
 			Scene:      n.scene.Name,
@@ -222,6 +410,7 @@ func (e *Evaluation) plan(target node, opts DepsOptions) (*Plan, error) {
 			Reason:     reason,
 			Path:       n.path,
 			Requested:  req,
+			Needs:      needs,
 		})
 		if st := n.stage(); st != "" && !seenStage[st] {
 			seenStage[st] = true
@@ -229,7 +418,17 @@ func (e *Evaluation) plan(target node, opts DepsOptions) (*Plan, error) {
 		}
 	}
 	sort.Strings(stages)
-	return &Plan{Steps: steps, Stages: stages, Warnings: e.offChainWarnings(chainIDs), AdoptSnapshot: adoptSnap}, nil
+	adopt := ""
+	if len(adoptSnaps) > 0 {
+		adopt = adoptSnaps[0]
+	}
+	return &Plan{
+		Steps:          steps,
+		Stages:         stages,
+		Warnings:       e.offChainWarnings(chainIDs),
+		AdoptSnapshot:  adopt,
+		AdoptSnapshots: adoptSnaps,
+	}
 }
 
 func (e *Evaluation) walkChain(target node) ([]node, map[string]bool) {
@@ -417,20 +616,31 @@ func (e *Evaluation) offChainWarnings(chainIDs map[string]bool) []Warning {
 			continue
 		}
 		st := e.status[n.id]
-		if st.Status != Error {
+		if st.Status != Error && st.Status != BlockedNoProducer {
 			continue
 		}
 		path := n.id
 		if n.path != "" {
 			path = n.path
 		}
-		out = append(out, Warning{Path: path, Error: st.Error})
+		msg := st.Error
+		if msg == "" {
+			msg = st.Detail
+		}
+		if msg == "" && st.Status == BlockedNoProducer {
+			snap := n.startSnapshot()
+			if snap == "" {
+				snap = "start state"
+			}
+			msg = snap + " does not exist and no scene makes it"
+		}
+		out = append(out, Warning{Path: path, Error: msg})
 	}
 	return out
 }
 
-func (e *Evaluation) flagGates(steps []node, target node, opts DepsOptions) (string, error) {
-	adoptSnap := ""
+func (e *Evaluation) flagGates(steps []node, requested map[string]bool, opts DepsOptions) ([]string, error) {
+	var adoptSnaps []string
 	for _, n := range steps {
 		end := n.endSnapshot()
 		if end == "" || n.stage() == "" {
@@ -438,7 +648,7 @@ func (e *Evaluation) flagGates(steps []node, target node, opts DepsOptions) (str
 		}
 		rec, err := e.eval.loadStage(n.stage())
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if rec == nil {
 			continue
@@ -448,27 +658,28 @@ func (e *Evaluation) flagGates(steps []node, target node, opts DepsOptions) (str
 		}
 		project, err := nodeProjectPath(n)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		adopt := opts.Adopt && n.id == target.id
+		isReq := requested[n.id]
+		adopt := opts.Adopt && isReq
 		origin := machine.SnapshotOrigin{Project: project, Scene: n.scene.Name}
 		if err := machine.CheckReplace(rec, end, origin, adopt); err != nil {
-			if n.id != target.id {
+			if !isReq {
 				if strings.Contains(err.Error(), "no origin") {
-					return "", fmt.Errorf("play %s --adopt: %s would replace snapshot %q with no origin", n.path, n.id, end)
+					return nil, fmt.Errorf("play %s --adopt: %s would replace snapshot %q with no origin", n.path, n.id, end)
 				}
-				return "", fmt.Errorf("%s would replace snapshot %q: %w", n.id, end, err)
+				return nil, fmt.Errorf("%s would replace snapshot %q: %w", n.id, end, err)
 			}
-			return "", err
+			return nil, err
 		}
-		if _, hasOrigin := rec.Origin(end); !hasOrigin && n.id == target.id {
-			adoptSnap = end
+		if _, hasOrigin := rec.Origin(end); !hasOrigin && isReq {
+			adoptSnaps = append(adoptSnaps, end)
 		}
 		if current, ok := rec.Origin(end); ok && opts.Kind == KindRehearse && !opts.ReplaceState && current.Take == machine.TakeRecording {
-			return "", fmt.Errorf("rehearse --replace-state: %s would replace recording snapshot %q", n.id, end)
+			return nil, fmt.Errorf("rehearse --replace-state: %s would replace recording snapshot %q", n.id, end)
 		}
 	}
-	return adoptSnap, nil
+	return adoptSnaps, nil
 }
 
 func nodeProjectPath(n node) (string, error) {
