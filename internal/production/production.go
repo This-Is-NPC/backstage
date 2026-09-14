@@ -299,7 +299,7 @@ func (pr *producer) recordScene(i int, sg segment) error {
 		Record: true, OutPath: clip, ShowStaging: pr.opts.ShowStaging, Speed: pr.speed,
 		OnInterrupt: pr.cleanup, Version: pr.opts.Version,
 	})
-	pubErr := pr.finishTake(sg.name, clip, runErr)
+	pubErr := pr.finishTake(s, clip, runErr)
 	var teardownErr error
 	if s.VM == "" {
 		teardownErr = teardownHost()
@@ -347,10 +347,15 @@ func publishEligible(speed float64, showStaging bool) bool {
 	return speed == 1 && !showStaging
 }
 
-func (pr *producer) finishTake(name, clip string, runErr error) error {
+func successfulEndState(end *facts.EndState) bool {
+	return end != nil && end.Snapshot != "" && end.Image != "" && end.Status == ""
+}
+
+func (pr *producer) finishTake(s *scene.Scene, clip string, runErr error) error {
 	if !publishEligible(pr.speed, pr.opts.ShowStaging) {
 		return nil
 	}
+	name := s.Name
 	factsPath := facts.Path(clip)
 	f, err := facts.Read(factsPath)
 	if err != nil {
@@ -360,7 +365,13 @@ func (pr *producer) finishTake(name, clip string, runErr error) error {
 		return fmt.Errorf("scene %q facts: %w", name, err)
 	}
 	ok := f.Result == facts.ResultOK
-	failed := f.Result == facts.ResultStepsFailed || f.Result == facts.ResultShort
+	failed := f.Result == facts.ResultStepsFailed || f.Result == facts.ResultShort || f.Result == facts.ResultCaptureFailed
+	if s.VMEnd != nil {
+		if errors.Is(runErr, engine.ErrCaptureFailed) || !successfulEndState(f.EndState) {
+			ok = false
+			failed = true
+		}
+	}
 	if !ok && !failed {
 		return nil
 	}

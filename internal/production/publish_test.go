@@ -82,6 +82,83 @@ func TestProduceKeepsEarlierPublishWhenLaterSceneFails(t *testing.T) {
 	}
 }
 
+func TestProduceVMEndWithoutEndStateIsAttempt(t *testing.T) {
+	pr := testProducer(t, 1)
+	writeProduceVMEndScene(t, pr.opts.Project.Dir, "alpha")
+	pr.opts.Project.VMs = map[string]scene.VMCfg{"box": {Stage: "demo"}}
+	restore := stubRunByName(t, map[string]stubTake{
+		"alpha": {body: "ok", result: facts.ResultOK},
+	})
+	defer restore()
+	if err := pr.recordScene(0, segment{kind: "scene", name: "alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := take.Open(pr.opts.Project, "alpha"); err == nil {
+		t.Fatal("published vm-end take without end-state")
+	}
+	attempts := filepath.Join(pr.opts.Project.Dir, "recordings", ".takes", "alpha", "attempts")
+	if entries, err := os.ReadDir(attempts); err != nil || len(entries) == 0 {
+		t.Fatalf("attempt: %v %v", entries, err)
+	}
+}
+
+func TestProduceReadonlyWorkDirDoesNotPublish(t *testing.T) {
+	pr := testProducer(t, 1)
+	writeProduceVMEndScene(t, pr.opts.Project.Dir, "alpha")
+	pr.opts.Project.VMs = map[string]scene.VMCfg{"box": {Stage: "demo"}}
+	prev := runEngine
+	runEngine = func(_ *scene.Project, _ *scene.Scene, opts engine.Options) error {
+		if err := os.MkdirAll(filepath.Dir(opts.OutPath), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(opts.OutPath, []byte("clip-alpha"), 0o644); err != nil {
+			return err
+		}
+		if err := facts.Write(facts.Path(opts.OutPath), facts.Facts{Result: facts.ResultOK, Backstage: "t"}); err != nil {
+			return err
+		}
+		if err := os.Chmod(filepath.Dir(opts.OutPath), 0o555); err != nil {
+			return err
+		}
+		return errors.Join(engine.ErrCaptureFailed, errors.New("no space left on device"))
+	}
+	t.Cleanup(func() {
+		runEngine = prev
+		_ = os.Chmod(pr.segDir, 0o755)
+	})
+	err := pr.recordScene(0, segment{kind: "scene", name: "alpha"})
+	_ = os.Chmod(pr.segDir, 0o755)
+	if !errors.Is(err, engine.ErrCaptureFailed) {
+		t.Fatalf("capture failed: %v", err)
+	}
+	if _, err := take.Open(pr.opts.Project, "alpha"); err == nil {
+		t.Fatal("published a take whose capture failed")
+	}
+	attempts := filepath.Join(pr.opts.Project.Dir, "recordings", ".takes", "alpha", "attempts")
+	if entries, err := os.ReadDir(attempts); err != nil || len(entries) == 0 {
+		t.Fatalf("attempt: %v %v", entries, err)
+	}
+}
+
+func TestProduceCaptureFailedIsAttempt(t *testing.T) {
+	pr := testProducer(t, 1)
+	restore := stubRunByName(t, map[string]stubTake{
+		"alpha": {body: "cap", result: facts.ResultCaptureFailed, err: errors.New("capture failed")},
+	})
+	defer restore()
+	err := pr.recordScene(0, segment{kind: "scene", name: "alpha"})
+	if err == nil || !strings.Contains(err.Error(), "capture") {
+		t.Fatalf("capture-failed take: %v", err)
+	}
+	if _, err := take.Open(pr.opts.Project, "alpha"); err == nil {
+		t.Fatal("capture-failed take was published")
+	}
+	attempts := filepath.Join(pr.opts.Project.Dir, "recordings", ".takes", "alpha", "attempts")
+	if entries, err := os.ReadDir(attempts); err != nil || len(entries) == 0 {
+		t.Fatalf("capture-failed attempt: %v %v", entries, err)
+	}
+}
+
 func TestProduceFailedTakeIsAttemptWithoutKeepSegments(t *testing.T) {
 	pr := testProducer(t, 1)
 	pr.opts.KeepSegments = false
@@ -313,6 +390,18 @@ func testProducer(t *testing.T, n int) *producer {
 		speed:   1,
 		raw:     make([]string, n),
 		cleanup: func() {},
+	}
+}
+
+func writeProduceVMEndScene(t *testing.T, dir, name string) {
+	t.Helper()
+	path := filepath.Join(dir, "scenes", name+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"` + name + `","layout":"solo","vm":"box","vm-end":{"snapshot":"saved"},"steps":[{"action":"wait"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
