@@ -1,6 +1,9 @@
 # Producing
 
-`play` records one scene. `produce` records its scenes again and joins the
+`play` records one scene. `play --with-deps` records that scene's stale or
+missing producers first, in topological order, after printing the plan and
+reserving every stage in it. Ctrl-C during a take prints the final report
+(the take in progress is interrupted) and exits 130. `produce` records its scenes again and joins the
 results. A scene at `--speed 1` without `--show-staging` is published to
 `record.out` as soon as it succeeds; the published take is the raw clip, not
 a retimed copy. A later failure does not undo that publication. A failed

@@ -38,7 +38,11 @@ Choose the scene's starting state explicitly when it matters:
   successful take. Missing snapshots are created. A manual snapshot needs
   `play --adopt` and typing the snapshot name. A rehearsal will not replace a
   recording without `rehearse --replace-state`. A recording will not start
-  `clean` from a rehearsal. Produce has neither flag.
+  `clean` from a rehearsal. Produce has neither flag.   `play --with-deps`
+  and `rehearse --with-deps` walk that chain from declared producers, keep
+  a `continue` pair adjacent on the stage, refuse a replacement that
+  belongs to another scene before the lock, and do not treat `--adopt` or
+  `--replace-state` as implied for a producer.
 
 Rehearse a whole continuation chain before recording that chain. Never continue
 a recording from a rehearsal. Restore/reboot/SSH access invalidates continuity.

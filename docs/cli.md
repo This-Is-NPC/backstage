@@ -100,6 +100,7 @@ Errors section. Conflicts are written once to the command output.
 ```bash
 backstage play path/to/scene.json
 backstage play path/to/scene.json --adopt
+backstage play path/to/scene.json --with-deps
 ```
 
 Finds the project (`backstage.json` above the scene), runs the `reset`/`setup`
@@ -114,17 +115,40 @@ stays open afterwards; close it with `backstage kill`.
 confirm, the same way `stage delete` asks for the stage name. Produce does
 not take this flag.
 
+`--with-deps` prints a plan, then records stale or missing producers (and any
+producer beneath one that will run) before the scene. It needs a scene under
+`<project>/scenes`. It reserves every stage in that plan first. A consumer of
+a manual snapshot is fine; a producer that would replace one, or replace a
+snapshot that belongs to another scene, stops the plan before the lock. The
+scene that remakes a snapshot is its declared `vm-end` producer; the origin
+is only used to detect errors and staleness. `--adopt` on this command
+applies only to the scene you named, and the typed confirmation happens
+before the lock. Ctrl-C at that prompt exits 130 without taking a lock
+or starting a take. A scene or project error on the chain stops the
+command before any lock; an error off the chain is a warning. The first
+failure stops the rest and lists which snapshots this run already saved.
+Ctrl-C during a take prints that same report first (the take in progress
+is `interrupted`) and exits 130, even if the take returns
+`context canceled` before the engine guard does. A cancel between takes
+lists the next step as `interrupted before` and as not run.
+
 ## rehearse
 
 ```bash
 backstage rehearse path/to/scene.json
 backstage rehearse path/to/scene.json --replace-state
+backstage rehearse path/to/scene.json --with-deps
 ```
 
 Same as `play` but skips recording and compresses delays, so you can validate
 flow and targeting quickly before a real take. `--replace-state` lets a
 rehearsal overwrite a snapshot a recording made. Without it, that replacement
 is refused before the take starts. Produce does not take this flag.
+
+`--with-deps` uses the same plan and lock as `play --with-deps`. It never
+implies `--replace-state`: the plan stops before a take that would replace a
+recording snapshot unless you pass the flag. A `continue` scene in the plan
+keeps its predecessor immediately before it on that stage.
 
 ## produce
 
