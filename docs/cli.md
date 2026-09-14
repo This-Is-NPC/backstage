@@ -7,6 +7,7 @@ backstage <command> [args]
 | Command | What it does |
 |---------|--------------|
 | `backstage list` | list recording/visual scenes, productions and presentations |
+| `backstage status [DIR]` | report which recording takes are stale, blocked or missing |
 | `backstage play SCENE` | stage the scene, record it, write the `.mp4` |
 | `backstage takes prune` | remove abandoned or old recorded takes |
 | `backstage rehearse SCENE` | run the scene fast, **without** recording (dry-run) |
@@ -40,6 +41,59 @@ backstage list [--project DIR]
 Prints recording scenes with layout and step count, visual scenes with duration,
 and declared productions and presentations. Use `play` for recording scenes and
 `render` or `preview` for presentations.
+
+## status
+
+```bash
+backstage status
+backstage status tutorials/pt
+backstage status tutorials/pt --json
+```
+
+Walks up from DIR (or the current directory) to the workspace root, then
+discovers every project whose `extends` chain reaches that root. Visual scenes
+are omitted. DIR limits which scenes are printed; producers outside it are
+still resolved.
+
+The command is read-only. It does not start, stop or restore a stage, and it
+does not create lock files. It reads the published clip and facts through the
+shared take reader (generation or legacy pair) and never reads attempts.
+
+Each recording scene is one row: project-relative name, status, short detail.
+The first matching status wins: `error`, `blocked:no-producer`,
+`blocked:state-missing`, `blocked:rehearsal-state`, `missing`, `stale:inputs`,
+`stale:state-mismatch`, `stale:start-state`, `stale:upstream`, `unverifiable`,
+`ok`. `error` is a take that cannot be opened, a scene file that does not
+load or validate, or a project whose `backstage.json` parses and whose
+`extends` chain reaches this workspace but fails the rest of validation (for
+example `record.out` escaping the leaf). DIR limits the scene rows, not the
+errors: configuration and scene errors from the whole workspace are always
+listed in an Errors section (and in `--json` `errors`), identified by
+`kind` (`config-error` or `scene-error`) and `project`. Config-error rows
+omit `scene`. The command exits non-zero whenever that list is non-empty.
+JSON that does not parse, or a chain that does not reach this root, is only a
+`warning` and does not change the exit code. A scene in `error` never
+aborts the report through the graph (no cycle, no duplicate-producer
+conflict). Of its `vm-start` / `vm-end`, only fields that would validate on
+their own enter the graph, and it is the producer of a snapshot only when no
+valid scene declares that snapshot on the same stage; otherwise the error row
+notes that it also declares that `vm-end`. A consumer whose start snapshot
+origin points at an error row or an error project is
+`stale:upstream`. A snapshot that exists with no
+origin, including `initial`, is a valid manual root: consumers of that state
+are not `stale:upstream`. `stale:inputs` compares the take's own start-state
+digest (`clean:<facts.start-image>`, `continue:<after>`). `stale:start-state`
+is a clean take whose `facts.start-image` is not the current snapshot image,
+so re-recording a producer leaves each consumer `stale:start-state`.
+
+`--json` adds the project, every matching reason, generation clip and facts
+paths, the stable clip and facts paths, stage, start and end snapshots, the
+`manual` label of each known state, `warnings`, and `errors`.
+
+Two valid scenes that save the same snapshot on one stage, or a cycle among
+valid scenes (including a scene that both starts from and saves the same
+snapshot), exit non-zero. Scene and config errors exit non-zero through the
+Errors section. Conflicts are written once to the command output.
 
 ## play
 

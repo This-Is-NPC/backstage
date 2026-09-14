@@ -46,6 +46,7 @@ exports/           rendered presentations
 
 ```bash
 backstage list                  # scenes, productions and presentations
+backstage status [DIR]          # which takes are stale, blocked or missing
 backstage rehearse SCENE        # fast, no camera; check the flow first
 backstage play SCENE            # the take
 backstage produce PRODUCTION    # record scenes again and join them
@@ -79,6 +80,12 @@ one way later without recording anything again.
 
 ## When A Recording Goes Stale
 
-Do not re-shoot by hand. Change the scene, or change the product, and play the
-scene again. A recording that cannot be regenerated is a screenshot with a
-duration.
+`backstage status` (and `status --json`) reports which recording takes are
+missing, stale, blocked or in error, and why. The directory argument limits
+scene rows, not errors: scene and config errors from the whole workspace stay
+in the Errors section (`kind` `scene-error` or `config-error`) and force a
+non-zero exit. A scene in error does not abort the report through the graph.
+Graph conflicts among valid scenes still exit non-zero. JSON that does not parse,
+or a chain that does not reach this root, is only a warning. Do not re-shoot
+by hand. Change the scene, or change the product, and play the scene again.
+A recording that cannot be regenerated is a screenshot with a duration.
