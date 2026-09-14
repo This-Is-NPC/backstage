@@ -34,6 +34,7 @@ records ordered steps against a staged layout.
 | `recorder` | `inside` or `framebuffer`; it overrides the guest |
 | `fresh` | `true` runs the `setup` hook in place of `reset` |
 | `reset` | `false` skips setup/reset hooks; it does not preserve open windows |
+| `inputs` | extra files or directories whose contents belong in the take digest |
 | `steps` | the ordered actions |
 
 `clean` restores a named `snapshot`, defaulting to `initial`; `reuse` keeps disk
@@ -83,10 +84,47 @@ A rehearsal writes no clip and no facts.
 ## Facts
 
 Every recording writes `<out>/<name>.facts.json` beside the clip. The sidecar
-names the Backstage version and a `result`: `ok`, `steps-failed` if a step
-failed, or `short` if the take is materially shorter than the recorder ran.
-A failed or short take is still kept. A guest take also records the machine
-it was filmed on; a clean start records the restored image and snapshot name.
+names the Backstage version, `inputs-sha256` (the digest of what changes the
+picture), and a `result`: `ok`, `steps-failed` if a step failed, or `short`
+if the take is materially shorter than the recorder ran. A failed or short
+take is still kept. A guest take also records the machine it was filmed on;
+a clean start records the restored image and snapshot name.
+
+## Inputs digest
+
+`inputs-sha256` hashes a canonical encoding of the take's picture inputs:
+the scene without `narration` or `audio`; the resolved `vms` entry (stage,
+open, language, and the effective recorder); the resolved layout; merged
+`popup` and `term`; the effective steps after alias resolution, and the
+definitions of aliases those steps use; each used transition (resolved
+definition, live prop content, `render.fps` with a fallback to
+`record.fps`, and `render.w` / `render.h`); the hook that would run
+(`setup` when `fresh`, otherwise `reset` when enabled, none for
+`continue`); each prop file a step calls, directly or through an alias;
+each path in `inputs`; merged `env`; `record.fps`; the take's `--speed`
+and `--show-staging`; and the start state (`clean:<image-id>`,
+`continue:<after>`, or empty for reuse and for a scene with no VM).
+Unused aliases and transitions do not enter. A directory in `inputs`
+hashes every regular file below it, sorted by workspace-relative path.
+A symlink to a file is included when the target stays inside the
+workspace: the digest keys the link's own path and hashes the target's
+content, so changing either one moves the take. A symlink that leaves
+the workspace, or a symlink to a directory, fails the digest. Paths are
+leaf-relative and must stay inside the workspace. Moving the workspace
+does not change the digest: expanded `${PROJECT}` and `${WORKSPACE}`
+values fold back to those tokens, and files are keyed by
+workspace-relative path plus content hash.
+
+A prop that sources another file, or a hook that copies a directory, hides
+that dependency. Name it in `inputs`:
+
+```json
+{ "inputs": ["props/browser-lib.sh", "hooks/files"] }
+```
+
+A missing input fails the take before recording. A rehearsal does not
+compute the digest. Changing narration or unused aliases does not force a
+new take.
 
 ## Do not narrate what the screen shows
 

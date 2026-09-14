@@ -133,11 +133,13 @@ desktop afterwards. Hooks still run on the host and can use:
 
 Passwords are not exported. Legacy external-VM hook ordering is unchanged.
 Each clip's `.facts.json` records the Backstage version, the take `result`
-(`ok`, `steps-failed`, or `short`), and the time it was made. A guest clip also
-records the stage, image origin, start mode, snapshot, ISO version/checksum,
-provisioning recipe, domain, user, address and Omarchy package version. A
-`vm-start: clean` take adds `start-image` (the restored image) and
-`start-state.snapshot` (the snapshot name). Host takes omit the guest fields.
+(`ok`, `steps-failed`, or `short`), `inputs-sha256` (the digest of the
+picture inputs, including the clean image id or the `continue` predecessor),
+and the time it was made. A guest clip also records the stage, image origin,
+start mode, snapshot, ISO version/checksum, provisioning recipe, domain,
+user, address and Omarchy package version. A `vm-start: clean` take adds
+`start-image` (the restored image) and `start-state.snapshot` (the snapshot
+name). Host takes omit the guest fields.
 VM takes start recording after staging even with `produce --show-staging`;
 installation and disk restoration are not part of the recorded clip.
 
