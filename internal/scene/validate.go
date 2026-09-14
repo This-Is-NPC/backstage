@@ -68,6 +68,14 @@ func (s *Scene) Validate(p *Project) error {
 			return err
 		}
 	}
+	for _, in := range s.Inputs {
+		if strings.TrimSpace(in) == "" {
+			return fmt.Errorf("scene %q: inputs entry is empty", s.Name)
+		}
+		if _, err := p.InputPath(in); err != nil {
+			return fmt.Errorf("scene %q: input %q: %w", s.Name, in, err)
+		}
+	}
 	ids := map[string]bool{}
 	for _, cue := range s.Narration.Cues {
 		if cue.ID == "" || ids[cue.ID] || cue.Text == "" || cue.Start < 0 || cue.End <= cue.Start {

@@ -48,7 +48,10 @@ type Scene struct {
 	Recorder string `json:"recorder,omitempty"`
 	Fresh    bool   `json:"fresh,omitempty"`
 	Reset    *bool  `json:"reset,omitempty"`
-	Steps    []Step `json:"steps"`
+	// Inputs lists extra files or directories whose contents belong in the
+	// take digest. Paths are leaf-relative and must stay inside the workspace.
+	Inputs []string `json:"inputs,omitempty"`
+	Steps  []Step   `json:"steps"`
 }
 
 // LayoutName returns the layout to stage.
