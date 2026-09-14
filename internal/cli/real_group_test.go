@@ -298,7 +298,29 @@ func runBackstage(t *testing.T, ctx context.Context, pgid *atomic.Int32, bin str
 	if run.stderr != "" {
 		t.Logf("stderr (full):\n%s", run.stderr)
 	}
+	if run.err != nil {
+		logFailedJobOutputs(t, run)
+	}
 	return run
+}
+
+func logFailedJobOutputs(t *testing.T, run backstageRun) {
+	t.Helper()
+	rep, err := parseFinalJobReport(run.stdout)
+	if err != nil {
+		return
+	}
+	for _, j := range rep.Jobs {
+		if j.Status != jobFailed || j.Log == "" {
+			continue
+		}
+		body, err := os.ReadFile(j.Log)
+		if err != nil {
+			t.Logf("failed job %s (%s) log %s: %v", j.ID, j.Scene, j.Log, err)
+			continue
+		}
+		t.Logf("failed job %s (%s) log:\n%s", j.ID, j.Scene, body)
+	}
 }
 
 func requireOKScenes(t *testing.T, stdout string, scenes ...string) map[string]jobReportItem {
