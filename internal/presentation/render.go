@@ -203,6 +203,7 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	if progress == nil {
 		progress = io.Discard
 	}
+	progress = &syncWriter{w: progress}
 	if _, err = dependencies(); err != nil {
 		return err
 	}
