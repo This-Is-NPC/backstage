@@ -179,7 +179,7 @@ func listProject(out io.Writer, p *scene.Project) error {
 }
 
 func playCmd() *cobra.Command {
-	var adopt bool
+	var adopt, withDeps bool
 	c := &cobra.Command{
 		Use:   "play SCENE",
 		Short: "Stage the scene, record it, and write an mp4",
@@ -188,40 +188,68 @@ func playCmd() *cobra.Command {
 			opts := engine.Options{Context: c.Context(), Record: true, Speed: 1, Adopt: adopt}
 			if adopt {
 				opts.ConfirmAdopt = func(snapshot string) error {
-					return confirmSnapshotName(c.InOrStdin(), c.ErrOrStderr(), snapshot)
+					return confirmSnapshotName(c.Context(), c.InOrStdin(), c.ErrOrStderr(), snapshot)
 				}
+			}
+			if withDeps {
+				return runWithDeps(c.OutOrStdout(), args[0], opts, nil, nil)
 			}
 			return runScene(args[0], opts)
 		},
 	}
 	c.Flags().BoolVar(&adopt, "adopt", false, "replace a snapshot that has no origin after typing its name")
+	c.Flags().BoolVar(&withDeps, "with-deps", false, "record stale or missing producers first")
 	return c
 }
 
 func rehearseCmd() *cobra.Command {
-	var replaceState bool
+	var replaceState, withDeps bool
 	c := &cobra.Command{
 		Use:   "rehearse SCENE",
 		Short: "Dry-run the scene fast, without recording",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error {
-			return runScene(args[0], engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed, ReplaceState: replaceState})
+			opts := engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed, ReplaceState: replaceState}
+			if withDeps {
+				return runWithDeps(c.OutOrStdout(), args[0], opts, nil, nil)
+			}
+			return runScene(args[0], opts)
 		},
 	}
 	c.Flags().BoolVar(&replaceState, "replace-state", false, "let a rehearsal replace a snapshot a recording made")
+	c.Flags().BoolVar(&withDeps, "with-deps", false, "rehearse stale or missing producers first")
 	return c
 }
 
-func confirmSnapshotName(in io.Reader, errOut io.Writer, snapshot string) error {
+func confirmSnapshotName(ctx context.Context, in io.Reader, errOut io.Writer, snapshot string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return interrupted(err)
+	}
 	fmt.Fprintf(errOut, "Replace snapshot %s? Type its name: ", snapshot)
-	line, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil {
-		return err
+	type readResult struct {
+		line string
+		err  error
 	}
-	if strings.TrimSpace(line) != snapshot {
-		return errors.New("adoption cancelled")
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(in).ReadString('\n')
+		ch <- readResult{line: line, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return interrupted(ctx.Err())
+	case got := <-ch:
+		if got.err != nil {
+			return got.err
+		}
+		if strings.TrimSpace(got.line) != snapshot {
+			return errors.New("adoption cancelled")
+		}
+		return nil
 	}
-	return nil
 }
 
 func setupCmd() *cobra.Command {

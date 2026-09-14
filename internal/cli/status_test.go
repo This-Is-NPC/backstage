@@ -77,6 +77,26 @@ func TestStatusWarningsKeepExitZero(t *testing.T) {
 	}
 }
 
+func TestStatusDuplicateSceneNameExitsNonZero(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t", "cmd": "bash"}]}}
+	}`)
+	writeFile(t, filepath.Join(dir, "scenes", "c.json"), `{"name":"c","layout":"solo","steps":[{"action":"wait","delay-after":0.05}]}`)
+	writeFile(t, filepath.Join(dir, "scenes", "c-copy.json"), `{"name":"c","layout":"solo","steps":[{"action":"wait","delay-after":0.05}]}`)
+	cmd := statusCmd()
+	var out, errBuf bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errBuf)
+	cmd.SetArgs([]string{dir})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("duplicate scene name must exit non-zero")
+	}
+	if !strings.Contains(out.String(), "duplicate scene name c") || !strings.Contains(out.String(), "c-copy.json") {
+		t.Fatalf("report missing duplicate name: %q", out.String())
+	}
+}
+
 func TestStatusSceneErrorExitsNonZero(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "backstage.json"), `{
