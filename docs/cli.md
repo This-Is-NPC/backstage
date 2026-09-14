@@ -106,6 +106,7 @@ backstage play path/to/scene.json --with-deps
 backstage play path/to/scene.json --with-deps --jobs 1
 backstage play --stale
 backstage play --stale tutorials/pt --json
+backstage play --stale --json tutorials/pt
 ```
 
 Finds the project (`backstage.json` above the scene), runs the `reset`/`setup`
@@ -145,7 +146,9 @@ once (the take in progress is `interrupted`) and exits 130. A cancel between
 takes lists the next step as `interrupted before` and as not run. A busy
 `image-catalog` makes a clean restore wait; it does not fail the take.
 
-`--stale [DIR]` records every scene in the workspace that `--with-deps`
+`--stale` is a switch. The workspace is an optional argument (`--stale [DIR]`,
+default `.`), so `play --stale tutorials/pt --json` works; `--stale` is not
+a string flag. `--stale [DIR]` records every scene in the workspace that `--with-deps`
 would seed (`missing`, `stale:*`, and a recording whose state is still a
 rehearsal), plus the same upstream and continue closure and the consumers
 of every planned take (including scenes that are still `ok` and would go

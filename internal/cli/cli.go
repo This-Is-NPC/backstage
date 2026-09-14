@@ -179,11 +179,11 @@ func listProject(out io.Writer, p *scene.Project) error {
 }
 
 func playCmd() *cobra.Command {
-	var adopt, withDeps, jsonOut, adoptConfirmed bool
+	var adopt, withDeps, jsonOut, adoptConfirmed, stale bool
 	var jobs, reservedFD, progressFD int
-	var staleDir, reservedStage string
+	var reservedStage string
 	c := &cobra.Command{
-		Use:   "play [SCENE]",
+		Use:   "play [SCENE | --stale [DIR]]",
 		Short: "Stage the scene, record it, and write an mp4",
 		Args:  playRehearseArgs,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -205,11 +205,15 @@ func playCmd() *cobra.Command {
 			}
 			d.Jobs = jobs
 			d.JSON = jsonOut
-			if c.Flags().Changed("stale") {
+			if stale {
 				if withDeps {
 					return fmt.Errorf("--stale cannot be used with --with-deps")
 				}
-				return d.runStale(staleDir, opts)
+				dir, err := staleWorkspace(args)
+				if err != nil {
+					return err
+				}
+				return d.runStale(dir, opts)
 			}
 			if withDeps {
 				return d.run(args[0], opts)
@@ -219,10 +223,7 @@ func playCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&adopt, "adopt", false, "replace a snapshot that has no origin after typing its name")
 	c.Flags().BoolVar(&withDeps, "with-deps", false, "record stale or missing producers first")
-	c.Flags().StringVar(&staleDir, "stale", "", "record every stale or missing scene in DIR")
-	if f := c.Flags().Lookup("stale"); f != nil {
-		f.NoOptDefVal = "."
-	}
+	c.Flags().BoolVar(&stale, "stale", false, "record every stale or missing scene; optional DIR argument defaults to .")
 	c.Flags().IntVar(&jobs, "jobs", 0, "limit concurrent takes (0 = host budget only)")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit job.progress lines and a final JSON report")
 	c.Flags().StringVar(&reservedStage, "internal-reserved-stage", "", "")
@@ -237,11 +238,11 @@ func playCmd() *cobra.Command {
 }
 
 func rehearseCmd() *cobra.Command {
-	var replaceState, withDeps, jsonOut, adoptConfirmed bool
+	var replaceState, withDeps, jsonOut, adoptConfirmed, stale bool
 	var jobs, reservedFD, progressFD int
-	var staleDir, reservedStage string
+	var reservedStage string
 	c := &cobra.Command{
-		Use:   "rehearse [SCENE]",
+		Use:   "rehearse [SCENE | --stale [DIR]]",
 		Short: "Dry-run the scene fast, without recording",
 		Args:  playRehearseArgs,
 		RunE: func(c *cobra.Command, args []string) error {
@@ -258,11 +259,15 @@ func rehearseCmd() *cobra.Command {
 			}
 			d.Jobs = jobs
 			d.JSON = jsonOut
-			if c.Flags().Changed("stale") {
+			if stale {
 				if withDeps {
 					return fmt.Errorf("--stale cannot be used with --with-deps")
 				}
-				return d.runStale(staleDir, opts)
+				dir, err := staleWorkspace(args)
+				if err != nil {
+					return err
+				}
+				return d.runStale(dir, opts)
 			}
 			if withDeps {
 				return d.run(args[0], opts)
@@ -272,10 +277,7 @@ func rehearseCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&replaceState, "replace-state", false, "let a rehearsal replace a snapshot a recording made")
 	c.Flags().BoolVar(&withDeps, "with-deps", false, "rehearse stale or missing producers first")
-	c.Flags().StringVar(&staleDir, "stale", "", "rehearse every stale or missing scene in DIR")
-	if f := c.Flags().Lookup("stale"); f != nil {
-		f.NoOptDefVal = "."
-	}
+	c.Flags().BoolVar(&stale, "stale", false, "rehearse every stale or missing scene; optional DIR argument defaults to .")
 	c.Flags().IntVar(&jobs, "jobs", 0, "limit concurrent takes (0 = host budget only)")
 	c.Flags().BoolVar(&jsonOut, "json", false, "emit job.progress lines and a final JSON report")
 	c.Flags().StringVar(&reservedStage, "internal-reserved-stage", "", "")
@@ -300,13 +302,32 @@ func requireSchedulerFlags(cmd *cobra.Command, withDeps bool) error {
 }
 
 func playRehearseArgs(cmd *cobra.Command, args []string) error {
-	if cmd.Flags().Changed("stale") {
+	stale, err := cmd.Flags().GetBool("stale")
+	if err != nil {
+		return err
+	}
+	if stale {
 		if cmd.Flags().Changed("with-deps") {
 			return fmt.Errorf("--stale cannot be used with --with-deps")
 		}
-		return cobra.NoArgs(cmd, args)
+		return cobra.MaximumNArgs(1)(cmd, args)
 	}
 	return cobra.ExactArgs(1)(cmd, args)
+}
+
+func staleWorkspace(args []string) (string, error) {
+	dir := "."
+	if len(args) == 1 {
+		dir = args[0]
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("--stale: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("--stale needs a workspace directory, not a file: %s", dir)
+	}
+	return dir, nil
 }
 
 func confirmAdoptNames(ctx context.Context, in io.Reader, errOut io.Writer, snapshot string) error {

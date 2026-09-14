@@ -3,9 +3,10 @@
 `play` records one scene. `play --with-deps` records that scene's stale or
 missing producers first, after printing the plan and reserving every stage
 in it. Different stages run together under the host budget; a host-display
-take never overlaps a VM take. `--jobs 1` is serial. `--stale [DIR]` records
-every seeded scene in the workspace, plus consumers that would go stale
-after those takes, with the same rules. Each take is a
+take never overlaps a VM take. `--jobs 1` is serial. `--stale` is a switch and the workspace is an optional
+argument (`--stale [DIR]`, default `.`). It records every seeded scene in
+the workspace, plus consumers that would go stale after those takes, with
+the same rules. Each take is a
 child process with its own log under `~/.local/state/backstage/jobs`.
 `--jobs` and `--json` need `--with-deps` or `--stale`. `--json` emits
 `job.progress` lines, a `plan.warning` line for each plan warning, and a
