@@ -292,7 +292,7 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 			return err
 		}
 		var err error
-		out, err = e.Project.SafePath(e.Project.Record.Out, s.Name+".mp4")
+		out, err = e.Project.OutputPath(e.Project.Record.Out, s.Name+".mp4")
 		if err != nil {
 			return err
 		}
@@ -456,7 +456,7 @@ func (e *Engine) runHooks(s *scene.Scene) error {
 // runScript runs a project-relative hook script with the project env, in the
 // project directory.
 func (e *Engine) runScript(rel string) error {
-	path, err := e.Project.SafePath(rel)
+	path, err := e.Project.InputPath(rel)
 	if err != nil {
 		return err
 	}

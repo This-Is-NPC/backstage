@@ -150,7 +150,7 @@ func sortedKeys[T any](m map[string]T) []string {
 	return keys
 }
 func (p *Plan) input(rel string) (string, error) {
-	path, err := p.Project.SafePath(rel)
+	path, err := p.Project.InputPath(rel)
 	if err != nil {
 		return "", err
 	}
@@ -198,6 +198,17 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		return nil, rootErr
 	}
 	copyProject.Dir = root
+	workspace := p.Workspace
+	if workspace == "" {
+		workspace = root
+	} else {
+		absWorkspace, err := filepath.Abs(workspace)
+		if err != nil {
+			return nil, err
+		}
+		workspace = absWorkspace
+	}
+	copyProject.Workspace = workspace
 	p = &copyProject
 
 	ref, ok := p.Presentations[name]
@@ -475,7 +486,7 @@ func (p *Plan) Output(override string) (string, error) {
 	if out == "" {
 		out = filepath.Join("exports", p.Name+".mp4")
 	}
-	path, err := p.Project.SafePath(out)
+	path, err := p.Project.OutputPath(out)
 	if err != nil {
 		return "", err
 	}

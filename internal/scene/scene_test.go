@@ -72,6 +72,9 @@ func TestExpandAndDefaults(t *testing.T) {
 	if p.Term != defTerm {
 		t.Errorf("term default = %s, want %s", p.Term, defTerm)
 	}
+	if p.Workspace != p.Dir {
+		t.Errorf("Workspace = %q, want Dir %q", p.Workspace, p.Dir)
+	}
 }
 
 func TestPopupStyleValidation(t *testing.T) {
@@ -307,26 +310,34 @@ func TestManifestPane(t *testing.T) {
 	}
 }
 
-func TestSafePath(t *testing.T) {
-	p := &Project{Dir: t.TempDir()}
-	if got, err := p.SafePath("recordings", "demo.mp4"); err != nil || filepath.Dir(got) != filepath.Join(p.Dir, "recordings") {
-		t.Fatalf("SafePath valid = %s, %v", got, err)
-	}
-	for _, bad := range []string{"../x", "/tmp/x"} {
-		if _, err := p.SafePath(bad); err == nil {
-			t.Fatalf("SafePath(%q) should reject project escape", bad)
-		}
-	}
-	outside := t.TempDir()
-	link := filepath.Join(p.Dir, "linked")
-	if err := os.Symlink(outside, link); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	if _, err := p.SafePath("linked", "out.mp4"); err == nil {
-		t.Fatal("SafePath should reject symlink escapes")
-	}
-	if _, err := p.SafePath("linked", "newdir", "out.mp4"); err == nil {
-		t.Fatal("SafePath should reject symlink ancestor escapes with missing child directories")
+func TestInputAndOutputPath(t *testing.T) {
+	for _, name := range []string{"InputPath", "OutputPath"} {
+		t.Run(name, func(t *testing.T) {
+			p := &Project{Dir: t.TempDir()}
+			fn := p.InputPath
+			if name == "OutputPath" {
+				fn = p.OutputPath
+			}
+			if got, err := fn("recordings", "demo.mp4"); err != nil || filepath.Dir(got) != filepath.Join(p.Dir, "recordings") {
+				t.Fatalf("%s valid = %s, %v", name, got, err)
+			}
+			for _, bad := range []string{"../x", "/tmp/x"} {
+				if _, err := fn(bad); err == nil {
+					t.Fatalf("%s(%q) should reject project escape", name, bad)
+				}
+			}
+			outside := t.TempDir()
+			link := filepath.Join(p.Dir, "linked")
+			if err := os.Symlink(outside, link); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			if _, err := fn("linked", "out.mp4"); err == nil {
+				t.Fatal(name + " should reject symlink escapes")
+			}
+			if _, err := fn("linked", "newdir", "out.mp4"); err == nil {
+				t.Fatal(name + " should reject symlink ancestor escapes with missing child directories")
+			}
+		})
 	}
 }
 

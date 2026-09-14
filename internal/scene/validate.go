@@ -64,7 +64,7 @@ func (s *Scene) Validate(p *Project) error {
 		if id == "" || audio.File == "" {
 			return fmt.Errorf("scene audio needs name and file")
 		}
-		if _, err := p.SafePath(audio.File); err != nil {
+		if _, err := p.InputPath(audio.File); err != nil {
 			return err
 		}
 	}
@@ -82,7 +82,7 @@ func (s *Scene) Validate(p *Project) error {
 		if s.VM != "" || s.VMStart != nil || s.Layout != "" || len(s.Steps) != 0 || s.Recorder != "" || s.Fresh || s.Reset != nil {
 			return fmt.Errorf("visual scene cannot declare recording configuration")
 		}
-		_, err := p.SafePath(s.Entry)
+		_, err := p.InputPath(s.Entry)
 		return err
 	}
 
@@ -243,7 +243,7 @@ func (p *Project) ValidateTransition(name string) error {
 		return fmt.Errorf("transition %q: cmd must write to {{out}}", name)
 	}
 	if t.HasLive() {
-		if _, err := p.SafePath(t.Live.Prop); err != nil {
+		if _, err := p.InputPath(t.Live.Prop); err != nil {
 			return fmt.Errorf("transition %q live.prop: %w", name, err)
 		}
 	}

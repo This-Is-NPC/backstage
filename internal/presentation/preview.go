@@ -56,7 +56,7 @@ func InitTemplate(root, name string) error {
 	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
 		return fmt.Errorf("template name must be a single directory name")
 	}
-	dir, pathErr := (&scene.Project{Dir: root}).SafePath("templates", name)
+	dir, pathErr := (&scene.Project{Dir: root, Workspace: root}).OutputPath("templates", name)
 	if pathErr != nil {
 		return pathErr
 	}

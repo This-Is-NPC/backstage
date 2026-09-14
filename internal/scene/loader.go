@@ -71,8 +71,9 @@ func LoadScene(path string) (*Scene, error) {
 	return &s, nil
 }
 
-// LoadProject reads a project config, records its directory, fills defaults, and
-// expands ${PROJECT}/$PROJECT in env values to the project root.
+// LoadProject reads a project config, records its directory as both Dir and
+// Workspace, fills defaults, and expands ${PROJECT}/$PROJECT in env values to
+// the project root.
 func LoadProject(cfgPath string) (*Project, error) {
 	b, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -83,6 +84,7 @@ func LoadProject(cfgPath string) (*Project, error) {
 		return nil, fmt.Errorf("config %s: %w", cfgPath, err)
 	}
 	p.Dir = filepath.Dir(cfgPath)
+	p.Workspace = p.Dir
 	// Validate the raw fontSize before defaulting: applyDefaults coerces 0 → the
 	// default, so a negative value is the only invalid raw input to reject here.
 	if p.Popup.Style.FontSize < 0 {

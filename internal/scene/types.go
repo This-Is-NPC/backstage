@@ -85,8 +85,12 @@ type Project struct {
 	// Productions are named ordered sequences of scenes with transitions between.
 	Productions map[string]Production `json:"productions,omitempty"`
 
-	// Dir is the project root (directory holding the config). Set by LoadProject.
+	// Dir is the leaf project root (directory holding this project's config).
+	// Set by LoadProject.
 	Dir string `json:"-"`
+	// Workspace is the workspace root. It equals Dir until a project can
+	// inherit configuration from ancestor directories.
+	Workspace string `json:"-"`
 }
 
 // VMCfg is one Omarchy guest a scene can run on.

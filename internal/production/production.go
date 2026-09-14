@@ -285,7 +285,7 @@ func Run(opts Options) (string, error) {
 	// 4. concat into the final video.
 	out := opts.OutPath
 	if out == "" {
-		out, err = p.SafePath(p.Record.Out, "production.mp4")
+		out, err = p.OutputPath(p.Record.Out, "production.mp4")
 		if err != nil {
 			return "", err
 		}

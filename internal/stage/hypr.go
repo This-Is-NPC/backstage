@@ -49,7 +49,7 @@ func (h *Hypr) Setup(layout scene.Layout, p *scene.Project) (*scene.Manifest, er
 	m := &scene.Manifest{Panes: map[string]string{}}
 
 	first := layout.Panes[0]
-	cwd0, err := p.SafePath(orDot(first.Cwd))
+	cwd0, err := p.InputPath(orDot(first.Cwd))
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (h *Hypr) Setup(layout scene.Layout, p *scene.Project) (*scene.Manifest, er
 
 	prev := pid
 	for _, pane := range layout.Panes[1:] {
-		cwd, err := p.SafePath(orDot(pane.Cwd))
+		cwd, err := p.InputPath(orDot(pane.Cwd))
 		if err != nil {
 			return nil, err
 		}

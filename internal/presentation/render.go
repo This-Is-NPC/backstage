@@ -103,7 +103,7 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 			http.NotFound(w, req)
 			return
 		}
-		path, e := p.Project.SafePath(rel)
+		path, e := p.Project.InputPath(rel)
 		if e != nil {
 			http.NotFound(w, req)
 			return
