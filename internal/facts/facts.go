@@ -52,6 +52,29 @@ type Facts struct {
 	InputsSHA256 string      `json:"inputs-sha256,omitempty"`
 	EndState     *EndState   `json:"end-state,omitempty"`
 	Result       string      `json:"result,omitempty"`
+	Timings      *Timings    `json:"timings,omitempty"`
+}
+
+// Timings is the cost of a guest take. Missing pointers were not measured:
+// the phase did not run, or it failed or was interrupted.
+type Timings struct {
+	ShutdownSeconds        *float64           `json:"shutdown-seconds,omitempty"`
+	CaptureSeconds         *float64           `json:"capture-seconds,omitempty"`
+	CaptureBytes           *int64             `json:"capture-bytes,omitempty"`
+	CaptureApparentBytes   *int64             `json:"capture-apparent-bytes,omitempty"`
+	RestoreStopSeconds     *float64           `json:"restore-stop-seconds,omitempty"`
+	RestoreActivateSeconds *float64           `json:"restore-activate-seconds,omitempty"`
+	BootSeconds            *float64           `json:"boot-seconds,omitempty"`
+	SessionSeconds         *float64           `json:"session-seconds,omitempty"`
+	StagePhases            map[string]float64 `json:"stage-phases,omitempty"`
+}
+
+// Empty reports that no phase completed.
+func (t Timings) Empty() bool {
+	return t.ShutdownSeconds == nil && t.CaptureSeconds == nil && t.CaptureBytes == nil &&
+		t.CaptureApparentBytes == nil && t.RestoreStopSeconds == nil &&
+		t.RestoreActivateSeconds == nil && t.BootSeconds == nil &&
+		t.SessionSeconds == nil && len(t.StagePhases) == 0
 }
 
 // Path is the sidecar next to clip, named <clip>.facts.json.

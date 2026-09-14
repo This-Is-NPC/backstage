@@ -64,6 +64,54 @@ func TestWriteReplacesTheSidecarWhole(t *testing.T) {
 	}
 }
 
+func TestTimingsJSONNamesAndOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "timed.facts.json")
+	shutdown, boot := 1.234, 0.0
+	bytes := int64(512)
+	want := Facts{Result: ResultOK, Timings: &Timings{
+		ShutdownSeconds: &shutdown,
+		BootSeconds:     &boot,
+		CaptureBytes:    &bytes,
+		StagePhases:     map[string]float64{"up": 2.5, "omarchy": 0.1},
+	}}
+	if err := Write(path, want); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(body)
+	for _, name := range []string{
+		`"shutdown-seconds"`, `"boot-seconds"`, `"capture-bytes"`, `"stage-phases"`,
+	} {
+		if !strings.Contains(raw, name) {
+			t.Fatalf("missing %s in %s", name, raw)
+		}
+	}
+	for _, absent := range []string{
+		`"capture-seconds"`, `"restore-stop-seconds"`, `"session-seconds"`,
+	} {
+		if strings.Contains(raw, absent) {
+			t.Fatalf("omitted field present: %s\n%s", absent, raw)
+		}
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Timings == nil || got.Timings.ShutdownSeconds == nil || *got.Timings.ShutdownSeconds != 1.234 {
+		t.Fatalf("timings: %+v", got.Timings)
+	}
+	if got.Timings.BootSeconds == nil || *got.Timings.BootSeconds != 0 {
+		t.Fatal("zero boot must be kept")
+	}
+	if !(Timings{}).Empty() {
+		t.Fatal("empty timings")
+	}
+}
+
 func TestPathSitsBesideTheClip(t *testing.T) {
 	if got := Path("/rec/01-take.mp4"); got != "/rec/01-take.facts.json" {
 		t.Fatalf("Path = %s", got)
