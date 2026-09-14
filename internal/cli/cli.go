@@ -42,7 +42,7 @@ func Execute(version string) error {
 	}
 	root.PersistentFlags().StringVar(&projectFlag, "project", "",
 		"project dir (default: search up from cwd)")
-	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd(), renderCmd(), previewCmd(), templateCmd(), configCmd())
+	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd(), renderCmd(), previewCmd(), templateCmd(), configCmd(), takesCmd())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return root.ExecuteContext(ctx)
