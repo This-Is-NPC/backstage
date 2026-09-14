@@ -42,6 +42,7 @@ type Scene struct {
 	// one way later.
 	VM      string   `json:"vm,omitempty"`
 	VMStart *VMStart `json:"vm-start,omitempty"`
+	VMEnd   *VMEnd   `json:"vm-end,omitempty"`
 	// Recorder overrides the vm's, for a scene that needs the other one.
 	// A scene ending in a logout, a reboot or a greeter has to be filmed
 	// from outside the session it is about to end.
@@ -160,6 +161,11 @@ func (s *Scene) VMStartMode() string {
 		return "reuse"
 	}
 	return s.VMStart.Mode
+}
+
+// VMEnd names a disk state to save after a successful take.
+type VMEnd struct {
+	Snapshot string `json:"snapshot"`
 }
 
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the

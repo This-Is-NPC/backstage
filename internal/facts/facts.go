@@ -14,14 +14,22 @@ import (
 )
 
 const (
-	ResultOK          = "ok"
-	ResultStepsFailed = "steps-failed"
-	ResultShort       = "short"
+	ResultOK            = "ok"
+	ResultStepsFailed   = "steps-failed"
+	ResultShort         = "short"
+	ResultCaptureFailed = "capture-failed"
 )
 
 // StartState names the snapshot restored at the beginning of a clean start.
 type StartState struct {
 	Snapshot string `json:"snapshot,omitempty"`
+}
+
+// EndState records a vm-end snapshot. A failed capture sets Status to "failed".
+type EndState struct {
+	Snapshot string `json:"snapshot,omitempty"`
+	Image    string `json:"image,omitempty"`
+	Status   string `json:"status,omitempty"`
 }
 
 // Facts records what a take was made against, beside the clip.
@@ -42,6 +50,7 @@ type Facts struct {
 	StartImage   string      `json:"start-image,omitempty"`
 	StartState   *StartState `json:"start-state,omitempty"`
 	InputsSHA256 string      `json:"inputs-sha256,omitempty"`
+	EndState     *EndState   `json:"end-state,omitempty"`
 	Result       string      `json:"result,omitempty"`
 }
 

@@ -11,7 +11,7 @@ import (
 func TestReadReturnsWrittenFacts(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "demo.facts.json")
-	want := Facts{Result: ResultOK, Backstage: "1.2.3", InputsSHA256: "abc"}
+	want := Facts{Result: ResultOK, Backstage: "1.2.3", InputsSHA256: "abc", EndState: &EndState{Snapshot: "ready", Image: "img"}}
 	if err := Write(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -21,6 +21,9 @@ func TestReadReturnsWrittenFacts(t *testing.T) {
 	}
 	if got.Result != want.Result || got.Backstage != want.Backstage || got.InputsSHA256 != want.InputsSHA256 {
 		t.Fatalf("read %+v", got)
+	}
+	if got.EndState == nil || got.EndState.Snapshot != "ready" || got.EndState.Image != "img" {
+		t.Fatalf("end-state: %+v", got.EndState)
 	}
 }
 

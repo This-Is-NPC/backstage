@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 )
 
@@ -87,7 +88,7 @@ func (s *Scene) Validate(p *Project) error {
 		if s.Duration <= 0 || s.Entry == "" {
 			return fmt.Errorf("visual scene requires entry and positive duration")
 		}
-		if s.VM != "" || s.VMStart != nil || s.Layout != "" || len(s.Steps) != 0 || s.Recorder != "" || s.Fresh || s.Reset != nil {
+		if s.VM != "" || s.VMStart != nil || s.VMEnd != nil || s.Layout != "" || len(s.Steps) != 0 || s.Recorder != "" || s.Fresh || s.Reset != nil {
 			return fmt.Errorf("visual scene cannot declare recording configuration")
 		}
 		_, err := p.InputPath(s.Entry)
@@ -95,6 +96,12 @@ func (s *Scene) Validate(p *Project) error {
 	}
 
 	if err := s.ValidateVMStart(p); err != nil {
+		return err
+	}
+	if err := s.ValidateVMEnd(p); err != nil {
+		return err
+	}
+	if err := s.ValidateContinuePredecessor(p); err != nil {
 		return err
 	}
 	if s.Name != "" {
@@ -185,6 +192,46 @@ func (s *Scene) ValidateVMStart(p *Project) error {
 		}
 	default:
 		return fmt.Errorf("vm-start.mode must be clean, reuse or continue")
+	}
+	return nil
+}
+
+func (s *Scene) ValidateVMEnd(p *Project) error {
+	if s.VMEnd == nil {
+		return nil
+	}
+	vm, ok := p.VMs[s.VM]
+	if !ok || s.VM == "" || vm.Stage == "" {
+		return fmt.Errorf("vm-end requires a managed stage")
+	}
+	if s.VMEnd.Snapshot == "initial" {
+		return fmt.Errorf("cannot save the initial snapshot")
+	}
+	if err := machine.ValidateName(s.VMEnd.Snapshot); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ValidateContinuePredecessor refuses continue after a scene that ends the guest.
+// A missing predecessor file is not this rule.
+func (s *Scene) ValidateContinuePredecessor(p *Project) error {
+	if s.VMStartMode() != "continue" || s.VMStart == nil || p == nil {
+		return nil
+	}
+	path, err := p.ScenePathSafe(s.VMStart.After)
+	if err != nil {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	pred, err := LoadScene(path)
+	if err != nil {
+		return err
+	}
+	if pred.VMEnd != nil {
+		return fmt.Errorf("cannot continue %q: that scene ends the guest", s.VMStart.After)
 	}
 	return nil
 }
