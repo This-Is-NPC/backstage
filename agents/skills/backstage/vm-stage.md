@@ -10,6 +10,7 @@ backstage stage create demo --omarchy latest
 backstage stage snapshot demo product-installed
 backstage stage snapshots demo --origins
 backstage stage snapshot-delete demo product-installed
+backstage stage prune-states demo --workspace .
 backstage stage clone demo tutorial --snapshot product-installed
 ```
 
@@ -57,7 +58,9 @@ preparation. They receive `BACKSTAGE_VM_ADDRESS`, `BACKSTAGE_VM_ADMIN`,
 `BACKSTAGE_VM_DOMAIN` and `BACKSTAGE_STAGE`.
 
 `stage list`, `inspect`, `start`, `stop`, `ssh`, `snapshots`, `restore`,
-`snapshot-delete` and `delete` manage the machines without a project.
+`snapshot-delete`, `prune-states` and `delete` manage the machines without a
+project. `prune-states` still needs `--workspace` so it can see which
+scenes still declare a state.
 Creation/snapshots/restoration leave a stage stopped. Recordings leave it
 running. `latest` is resolved at creation; existing stages keep their
 installed version.
@@ -67,7 +70,26 @@ installed version.
 state records the leaf project, scene, inputs digest, images, take kind,
 time and Backstage version. `inspect --json` includes `snapshot-origins`.
 `snapshot-delete` refuses `initial` and removes the mapping and origin
-together.
+together. `prune-states STAGE --workspace DIR` runs that deletion for
+produced snapshots no valid scene in the workspace still declares as
+`vm-end` on the stage. A broken config or scene, or an unreadable
+`backstage.json` under the workspace, stops it before any lock — also
+on `--dry-run`, which then lists those errors and warnings and prints
+no plan. A real run evaluates again under the locks and aborts without
+removing if that look fails. `--dry-run` otherwise lists the same set
+without locks or new files, wording removals as `would remove`. It
+keeps `initial`, manual or relative origins, an origin path that is not
+already clean (`..`, `.`, `//`), origins outside the workspace (a hidden
+directory or a nested workspace is outside), `missing-project` unless
+`--include-missing-projects`, snapshots a `vm-start clean` consumer still
+uses, and the image the stage is on. Reasons: `undeclared`, `initial`,
+`manual`, `outside-workspace`, `missing-project`, `consumed`, `in-use`.
+A failure mid-run lists `failed` and `not attempted`. Every error,
+including a missing argument or an unknown flag, is printed once to
+stderr; workspace errors, warnings and conflicts are not repeated.
+After flags parse, `--json` writes one document: the report (`cleanup-warnings`
+for pending cleanup), a workspace abort, a conflict, or
+`{"stage": STAGE, "error": "..."}`.
 
 ## Existing external VMs
 

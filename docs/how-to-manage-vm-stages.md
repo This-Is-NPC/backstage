@@ -179,6 +179,7 @@ backstage stage snapshot demo product-installed
 backstage stage snapshots demo
 backstage stage snapshots demo --origins
 backstage stage snapshot-delete demo product-installed
+backstage stage prune-states demo --workspace .
 backstage stage clone demo tutorial --snapshot product-installed
 backstage stage restore tutorial initial
 ```
@@ -199,6 +200,31 @@ recording or a rehearsal, when it was made, and the Backstage version.
 `initial`, removes the mapping and origin together, then collects unused
 images. A collection failure leaves the deletion committed and reports
 cleanup as pending; the next catalog mutation retries it.
+
+`prune-states` uses the same deletion for every produced snapshot that no
+valid scene in `--workspace` still declares as `vm-end` on that stage. It
+walks the workspace the way `status` does. A configuration or scene error,
+or an unreadable `backstage.json` under the workspace, aborts before any
+lock — `--dry-run` included — and lists those errors and warnings, with
+no plan: the broken file may be the one that still names the state. A
+real run evaluates again under the stage and image-catalog locks and
+aborts without removing if that second look finds an error, a warning
+or a conflict. It never removes `initial`, a manual snapshot, a relative
+or unreadable origin (a path that still has `..`, `.` or `//` is
+unreadable; the engine stores a cleaned, resolved path), an origin that
+points at a project outside this workspace (a hidden directory or a
+nested workspace counts as outside), a snapshot whose origin project is
+gone (`missing-project`, unless `--include-missing-projects`), a snapshot
+a declared `vm-start clean` consumer still uses, or the image the stage
+is running from. Reasons: `undeclared`, `initial`, `manual`,
+`outside-workspace`, `missing-project`, `consumed`, `in-use`. `--dry-run`
+prints `would remove`. Mid-run failure lists `failed` and `not attempted`.
+Every error, including a missing argument or an unknown flag, is printed
+once to stderr. Workspace errors, warnings and conflicts are not
+repeated there. After flags parse, `--json` writes exactly one JSON
+document: the report (success or mid-run failure, pending cleanup in
+`cleanup-warnings`), a workspace abort, a conflict, or
+`{"stage": STAGE, "error": "..."}`.
 
 Clones use their own writable overlay and UEFI variables. Before their first
 boot, Backstage changes their domain UUID, MAC, hostname, machine ID, SSH host

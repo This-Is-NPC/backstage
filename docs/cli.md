@@ -29,6 +29,8 @@ project. See [Manage VM stages](how-to-manage-vm-stages.md) for their complete
 workflow and host requirements. `stage snapshots` prints the name-to-image map;
 `--origins` adds each origin (`null` when the snapshot was made by hand).
 `stage snapshot-delete STAGE SNAPSHOT` removes a named state except `initial`.
+`stage prune-states STAGE --workspace DIR` removes produced snapshots that no
+valid scene in that workspace still declares as `vm-end` on the stage.
 
 > ⚠️ `play`, `setup` and `produce` take over the physical display. Run on a clean desktop.
 
@@ -175,6 +177,42 @@ are declared in `backstage.json` (see [Configuration](configuration.md#productio
 | `--keep-segments` | keep the intermediate clips for debugging |
 | `--speed N` | shortens the delays **while** each scene is performed. The machine gets less time, so a budget that runs on the clock is not spent. To publish a take faster, give the production a `speed`. |
 | `--out FILE` | output path for the final video |
+
+## stage prune-states
+
+```bash
+backstage stage prune-states STAGE --workspace DIR [--dry-run] [--json] [--include-missing-projects]
+```
+
+Discovers projects the same way as `status`. A configuration or scene error
+anywhere in the workspace, or an unreadable `backstage.json` under it
+(a discover warning), stops the command before any lock: that file may
+still name the state. `--dry-run` then prints those errors and warnings
+and exits, with no plan. A real run evaluates again after it holds the
+stage and image-catalog locks; a new error, warning or conflict there
+releases the locks and removes nothing.
+
+A snapshot is removed only when it has a readable origin inside the workspace
+and no valid scene still declares that name as `vm-end` on this stage (the
+scene was deleted, renamed, or changed the snapshot). A relative
+`origin.project`, or one that is not already clean (`..`, `.`, `//`), is
+unreadable. The engine writes a cleaned, resolved path. An origin whose
+project directory is gone but still belongs to this workspace is kept as
+`missing-project` unless `--include-missing-projects`. `--dry-run` prints
+`would remove` instead of `removed`.
+
+Reasons: `undeclared`, `initial`, `manual`, `outside-workspace` (including a
+hidden directory or a nested workspace), `missing-project`, `consumed`
+(`vm-start` `clean`), `in-use`. Each removal is `snapshot-delete`: stage
+and image-catalog locks, one commit, then `Collect`. A collection warning
+leaves the mapping gone. A failure mid-run prints `failed SNAPSHOT: ERROR`
+and `not attempted SNAPSHOT` (JSON: `failed` and `not-attempted`). Every
+error, including a missing argument or an unknown flag, is printed once to
+stderr. Workspace errors, warnings and conflicts are not repeated there.
+After flags parse, `--json` writes exactly one JSON document to stdout: the
+report (success or mid-run failure, with pending cleanup in
+`cleanup-warnings`), a workspace abort (`Result`), a `ConflictError`, or
+`{"stage": STAGE, "error": "..."}`.
 
 ## takes prune
 
