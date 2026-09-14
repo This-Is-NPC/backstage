@@ -443,6 +443,7 @@ BACKSTAGE_VM_INSTALL_TEST=1 go test ./internal/machine -run TestRealOmarchyStage
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealOmarchyStages -v -timeout 70m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/engine -run TestRealVMEndProducerConsumer -v -timeout 180m -count=1
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/cli -run TestRealParallelStages -v -count=1 -timeout 150m
+BACKSTAGE_VM_INTEGRATION=1 go test ./internal/cli -run TestRealStateGroup -v -count=1 -timeout 150m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealDeltaImages -v -timeout 90m -count=1
 BACKSTAGE_IMAGE_DEPTH=8 BACKSTAGE_VM_DEPTH_MEASURE=1 go test ./internal/machine -run TestMeasureImageDepthChain -v -timeout 120m -count=1
 ```
@@ -461,6 +462,15 @@ minute test timeout panics and skips `Cleanup`. Job logs use a
 temporary `XDG_STATE_HOME`; the stage store stays the real
 `XDG_DATA_HOME`. Both stages are deleted in `Cleanup`, including when
 `Create` leaves a partial record.
+
+`TestRealStateGroup` creates the same two `accept-*-a` / `accept-*-b`
+stages and records a `state-groups` pair: two `vm-end` producers and a
+consumer that restores the silent member without booting it. It builds
+`cmd/backstage` and runs that binary as the parent. After an isolated
+remake of one producer it expects the consumer to refuse without
+touching either disk, then `play --with-deps` to remake both members
+into one generation. Its context is 140 minutes; `-timeout` must be
+150m or the default 10 minute test timeout panics and skips `Cleanup`.
 
 The first command tests installation and recording without requiring clone
 customization. The second also checks snapshot contents, clone identity,
