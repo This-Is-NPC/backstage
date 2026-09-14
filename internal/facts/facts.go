@@ -50,6 +50,19 @@ func Path(clip string) string {
 	return strings.TrimSuffix(clip, filepath.Ext(clip)) + ".facts.json"
 }
 
+// Read loads a sidecar written by Write.
+func Read(path string) (Facts, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return Facts{}, err
+	}
+	var f Facts
+	if err := json.Unmarshal(body, &f); err != nil {
+		return Facts{}, err
+	}
+	return f, nil
+}
+
 // Write replaces path atomically: a temporary file in the same directory, then
 // rename. A reader sees the previous file or the new file, never a mix.
 func Write(path string, f Facts) error {

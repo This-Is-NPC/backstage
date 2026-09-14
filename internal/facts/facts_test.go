@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestReadReturnsWrittenFacts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "demo.facts.json")
+	want := Facts{Result: ResultOK, Backstage: "1.2.3", InputsSHA256: "abc"}
+	if err := Write(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Result != want.Result || got.Backstage != want.Backstage || got.InputsSHA256 != want.InputsSHA256 {
+		t.Fatalf("read %+v", got)
+	}
+}
+
 func TestWriteReplacesTheSidecarWhole(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "01-take.facts.json")
