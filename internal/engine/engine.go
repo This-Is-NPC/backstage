@@ -63,6 +63,7 @@ type Engine struct {
 	cmdGuard      *CommandGuard
 	startImage    string
 	startSnapshot string
+	inputsSHA256  string
 	takeSess      atomic.Pointer[take.Session]
 }
 
@@ -173,6 +174,7 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	}
 	e.startImage = ""
 	e.startSnapshot = ""
+	e.inputsSHA256 = ""
 	prevRehearsing := e.rehearsing
 	e.rehearsing = !opts.Record
 	defer func() { e.rehearsing = prevRehearsing }()
@@ -307,6 +309,17 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 				runErr = e.Managed.Finish(r, g, project, s.Name, opts.Record)
 			}
 		}()
+	}
+	if opts.Record {
+		digest, err := scene.InputsDigest(e.Project, s, scene.DigestOptions{
+			Speed:       e.Speed,
+			ShowStaging: opts.ShowStaging,
+			StartState:  scene.StartStateToken(s, e.startImage),
+		})
+		if err != nil {
+			return err
+		}
+		e.inputsSHA256 = digest
 	}
 	if s.VMStartMode() != "continue" {
 		if err := e.runHooks(s); err != nil {
@@ -449,9 +462,10 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 
 func (e *Engine) writeClipFacts(clip string, s *scene.Scene, version, result string) error {
 	f := facts.Facts{
-		Backstage: version,
-		Result:    result,
-		Made:      time.Now().Format(time.RFC3339),
+		Backstage:    version,
+		Result:       result,
+		Made:         time.Now().Format(time.RFC3339),
+		InputsSHA256: e.inputsSHA256,
 	}
 	if src, ok := e.Stager.(recordingGuest); ok {
 		g, omarchy := src.RecordingGuest()

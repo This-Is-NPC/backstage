@@ -51,14 +51,10 @@ func (e *Engine) runStep(i int, st scene.Step) error {
 
 // resolve expands a configured alias into a canonical action + default target.
 func (e *Engine) resolve(st scene.Step) (action, target string) {
-	action, target = st.Action, st.Target
-	if al, ok := e.Project.Aliases[action]; ok {
-		action = al.Action
-		if target == "" {
-			target = al.Target
-		}
+	if e.Project == nil {
+		return st.Action, st.Target
 	}
-	return action, target
+	return e.Project.ResolveStep(st)
 }
 
 // actDialog shows the floating instruction box, holds while it types, then closes.

@@ -64,6 +64,13 @@ func TestHostTakeWritesFacts(t *testing.T) {
 	if got.Made == "" {
 		t.Fatal("host facts missing made")
 	}
+	want, err := scene.InputsDigest(e.Project, s, scene.DigestOptions{Speed: 0.0001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InputsSHA256 != want {
+		t.Fatalf("inputs-sha256 = %q, want %q", got.InputsSHA256, want)
+	}
 }
 
 func TestVMTakeWritesGuestFieldsAndNewFacts(t *testing.T) {
@@ -231,6 +238,62 @@ func TestFactsResultPrefersStepsFailedWhenAlsoShort(t *testing.T) {
 	got := readFacts(t, clip)
 	if got.Result != facts.ResultStepsFailed {
 		t.Fatalf("result = %q", got.Result)
+	}
+}
+
+func TestMissingInputFailsBeforeRecord(t *testing.T) {
+	dir := t.TempDir()
+	var ord []string
+	e := &Engine{
+		Project: &scene.Project{
+			Dir:     dir,
+			Record:  scene.RecordCfg{Out: "recordings"},
+			Layouts: map[string]scene.Layout{"solo": {Panes: []scene.Pane{{Name: "t"}}}},
+		},
+		Stager: &fakeStager{order: &ord, m: &scene.Manifest{Panes: map[string]string{"t": "%1"}, Order: []string{"t"}}},
+		Rec:    &fakeRec{order: &ord},
+		Prompt: &fakePrompt{},
+		Speed:  0.0001,
+	}
+	s := &scene.Scene{
+		Name:   "demo",
+		Layout: "solo",
+		Inputs: []string{"missing.txt"},
+		Steps:  []scene.Step{{Action: "wait"}},
+	}
+	err := e.Run(s, Options{Record: true, OutPath: filepath.Join(dir, "clip.mp4"), Speed: 0.0001})
+	if err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("missing input: %v", err)
+	}
+	for _, step := range ord {
+		if step == "rec" {
+			t.Fatalf("recorder started: %v", ord)
+		}
+	}
+}
+
+func TestRehearsalSkipsInputsDigest(t *testing.T) {
+	dir := t.TempDir()
+	var ord []string
+	e := &Engine{
+		Project: &scene.Project{
+			Dir:     dir,
+			Record:  scene.RecordCfg{Out: "recordings"},
+			Layouts: map[string]scene.Layout{"solo": {Panes: []scene.Pane{{Name: "t"}}}},
+		},
+		Stager: &fakeStager{order: &ord, m: &scene.Manifest{Panes: map[string]string{"t": "%1"}, Order: []string{"t"}}},
+		Rec:    &fakeRec{order: &ord},
+		Prompt: &fakePrompt{},
+		Speed:  0.0001,
+	}
+	s := &scene.Scene{
+		Name:   "demo",
+		Layout: "solo",
+		Inputs: []string{"missing.txt"},
+		Steps:  []scene.Step{{Action: "wait"}},
+	}
+	if err := e.Run(s, Options{Record: false, Speed: 0.0001}); err != nil {
+		t.Fatal(err)
 	}
 }
 

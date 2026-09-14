@@ -26,22 +26,23 @@ type StartState struct {
 
 // Facts records what a take was made against, beside the clip.
 type Facts struct {
-	Stage       string      `json:"stage,omitempty"`
-	Origin      string      `json:"origin,omitempty"`
-	StartMode   string      `json:"vm-start,omitempty"`
-	Snapshot    string      `json:"snapshot,omitempty"`
-	ISOVersion  string      `json:"iso-version,omitempty"`
-	ISOChecksum string      `json:"iso-sha256,omitempty"`
-	Recipe      string      `json:"recipe,omitempty"`
-	Domain      string      `json:"domain,omitempty"`
-	User        string      `json:"user,omitempty"`
-	Omarchy     string      `json:"omarchy,omitempty"`
-	Address     string      `json:"address,omitempty"`
-	Made        string      `json:"made,omitempty"`
-	Backstage   string      `json:"backstage,omitempty"`
-	StartImage  string      `json:"start-image,omitempty"`
-	StartState  *StartState `json:"start-state,omitempty"`
-	Result      string      `json:"result,omitempty"`
+	Stage        string      `json:"stage,omitempty"`
+	Origin       string      `json:"origin,omitempty"`
+	StartMode    string      `json:"vm-start,omitempty"`
+	Snapshot     string      `json:"snapshot,omitempty"`
+	ISOVersion   string      `json:"iso-version,omitempty"`
+	ISOChecksum  string      `json:"iso-sha256,omitempty"`
+	Recipe       string      `json:"recipe,omitempty"`
+	Domain       string      `json:"domain,omitempty"`
+	User         string      `json:"user,omitempty"`
+	Omarchy      string      `json:"omarchy,omitempty"`
+	Address      string      `json:"address,omitempty"`
+	Made         string      `json:"made,omitempty"`
+	Backstage    string      `json:"backstage,omitempty"`
+	StartImage   string      `json:"start-image,omitempty"`
+	StartState   *StartState `json:"start-state,omitempty"`
+	InputsSHA256 string      `json:"inputs-sha256,omitempty"`
+	Result       string      `json:"result,omitempty"`
 }
 
 // Path is the sidecar next to clip, named <clip>.facts.json.
