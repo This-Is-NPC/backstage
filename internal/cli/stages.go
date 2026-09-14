@@ -14,7 +14,7 @@ import (
 
 func stageCmd() *cobra.Command {
 	c := &cobra.Command{Use: "stage", Short: "Create and manage shared Omarchy recording VMs"}
-	c.AddCommand(stageDoctorCmd(), stageCreateCmd(), stageListCmd(), stageInspectCmd(), stageCloneCmd())
+	c.AddCommand(stageDoctorCmd(), stageCreateCmd(), stageListCmd(), stageInspectCmd(), stageCloneCmd(), stagePruneStatesCmd())
 	for _, verb := range []string{"start", "stop", "ssh", "credentials", "snapshot", "snapshots", "restore", "snapshot-delete", "delete"} {
 		c.AddCommand(stageOperationCmd(verb))
 	}

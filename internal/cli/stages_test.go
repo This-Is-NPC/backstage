@@ -194,7 +194,7 @@ func testStageRecord() *machine.Record {
 
 func TestStageCommandsExposePlannedOperations(t *testing.T) {
 	root := stageCmd()
-	for _, verb := range []string{"doctor", "create", "list", "inspect", "start", "stop", "ssh", "credentials", "snapshot", "snapshots", "restore", "snapshot-delete", "clone", "delete"} {
+	for _, verb := range []string{"doctor", "create", "list", "inspect", "start", "stop", "ssh", "credentials", "snapshot", "snapshots", "restore", "snapshot-delete", "prune-states", "clone", "delete"} {
 		cmd, _, err := root.Find([]string{verb})
 		if err != nil || cmd == root {
 			t.Fatalf("missing %s", verb)
