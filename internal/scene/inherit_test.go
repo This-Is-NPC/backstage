@@ -464,3 +464,60 @@ func TestNegativeFontSizeRejectedAfterMerge(t *testing.T) {
 		t.Fatal("merged negative fontSize should fail")
 	}
 }
+
+func TestRenderThreadsMergeFieldByField(t *testing.T) {
+	ws := t.TempDir()
+	leaf := filepath.Join(ws, "leaf")
+	writeFile(t, filepath.Join(ws, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t"}]}},
+		"render": {"threads": {"prepare": 2, "encode": 8}}
+	}`)
+	writeFile(t, filepath.Join(leaf, "backstage.json"), `{
+		"extends": "../backstage.json",
+		"render": {"threads": {"encode": 4}}
+	}`)
+	p, err := LoadProject(filepath.Join(leaf, "backstage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Render.Threads.Prepare != 2 || p.Render.Threads.Encode != 4 || p.Render.Threads.Filter != 0 {
+		t.Fatalf("threads merge replaced the object: %+v", p.Render.Threads)
+	}
+	writeFile(t, filepath.Join(leaf, "backstage.json"), `{
+		"extends": "../backstage.json",
+		"render": {"threads": {"prepare": 0}}
+	}`)
+	p, err = LoadProject(filepath.Join(leaf, "backstage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Render.Threads.Prepare != 0 || p.Render.Threads.Encode != 8 {
+		t.Fatalf("prepare 0 should clear and keep encode: %+v", p.Render.Threads)
+	}
+}
+
+func TestHighRenderThreadsAccepted(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t"}]}},
+		"render": {"threads": {"encode": 999}}
+	}`)
+	p, err := LoadProject(filepath.Join(dir, "backstage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Render.Threads.Encode != 999 {
+		t.Fatal(p.Render.Threads)
+	}
+}
+
+func TestNegativeRenderThreadsRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t"}]}},
+		"render": {"threads": {"encode": -1}}
+	}`)
+	if _, err := LoadProject(filepath.Join(dir, "backstage.json")); err == nil {
+		t.Fatal("negative render.threads should fail")
+	}
+}

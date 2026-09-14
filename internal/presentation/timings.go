@@ -43,17 +43,19 @@ type renderTimings struct {
 	Draw                 framePhase         `json:"draw"`
 	Screenshot           framePhase         `json:"screenshot"`
 	EncodeWrite          framePhase         `json:"encode-write"`
-	EncodeSeconds        float64            `json:"encode-seconds"`
-	MuxSeconds           *float64           `json:"mux-seconds,omitempty"`
-	MetadataSeconds      float64            `json:"metadata-seconds"`
-	TotalSeconds         float64            `json:"total-seconds"`
-	TrackBytes           map[string]int64   `json:"track-bytes,omitempty"`
-	AudioPartBytes       []namedBytes       `json:"audio-part-bytes,omitempty"`
-	MixWAVBytes          *int64             `json:"mix-wav-bytes,omitempty"`
-	VideoMP4Bytes        *int64             `json:"video-mp4-bytes,omitempty"`
-	FinalMP4Bytes        *int64             `json:"final-mp4-bytes,omitempty"`
-	DecodedPNGBytes      int64              `json:"decoded-png-bytes"`
-	ScreenshotBytes      int64              `json:"screenshot-bytes"`
+	// EncodeSeconds is encoder Start to Wait. It overlaps the whole frame
+	// loop and is not a bottleneck reading. Screenshot and draw are the loop cost.
+	EncodeSeconds   float64          `json:"encode-seconds"`
+	MuxSeconds      *float64         `json:"mux-seconds,omitempty"`
+	MetadataSeconds float64          `json:"metadata-seconds"`
+	TotalSeconds    float64          `json:"total-seconds"`
+	TrackBytes      map[string]int64 `json:"track-bytes,omitempty"`
+	AudioPartBytes  []namedBytes     `json:"audio-part-bytes,omitempty"`
+	MixWAVBytes     *int64           `json:"mix-wav-bytes,omitempty"`
+	VideoMP4Bytes   *int64           `json:"video-mp4-bytes,omitempty"`
+	FinalMP4Bytes   *int64           `json:"final-mp4-bytes,omitempty"`
+	DecodedPNGBytes int64            `json:"decoded-png-bytes"`
+	ScreenshotBytes int64            `json:"screenshot-bytes"`
 }
 
 // msHist is 1000 one-millisecond buckets plus overflow. It does not store a duration per frame.

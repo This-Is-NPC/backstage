@@ -172,12 +172,22 @@ type VMEnd struct {
 	Group    string `json:"group,omitempty"`
 }
 
+// RenderThreads is used by presentation render. produce ignores these keys.
+// Zero or omitted values mean the presentation renderer picks a default.
+// Negative values are a config error. Very large values are accepted as written.
+type RenderThreads struct {
+	Prepare int `json:"prepare,omitempty"`
+	Filter  int `json:"filter,omitempty"`
+	Encode  int `json:"encode,omitempty"`
+}
+
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the
 // monitor's native resolution; zero fps falls back to record.fps.
 type RenderCfg struct {
-	W   int `json:"w,omitempty"`
-	H   int `json:"h,omitempty"`
-	FPS int `json:"fps,omitempty"`
+	W       int           `json:"w,omitempty"`
+	H       int           `json:"h,omitempty"`
+	FPS     int           `json:"fps,omitempty"`
+	Threads RenderThreads `json:"threads,omitempty"`
 }
 
 // ResolveRenderDims returns the (fps, w, h) a transition should target, applying

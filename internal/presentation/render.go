@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
@@ -137,13 +138,25 @@ func encodeImages(frames map[string][]byte) map[string]string {
 	return images
 }
 
+func captureScreenshot(ctx context.Context) ([]byte, error) {
+	optimize := screenshotOptimize
+	if screenshotObserver != nil {
+		screenshotObserver(optimize)
+	}
+	var shot []byte
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		var err error
+		shot, err = page.CaptureScreenshot().WithFromSurface(true).WithFormat(page.CaptureScreenshotFormatPng).WithOptimizeForSpeed(optimize).Do(ctx)
+		return err
+	}))
+	return shot, err
+}
+
 func (r *Renderer) frame(t float64, frames map[string][]byte) ([]byte, error) {
 	if err := r.eval("draw", map[string]any{"time": t, "images": encodeImages(frames)}); err != nil {
 		return nil, err
 	}
-	var shot []byte
-	err := chromedp.Run(r.ctx, chromedp.CaptureScreenshot(&shot))
-	return shot, err
+	return captureScreenshot(r.ctx)
 }
 
 // frameTimed calls drawTimed. Measured draw includes image load and the final requestAnimationFrame.
@@ -165,8 +178,7 @@ func (r *Renderer) frameTimed(t float64, frames map[string][]byte) ([]byte, fram
 	}
 	st.transfer = t1.Sub(t0) + overhead
 	shotAt := time.Now()
-	var shot []byte
-	err = chromedp.Run(r.ctx, chromedp.CaptureScreenshot(&shot))
+	shot, err := captureScreenshot(r.ctx)
 	st.screenshot = time.Since(shotAt)
 	return shot, st, err
 }
@@ -217,25 +229,19 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 			d.close()
 		}
 	}()
-	trackPaths := map[string]string{}
-	prepare := map[string]float64{}
-	for i, id := range sortedKeys(p.Tracks) {
-		fmt.Fprintf(progress, ">> prepare track %s\n", id)
-		prepAt := time.Now()
-		path, e := prepareTrack(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS)
-		if e != nil {
-			return e
-		}
-		prepare[id] = roundSec(time.Since(prepAt))
-		trackPaths[id] = path
-		d, e := newDecoder(ctx, path)
+	trackPaths, prepare, err := prepareTracks(ctx, p, work, progress)
+	if err != nil {
+		return err
+	}
+	if len(prepare) > 0 {
+		timings.PrepareTrackSeconds = prepare
+	}
+	for _, id := range sortedKeys(p.Tracks) {
+		d, e := newDecoder(ctx, trackPaths[id])
 		if e != nil {
 			return e
 		}
 		decoders[id] = d
-	}
-	if len(prepare) > 0 {
-		timings.PrepareTrackSeconds = prepare
 	}
 	fmt.Fprintln(progress, ">> prepare audio")
 	mixAt := time.Now()
@@ -251,13 +257,17 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 		}
 	}
 	video := filepath.Join(work, "video.mp4")
-	encoder := command(ctx, "ffmpeg", "-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "2", video)
+	_, _, encodeThreads := resolveRenderThreads(planThreadCfg(p), len(p.Tracks))
+	encArgs := []string{"-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", strconv.Itoa(encodeThreads), video}
+	noteRender(renderNote{EncodeThreads: encodeThreads, EncoderArgs: append([]string(nil), encArgs...)})
+	encoder := command(ctx, "ffmpeg", encArgs...)
 	var stderr bytes.Buffer
 	encoder.Stderr = &stderr
 	pipe, err := encoder.StdinPipe()
 	if err != nil {
 		return err
 	}
+	// encode-seconds is Start to Wait and overlaps the Chromium frame loop.
 	encodeAt := time.Now()
 	if err = encoder.Start(); err != nil {
 		return err

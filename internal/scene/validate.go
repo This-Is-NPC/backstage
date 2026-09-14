@@ -53,6 +53,9 @@ func (p *Project) ValidateConfig() error {
 	if err := prompter.ValidateTitle(style.Title); err != nil {
 		return err
 	}
+	if p.Render.Threads.Prepare < 0 || p.Render.Threads.Filter < 0 || p.Render.Threads.Encode < 0 {
+		return fmt.Errorf("render.threads values must not be negative")
+	}
 	return p.validateStateGroups()
 }
 

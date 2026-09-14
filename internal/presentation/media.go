@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -294,7 +296,7 @@ func (p *Plan) mix(ctx context.Context, dir string) (string, []namedSeconds, err
 }
 
 // Prepare each selected track once. FFV1 retains frames without storing PNG sequences.
-func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps int) (string, error) {
+func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps, threads, filterThreads, gop int) (string, []string, error) {
 	var filters []string
 	var labels strings.Builder
 	for i, s := range t.Segments {
@@ -304,8 +306,88 @@ func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps int)
 	}
 	filters = append(filters, fmt.Sprintf("%sconcat=n=%d:v=1:a=0,fps=%d[v]", labels.String(), len(t.Segments), fps))
 	out := filepath.Join(dir, id+".mkv")
-	err := run(ctx, "ffmpeg", "-v", "error", "-y", "-threads", "1", "-i", t.Media.Path, "-filter_complex_threads", "1", "-filter_complex", strings.Join(filters, ";"), "-map", "[v]", "-an", "-c:v", "ffv1", "-threads", "1", out)
-	return out, err
+	args := []string{"-v", "error", "-y", "-threads", strconv.Itoa(threads), "-i", t.Media.Path, "-filter_complex_threads", strconv.Itoa(filterThreads), "-filter_complex", strings.Join(filters, ";"), "-map", "[v]", "-an", "-c:v", "ffv1", "-threads", strconv.Itoa(threads)}
+	if gop > 0 {
+		args = append(args, "-g", strconv.Itoa(gop))
+	}
+	args = append(args, out)
+	return out, append([]string(nil), args...), run(ctx, "ffmpeg", args...)
+}
+
+func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer) (map[string]string, map[string]float64, error) {
+	ids := sortedKeys(p.Tracks)
+	if len(ids) == 0 {
+		noteRender(renderNote{PreparedPaths: map[string]string{}})
+		return nil, nil, nil
+	}
+	prepThreads, filterThreads, _ := resolveRenderThreads(planThreadCfg(p), len(ids))
+	limit := runtime.NumCPU()
+	if limit < 1 {
+		limit = 1
+	}
+	if len(ids) < limit {
+		limit = len(ids)
+	}
+	if prepareSerial {
+		limit = 1
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	paths := make([]string, len(ids))
+	secs := make([]float64, len(ids))
+	prepArgs := make([][]string, len(ids))
+	var (
+		wg      sync.WaitGroup
+		errOnce sync.Once
+		first   error
+		sem     = make(chan struct{}, limit)
+	)
+	for i, id := range ids {
+		i, id := i, id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
+			fmt.Fprintf(progress, ">> prepare track %s\n", id)
+			started := time.Now()
+			path, args, err := prepareOne(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads, ffv1GOP)
+			if err != nil {
+				errOnce.Do(func() {
+					first = err
+					cancel()
+				})
+				return
+			}
+			paths[i] = path
+			prepArgs[i] = args
+			secs[i] = roundSec(time.Since(started))
+		}()
+	}
+	wg.Wait()
+	if first != nil {
+		return nil, nil, first
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	out := map[string]string{}
+	times := map[string]float64{}
+	var allArgs []string
+	for i, id := range ids {
+		out[id] = paths[i]
+		times[id] = secs[i]
+		allArgs = append(allArgs, prepArgs[i]...)
+	}
+	noteRender(renderNote{PrepareArgs: allArgs, PreparedPaths: out})
+	return out, times, nil
 }
 
 // Decoder has bounded memory and reads exactly one PNG at a time from FFmpeg.

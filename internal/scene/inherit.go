@@ -134,7 +134,7 @@ func applyConfigFile(merged map[string]json.RawMessage, origins map[string]strin
 				return fmt.Errorf("%s: %s: %w", file.path, key, err)
 			}
 		case contains(settingsKeys, key):
-			if err := applySettings(merged, origins, key, val, file.path, key == "popup"); err != nil {
+			if err := applySettings(merged, origins, key, val, file.path, key == "popup" || key == "render"); err != nil {
 				return fmt.Errorf("%s: %s: %w", file.path, key, err)
 			}
 		case contains(scalarKeys, key):
@@ -230,7 +230,7 @@ func applySettings(merged map[string]json.RawMessage, origins map[string]string,
 func mergeSettingsFields(dst, src map[string]json.RawMessage, origins map[string]string, prefix, file string, mergeStyle bool) error {
 	for k, v := range src {
 		key := prefix + k
-		if mergeStyle && k == "style" && isJSONObject(v) {
+		if mergeStyle && (k == "style" || k == "threads") && isJSONObject(v) {
 			child := map[string]json.RawMessage{}
 			if prev, ok := dst[k]; ok {
 				if err := json.Unmarshal(prev, &child); err != nil {
