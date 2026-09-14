@@ -2,6 +2,7 @@ package take
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,10 @@ import (
 
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
+
+// ErrNotPublished means the scene has no published generation and no
+// legacy stable clip.
+var ErrNotPublished = errors.New("no published take")
 
 // Handle is a leased view of one complete clip/facts pair.
 type Handle struct {
@@ -106,7 +111,10 @@ func openPaths(p Paths) (*Handle, error) {
 func openLegacy(p Paths) (*Handle, error) {
 	clip := p.StableClip()
 	if _, err := os.Stat(clip); err != nil {
-		return nil, fmt.Errorf("no published take for %s: %w", p.Scene, err)
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w for %s", ErrNotPublished, p.Scene)
+		}
+		return nil, err
 	}
 	if _, err := os.Stat(p.lockPath()); err != nil {
 		if os.IsNotExist(err) {

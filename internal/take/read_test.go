@@ -2,6 +2,7 @@ package take
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,14 @@ func TestOpenLegacyWithoutLock(t *testing.T) {
 	}
 	if len(h.files) != 0 {
 		t.Fatal("legacy without lock should not hold a flock")
+	}
+}
+
+func TestOpenMissingIsErrNotPublished(t *testing.T) {
+	p, _ := testProject(t)
+	_, err := Open(p, "demo")
+	if !errors.Is(err, ErrNotPublished) {
+		t.Fatalf("missing take: %v", err)
 	}
 }
 
