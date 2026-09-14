@@ -46,6 +46,32 @@ func TestLoadProjectWithoutExtendsMatchesBefore(t *testing.T) {
 	}
 }
 
+func TestExtendsRootSkipsValidation(t *testing.T) {
+	ws := t.TempDir()
+	writeFile(t, filepath.Join(ws, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t", "cmd": "bash"}]}}
+	}`)
+	leaf := filepath.Join(ws, "en")
+	writeFile(t, filepath.Join(leaf, "backstage.json"), `{
+		"extends": "../backstage.json",
+		"record": {"out": "../escape"}
+	}`)
+	if _, err := LoadProject(filepath.Join(leaf, "backstage.json")); err == nil {
+		t.Fatal("escaping record.out should fail LoadProject")
+	}
+	root, err := ExtendsRoot(filepath.Join(leaf, "backstage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.Abs(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != want {
+		t.Fatalf("ExtendsRoot %s, want %s", root, want)
+	}
+}
+
 func TestExtendsChainAndWorkspace(t *testing.T) {
 	ws := t.TempDir()
 	lang := filepath.Join(ws, "lang")

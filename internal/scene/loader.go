@@ -78,6 +78,17 @@ func LoadProject(cfgPath string) (*Project, error) {
 	return loadProject(cfgPath, true)
 }
 
+// ExtendsRoot is the directory of the topmost file in the extends chain,
+// without validating the rest of the config. It fails when the JSON does
+// not parse or the extends path cannot be followed.
+func ExtendsRoot(cfgPath string) (string, error) {
+	files, err := loadConfigChain(cfgPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(filepath.Dir(files[0].path))
+}
+
 func loadProject(cfgPath string, strict bool) (*Project, error) {
 	files, err := loadConfigChain(cfgPath)
 	if err != nil {
