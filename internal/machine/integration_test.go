@@ -107,6 +107,8 @@ func TestRealOmarchyStages(t *testing.T) {
 		if err := m.Snapshot(ctx, r, "installed"); err != nil {
 			t.Fatal(err)
 		}
+		logProvisionTimings(t, filepath.Join(m.Store.Dir(r.Name), "provision.log"),
+			"shutdown-seconds", "capture-seconds", "capture-bytes", "capture-apparent-bytes")
 	}
 	clone, err := m.Store.Load(cloneName)
 	if err != nil || clone.Status != "ready" {
@@ -164,6 +166,8 @@ func TestRealOmarchyStages(t *testing.T) {
 	if err := m.Restore(ctx, clone, "initial"); err != nil {
 		t.Fatal(err)
 	}
+	logProvisionTimings(t, filepath.Join(m.Store.Dir(clone.Name), "provision.log"),
+		"restore-stop-seconds", "restore-activate-seconds")
 	cg, err = m.Start(ctx, clone)
 	if err != nil {
 		t.Fatal(err)
@@ -182,6 +186,27 @@ func TestRealOmarchyStages(t *testing.T) {
 	}
 	if err := m.Delete(ctx, clone); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func logProvisionTimings(t *testing.T, path string, names ...string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("provision.log: %v", err)
+	}
+	var logged []string
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.Contains(line, "timing ") {
+			t.Logf("%s", line)
+			logged = append(logged, line)
+		}
+	}
+	joined := strings.Join(logged, "\n")
+	for _, name := range names {
+		if !strings.Contains(joined, "timing "+name) {
+			t.Fatalf("missing timing %s in %s", name, path)
+		}
 	}
 }
 

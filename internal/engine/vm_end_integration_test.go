@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,6 +42,7 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 	}
 	name := "accept-" + hex.EncodeToString(id[:])
 	t.Cleanup(func() {
+		logProvisionTimingLines(t, filepath.Join(m.Store.Dir(name), "provision.log"))
 		t.Logf("cleaning stage %s", name)
 		clean, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -109,6 +112,7 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 	producerFacts := readFacts(t, filepath.Join(dir, "recordings", "make-ready.mp4"))
+	logClipTimings(t, "producer", producerFacts.Timings)
 	if producerFacts.Timings == nil || producerFacts.Timings.ShutdownSeconds == nil || producerFacts.Timings.CaptureSeconds == nil || producerFacts.Timings.CaptureBytes == nil {
 		t.Fatalf("producer timings: %+v", producerFacts.Timings)
 	}
@@ -146,6 +150,7 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readFacts(t, filepath.Join(dir, "recordings", "use-ready.mp4"))
+	logClipTimings(t, "consumer", got.Timings)
 	if got.StartImage != image {
 		t.Fatalf("start-image = %q, want %q", got.StartImage, image)
 	}
@@ -157,5 +162,44 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 	}
 	if got.Timings == nil || got.Timings.RestoreStopSeconds == nil || got.Timings.RestoreActivateSeconds == nil || got.Timings.BootSeconds == nil || got.Timings.SessionSeconds == nil {
 		t.Fatalf("consumer timings: %+v", got.Timings)
+	}
+	requireProvisionTimings(t, filepath.Join(m.Store.Dir(name), "provision.log"),
+		"shutdown-seconds", "capture-seconds", "capture-bytes",
+		"restore-stop-seconds", "restore-activate-seconds", "boot-seconds", "session-seconds")
+}
+
+func logClipTimings(t *testing.T, label string, tm *facts.Timings) {
+	t.Helper()
+	body, err := json.MarshalIndent(tm, "", "  ")
+	if err != nil {
+		t.Fatalf("%s timings json: %v", label, err)
+	}
+	t.Logf("%s timings:\n%s", label, body)
+}
+
+func logProvisionTimingLines(t *testing.T, path string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Logf("provision.log: %v", err)
+		return
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.Contains(line, "timing ") {
+			t.Logf("%s", line)
+		}
+	}
+}
+
+func requireProvisionTimings(t *testing.T, path string, names ...string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("provision.log: %v", err)
+	}
+	for _, name := range names {
+		if !strings.Contains(string(body), "timing "+name) {
+			t.Fatalf("missing timing %s in %s", name, path)
+		}
 	}
 }
