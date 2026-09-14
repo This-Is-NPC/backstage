@@ -43,10 +43,12 @@ A minimal `presentations/demo.json` using the built-in template:
 }
 ```
 
-`scene` resolves `scenes/NAME.json` and the existing
-`<record.out>/<scene.name>.mp4`. Supply `file` alongside `scene` to select another
-take with the same editorial content. Missing files are errors, not permission
-to record. Direct file sources need no scene.
+`scene` resolves `scenes/NAME.json` and the last successful take of that
+scene. The render holds that generation until it finishes. A `file` source
+reads the path you name, including the projected `<record.out>/<scene>.mp4`.
+A failed take does not replace that path. Supply `file` alongside `scene` to
+select another file with the same editorial content. Missing files are errors,
+not permission to record. Direct file sources need no scene.
 
 Tracks are independently timed instances. To show the same source in two slots,
 declare two track IDs. A track's optional `segments` lists `{from, to, rate}` in

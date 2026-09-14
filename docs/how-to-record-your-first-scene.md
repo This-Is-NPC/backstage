@@ -86,7 +86,8 @@ backstage play scenes/01-hello.json
 >> done. recordings/01-hello.mp4  (stage open — backstage kill)
 ```
 
-The video is at `recordings/01-hello.mp4`.
+The video is at `recordings/01-hello.mp4`. A later take that fails or comes
+back short is kept as an attempt and does not replace that file.
 
 ---
 

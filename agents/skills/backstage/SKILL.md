@@ -54,6 +54,7 @@ backstage render NAME           # export a presentation from existing media
 backstage preview NAME          # render first, then open playback controls
 backstage template init NAME    # create an editable HTML template
 backstage config show           # merged configuration and the file each key came from
+backstage takes prune           # drop abandoned or old takes; not the last success
 backstage kill                  # strike the set
 ```
 

@@ -8,6 +8,7 @@ backstage <command> [args]
 |---------|--------------|
 | `backstage list` | list recording/visual scenes, productions and presentations |
 | `backstage play SCENE` | stage the scene, record it, write the `.mp4` |
+| `backstage takes prune` | remove abandoned or old recorded takes |
 | `backstage rehearse SCENE` | run the scene fast, **without** recording (dry-run) |
 | `backstage produce [PRODUCTION]` | record several scenes + transitions into one video |
 | `backstage setup --stage LAYOUT` | stage a layout only, no recording |
@@ -46,10 +47,11 @@ backstage play path/to/scene.json
 
 Finds the project (`backstage.json` above the scene), runs the `reset`/`setup`
 hook, stages the layout, starts recording, performs every step, stops. The video
-lands at `<project>/<record.out>/<scene-name>.mp4`. A take that comes back
-materially shorter than the time the recorder ran is reported as an error, with
-both lengths; the clip is written either way. The stage stays open
-afterwards; close it with `backstage kill`.
+lands at `<project>/<record.out>/<scene-name>.mp4`. That path is the last
+successful take. A take whose steps fail, or that comes back materially shorter
+than the time the recorder ran, is still kept as an attempt and printed; it
+does not replace the last valid clip. The stage stays open afterwards; close
+it with `backstage kill`.
 
 ## rehearse
 
@@ -81,6 +83,22 @@ concatenates everything into one video at `<project>/<record.out>/production.mp4
 | `--keep-segments` | keep the intermediate clips for debugging |
 | `--speed N` | shortens the delays **while** each scene is performed. The machine gets less time, so a budget that runs on the clock is not spent. To publish a take faster, give the production a `speed`. |
 | `--out FILE` | output path for the final video |
+
+## takes prune
+
+```bash
+backstage takes prune [--project DIR] [--older-than DURATION] [--max-size SIZE] [--dry-run]
+```
+
+Without flags, only abandoned in-progress directories are handled: a pending
+take with no clip, or an empty clip, is deleted; a pending take with a
+non-empty clip is moved to attempts, with or without facts. A `.creating-*`
+directory younger than one hour is left alone; an older one with a free lease
+is treated like an abandoned pending. `--older-than`
+and `--max-size` also remove old unreferenced
+generations and attempts. The published generation, a recording in progress,
+and a generation a render is reading are never removed. Duration accepts Go
+durations and a day count (`7d`). Size accepts `K`, `M`, or `G` (1024).
 
 ## setup
 

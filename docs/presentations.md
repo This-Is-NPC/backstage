@@ -45,9 +45,14 @@ A complete presentation document uses schema version 1:
 }
 ```
 
-A source `scene` references `scenes/NAME.json` and defaults to the existing
-`<record.out>/<scene.name>.mp4` (the filename supplies the name when omitted). Supply `file` alongside `scene` to use another take while
-retaining its editorial content. It never re-records a missing file.
+A source `scene` references `scenes/NAME.json` and the last successful take
+of that scene (the filename supplies the name when omitted). The documented
+`<record.out>/<scene.name>.mp4` path is a projection of that take; a `scene`
+source reads the published generation and holds it for the whole render.
+Supply `file` alongside `scene` to use another file while retaining editorial
+content. A `file` source follows the projection, so an existing
+`recordings/NAME.mp4` reference still tracks new successful takes. A failed
+take never replaces that path. It never re-records a missing file.
 
 Tracks are instances of sources: use distinct IDs to place the same source in
 multiple slots or play it at different positions. Each track can select cuts:

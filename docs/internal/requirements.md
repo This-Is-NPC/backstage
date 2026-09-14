@@ -20,7 +20,7 @@ narrates on screen, records) and produces the same take every time.
 | F5 | Drive panes by **name**: type commands, type literal text, send named keys. |
 | F6 | Show a **Prompter**: a floating box that types instruction text on screen, char by char. |
 | F7 | Run **Props**: call any external script (with args, project env), blocking, surfacing a non-zero exit. |
-| F8 | **Record** the screen to an `.mp4` at `<project>/<out>/<scene>.mp4`. |
+| F8 | **Record** the screen to an `.mp4` at `<project>/<out>/<scene>.mp4`. That path is a projection of the last successful take. |
 | F9 | Verbs: `play` (record), `rehearse` (dry-run, no record, compressed delays), `setup` (stage only), `kill` (teardown). |
 | F10 | **Aliases**: map custom step actions to a canonical action + default target, defined in project config. |
 

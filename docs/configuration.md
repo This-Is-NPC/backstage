@@ -52,7 +52,12 @@ workspace.
 | `presentations` | named presentation JSON files, templates and outputs | — |
 | `vms` | named external VM connections or shared managed-stage references | — |
 
-The video is written to `<project>/<record.out>/<scene-name>.mp4`.
+The video is written to `<project>/<record.out>/<scene-name>.mp4`. That path
+is a projection of the last successful take. A failed or short take is kept
+under `.takes/` and does not replace it. Internal readers use
+`<scene-name>.take.json` when that manifest exists. A project that has never
+published a manifest is read from the stable files with no lock; a first
+`play` at the same time may replace `SCENE.mp4` during that read.
 
 ## Inheritance
 

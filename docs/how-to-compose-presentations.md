@@ -6,6 +6,9 @@ an idea with an animated SVG. Changing the montage does not re-record the takes.
 ## Before you start
 
 - Have three video files in `recordings/`: `parent.mp4`, `laptop.mp4` and `browser.mp4`.
+  Those names stay valid after a later successful `play`; a failed take does
+  not replace them. A source that names `"scene"` reads the published
+  generation instead of the file path.
 - Install Chromium (or Google Chrome), FFmpeg and ffprobe.
 - Run the commands below from your project directory. All JSON paths are relative
   to that directory.
