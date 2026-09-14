@@ -25,6 +25,8 @@ described below.
 | `fresh` | run the `setup` hook instead of `reset` |
 | `reset` | default true; false skips hooks, not desktop preparation |
 | `inputs` | extra files or directories hashed into `inputs-sha256` |
+| `vm-start` | `clean` / `reuse` / `continue` — how the guest starts |
+| `vm-end` | `{ "snapshot": "name" }` — save that disk state after a successful take |
 
 ## Actions
 

@@ -45,24 +45,32 @@ and declared productions and presentations. Use `play` for recording scenes and
 
 ```bash
 backstage play path/to/scene.json
+backstage play path/to/scene.json --adopt
 ```
 
 Finds the project (`backstage.json` above the scene), runs the `reset`/`setup`
 hook, stages the layout, starts recording, performs every step, stops. The video
 lands at `<project>/<record.out>/<scene-name>.mp4`. That path is the last
-successful take. A take whose steps fail, or that comes back materially shorter
-than the time the recorder ran, is still kept as an attempt and printed; it
-does not replace the last valid clip. The stage stays open afterwards; close
-it with `backstage kill`.
+successful take. A take whose steps fail, that comes back materially shorter
+than the time the recorder ran, or whose `vm-end` capture fails, is still kept
+as an attempt and printed; it does not replace the last valid clip. The stage
+stays open afterwards; close it with `backstage kill`.
+
+`--adopt` replaces a snapshot that has no origin. Type the snapshot name to
+confirm, the same way `stage delete` asks for the stage name. Produce does
+not take this flag.
 
 ## rehearse
 
 ```bash
 backstage rehearse path/to/scene.json
+backstage rehearse path/to/scene.json --replace-state
 ```
 
 Same as `play` but skips recording and compresses delays, so you can validate
-flow and targeting quickly before a real take.
+flow and targeting quickly before a real take. `--replace-state` lets a
+rehearsal overwrite a snapshot a recording made. Without it, that replacement
+is refused before the take starts. Produce does not take this flag.
 
 ## produce
 
@@ -76,8 +84,9 @@ Records each scene to a clip, renders the transitions between them, and
 concatenates everything into one video at `<project>/<record.out>/production.mp4`
 (override with `--out`). A scene recorded at `--speed 1` without
 `--show-staging` is published to `record.out` as soon as it succeeds; the
-published files are the raw take, not a retimed copy. A failed take is kept
-as an attempt even without `--keep-segments`. Productions and transitions
+published files are the raw take, not a retimed copy. A failed take
+(`steps-failed`, `short`, or `capture-failed`) is kept as an attempt even
+without `--keep-segments`. Productions and transitions
 are declared in `backstage.json` (see [Configuration](configuration.md#productions)).
 
 | Flag | Effect |

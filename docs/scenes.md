@@ -31,6 +31,7 @@ records ordered steps against a staged layout.
 | `layout` | the layout to stage, from `backstage.json` |
 | `vm` | the guest to run inside; empty stages on this machine |
 | `vm-start` | `{"mode":"clean"}`, `{"mode":"reuse"}`, or `{"mode":"continue","after":"previous-scene"}` |
+| `vm-end` | `{"snapshot":"theme-installed"}` — save that disk state after a successful take |
 | `recorder` | `inside` or `framebuffer`; it overrides the guest |
 | `fresh` | `true` runs the `setup` hook in place of `reset` |
 | `reset` | `false` skips setup/reset hooks; it does not preserve open windows |
@@ -39,7 +40,10 @@ records ordered steps against a staged layout.
 
 `clean` restores a named `snapshot`, defaulting to `initial`; `reuse` keeps disk
 contents and reorganizes the desktop; `continue` preserves the live session and
-skips reset/setup hooks. Clean and continue require managed stages. See
+skips reset/setup hooks. Clean and continue require managed stages. `vm-end`
+requires a managed stage, refuses `initial`, and cannot be the predecessor of
+`continue`. A production that consumes a snapshot another scene in the same
+run produces must list the producer first. See
 [Manage VM stages](how-to-manage-vm-stages.md#choose-how-each-scene-starts).
 
 ## Actions
@@ -85,10 +89,14 @@ A rehearsal writes no clip and no facts.
 
 Every recording writes `<out>/<name>.facts.json` beside the clip. The sidecar
 names the Backstage version, `inputs-sha256` (the digest of what changes the
-picture), and a `result`: `ok`, `steps-failed` if a step failed, or `short`
-if the take is materially shorter than the recorder ran. A failed or short
-take is still kept. A guest take also records the machine it was filmed on;
-a clean start records the restored image and snapshot name.
+picture), and a `result`: `ok`, `steps-failed` if a step failed, `short`
+if the take is materially shorter than the recorder ran, or `capture-failed`
+if `vm-end` could not commit the snapshot. A failed or short take is still
+kept. A successful `vm-end` rewrites the sidecar with
+`end-state: { snapshot, image }`; a failed capture writes
+`end-state: { snapshot, status: "failed" }`. A guest take also records the
+machine it was filmed on; a clean start records the restored image and
+snapshot name.
 
 ## Inputs digest
 
@@ -123,8 +131,8 @@ that dependency. Name it in `inputs`:
 ```
 
 A missing input fails the take before recording. A rehearsal does not
-compute the digest. Changing narration or unused aliases does not force a
-new take.
+compute the digest unless the scene declares `vm-end`. Changing narration
+or unused aliases does not force a new take.
 
 ## Do not narrate what the screen shows
 
@@ -135,7 +143,7 @@ costs, and what happens next.
 ## Visual scenes and editorial content
 
 A visual scene requires `entry` and a positive `duration`. It cannot declare
-`layout`, `vm`, `vm-start`, `steps`, `recorder`, `fresh` or `reset`. Use it in a
+`layout`, `vm`, `vm-start`, `vm-end`, `steps`, `recorder`, `fresh` or `reset`. Use it in a
 presentation with `render` or `preview`; recording commands reject it.
 
 ```json

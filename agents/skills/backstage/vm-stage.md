@@ -33,6 +33,12 @@ Choose the scene's starting state explicitly when it matters:
   entire live session. The predecessor must have succeeded in the same project,
   boot, session and execution type (rehearsal or recording). This mode skips
   reset/setup hooks and rejects explicit `fresh: true` or `reset: true`.
+  A predecessor that declares `vm-end` is refused.
+- `"vm-end": {"snapshot": "theme-installed"}` saves that disk state after a
+  successful take. Missing snapshots are created. A manual snapshot needs
+  `play --adopt` and typing the snapshot name. A rehearsal will not replace a
+  recording without `rehearse --replace-state`. A recording will not start
+  `clean` from a rehearsal. Produce has neither flag.
 
 Rehearse a whole continuation chain before recording that chain. Never continue
 a recording from a rehearsal. Restore/reboot/SSH access invalidates continuity.
@@ -169,7 +175,8 @@ the host's own cursor in the film.
 
 Every recorded clip gets a `.facts.json` beside it, on the host and on a VM:
 the Backstage version, when it was made, and a `result` (`ok`, `steps-failed`,
-or `short`). A guest clip also records the machine; a clean start records
-`start-image` and `start-state.snapshot`. A film is evidence, and evidence has
-a provenance. That file is the difference between a take that can be reproduced
-and one that can only be re-shot.
+or `short`, or `capture-failed` when `vm-end` does not commit). A guest clip
+also records the machine; a clean start records `start-image` and
+`start-state.snapshot`. A successful `vm-end` adds `end-state`. A film is
+evidence, and evidence has a provenance. That file is the difference between
+a take that can be reproduced and one that can only be re-shot.

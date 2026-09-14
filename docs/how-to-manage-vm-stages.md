@@ -131,8 +131,27 @@ order beforehand and reserves all its managed stages for the whole run.
 
 `continue` skips setup/reset hooks and refuses explicit `fresh: true` or
 `reset: true`. It never silently reboots or reconstructs a missing session.
+A scene that declares `vm-end` cannot be the predecessor of `continue`.
 `clean` and `continue` require managed stages. Omitting `vm-start` retains the
 existing behavior: preserve disk contents, then prepare the desktop.
+
+Save a disk state at the end of a successful take:
+
+```json
+"vm-end": { "snapshot": "theme-installed" }
+```
+
+The snapshot is created if it is missing. A snapshot with no origin (made by
+`stage snapshot`) is refused unless `play --adopt` and you type the snapshot
+name. A snapshot that belongs to another project or scene is always refused.
+A rehearsal that would replace a recording is refused unless
+`rehearse --replace-state`. A recording will not start `clean` from a
+rehearsal snapshot. Produce has neither flag.
+
+On success the guest is stopped, the new mapping and origin are committed
+together, and the take's facts gain `end-state: { snapshot, image }`. A
+capture that fails before that commit keeps the previous snapshot, writes
+`result: capture-failed`, and keeps the take as an attempt.
 
 For managed stages, `clean`/`reuse` connect before running hooks and organize the
 desktop afterwards. Hooks still run on the host and can use:
@@ -143,7 +162,7 @@ desktop afterwards. Hooks still run on the host and can use:
 
 Passwords are not exported. Legacy external-VM hook ordering is unchanged.
 Each clip's `.facts.json` records the Backstage version, the take `result`
-(`ok`, `steps-failed`, or `short`), `inputs-sha256` (the digest of the
+(`ok`, `steps-failed`, `short`, or `capture-failed`), `inputs-sha256` (the digest of the
 picture inputs, including the clean image id or the `continue` predecessor),
 and the time it was made. A guest clip also records the stage, image origin,
 start mode, snapshot, ISO version/checksum, provisioning recipe, domain,
@@ -221,10 +240,19 @@ Normal `go test ./...` never creates VMs. On a prepared host, explicitly run:
 ```bash
 BACKSTAGE_VM_INSTALL_TEST=1 go test ./internal/machine -run TestRealOmarchyStages -v -timeout 70m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealOmarchyStages -v -timeout 70m
+BACKSTAGE_VM_INTEGRATION=1 go test ./internal/engine -run TestRealVMEndProducerConsumer -v -timeout 180m -count=1
 ```
+
+`TestRealVMEndProducerConsumer` installs a stage and records two takes.
+Its context is 150 minutes; `-timeout` must be larger or the default 10
+minute test timeout panics and skips `Cleanup`, leaving an `accept-*`
+stage behind.
 
 The first command tests installation and recording without requiring clone
 customization. The second also checks snapshot contents, clone identity,
-restoration, and deleting an origin while retaining a working clone. Set
-`BACKSTAGE_TEST_OMARCHY` to pin a release. Failed acceptance VMs are retained
+restoration, and deleting an origin while retaining a working clone. The
+third records a `vm-end` producer and a clean consumer on a fresh
+`accept-*` stage and deletes that stage in `Cleanup`, including when
+`Create` leaves a partial record. Set `BACKSTAGE_TEST_OMARCHY` to pin a
+release. Failed acceptance VMs from `TestRealOmarchyStages` are retained
 under their printed `accept-*` names for diagnosis; delete them explicitly.

@@ -4,7 +4,11 @@
 results. A scene at `--speed 1` without `--show-staging` is published to
 `record.out` as soon as it succeeds; the published take is the raw clip, not
 a retimed copy. A later failure does not undo that publication. A failed
-take is kept as an attempt even without `--keep-segments`. Other speeds and
+take (`steps-failed`, `short`, or `capture-failed`) is kept as an attempt
+even without `--keep-segments`. A scene with `vm-end` rewrites facts in the
+work directory before that import. If one scene produces a snapshot another
+scene in the same production consumes, the producer comes first.
+`continue` cannot follow a scene that ends the guest. Other speeds and
 `--show-staging` stay in the work directory. To arrange existing takes
 without recording, use `render`; see [presentations.md](presentations.md).
 
