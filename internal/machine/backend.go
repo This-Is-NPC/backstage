@@ -161,6 +161,8 @@ func (m *Manager) Doctor(ctx context.Context) []Check {
 		detail = m.Store.Storage + " must permit your user to read/write and QEMU to traverse"
 	}
 	checks = append(checks, Check{"storage", ok, detail})
+	checks = append(checks, m.poolACLCheck())
+	checks = append(checks, m.catalogACLChecks()...)
 	return checks
 }
 

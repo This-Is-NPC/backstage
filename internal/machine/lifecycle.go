@@ -392,6 +392,10 @@ func (m *Manager) capture(ctx context.Context, r *Record) (*Image, error) {
 	if err := os.Chmod(i.Disk, 0o600); err != nil {
 		return nil, err
 	}
+	if err := protectCapturedDisk(i.Disk); err != nil {
+		_ = os.Remove(i.Disk)
+		return nil, err
+	}
 	if err := copyFile(r.NVRAM, i.NVRAM, 0o600); err != nil {
 		return nil, err
 	}

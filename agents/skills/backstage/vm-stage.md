@@ -13,6 +13,12 @@ backstage stage snapshot-delete demo product-installed
 backstage stage clone demo tutorial --snapshot product-installed
 ```
 
+The pool filesystem must support POSIX ACLs. Capture keeps catalog disks
+`0600` and adds a named read ACL for your user so a later snapshot can
+open them after libvirt has taken ownership. `stage doctor` probes that
+ACL and prints `sudo setfacl` commands for older unreadable images; it
+never runs `sudo`. Do not `chmod` a captured image after the ACL.
+
 Reference a shared stage with `"vms": {"laptop": {"stage": "demo"}}`.
 Keep `"vm": "laptop"` in the scene. Do not combine `stage` with explicit
 connection fields. `open`, `language` and `recorder` still work.

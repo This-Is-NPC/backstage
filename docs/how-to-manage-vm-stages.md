@@ -20,7 +20,17 @@ Backstage creates a dedicated directory storage pool named `backstage-UID`,
 under `/var/lib/libvirt/images/backstage-UID`. Libvirt must permit your account
 to create this pool. Its directory must be writable by your account and
 traversable by QEMU; disks are labelled through libvirt when a domain starts.
-Do not run the entire Backstage CLI as root to work around missing permissions.
+The pool filesystem must support POSIX ACLs. Capture writes a named read ACL
+for your user on each catalog disk (`0600`, then `user:<uid>:r` and mask `r`)
+so you can still open that image as a backing file after libvirt's DAC has
+moved the owner to `libvirt-qemu`. Libvirt restores ownership only on the
+writable overlay; it does not restore the backing chain. Doctor probes the
+pool with a temporary file (apply the ACL, read it back, delete the file) and
+lists any older catalog image you cannot read, printing a `sudo setfacl`
+command for each. Doctor never runs `sudo`. Do not `chmod` a captured image
+after that ACL: a later `chmod 0600` recomputes the mask from the group bits
+and clears the named entry. Do not run the entire Backstage CLI as root to
+work around missing permissions.
 
 ## Create a stage
 

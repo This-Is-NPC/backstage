@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -276,6 +277,29 @@ func (s *Store) SaveCredentials(name string, c Credentials) error {
 		return err
 	}
 	return atomicJSON(filepath.Join(s.Dir(name), "credentials.json"), c)
+}
+
+func (s *Store) listImages() ([]*Image, error) {
+	entries, err := os.ReadDir(filepath.Join(s.Root, "images"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var images []*Image
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		img, err := s.Image(strings.TrimSuffix(name, ".json"))
+		if err != nil {
+			continue
+		}
+		images = append(images, img)
+	}
+	return images, nil
 }
 
 func (s *Store) Image(id string) (*Image, error) {
