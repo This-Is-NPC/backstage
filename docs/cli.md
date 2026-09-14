@@ -72,8 +72,11 @@ backstage produce --scenes 01-intro,02-deploy --transition slide
 
 Records each scene to a clip, renders the transitions between them, and
 concatenates everything into one video at `<project>/<record.out>/production.mp4`
-(override with `--out`). Productions and transitions are declared in
-`backstage.json` (see [Configuration](configuration.md#productions)).
+(override with `--out`). A scene recorded at `--speed 1` without
+`--show-staging` is published to `record.out` as soon as it succeeds; the
+published files are the raw take, not a retimed copy. A failed take is kept
+as an attempt even without `--keep-segments`. Productions and transitions
+are declared in `backstage.json` (see [Configuration](configuration.md#productions)).
 
 | Flag | Effect |
 |------|--------|

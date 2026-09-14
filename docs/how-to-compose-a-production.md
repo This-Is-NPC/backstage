@@ -36,6 +36,13 @@ backstage produce tour
 
 The video is at `recordings/production.mp4`.
 
+A scene recorded at `--speed 1` without `--show-staging` is published to
+`record.out` as soon as it succeeds. `SCENE.mp4` is the raw take, not a
+retimed copy. A later failure in the production does not take that
+publication back. A failed take (`steps-failed` or `short`) is kept as an
+attempt even without `--keep-segments`. Any other speed, or `--show-staging`,
+leaves the clip only in the work directory.
+
 Use `--scenes` for a list without a declaration:
 
 ```bash

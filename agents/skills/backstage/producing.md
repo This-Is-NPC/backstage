@@ -1,8 +1,12 @@
 # Producing
 
 `play` records one scene. `produce` records its scenes again and joins the
-results. To arrange existing takes without recording, use `render`; see
-[presentations.md](presentations.md).
+results. A scene at `--speed 1` without `--show-staging` is published to
+`record.out` as soon as it succeeds; the published take is the raw clip, not
+a retimed copy. A later failure does not undo that publication. A failed
+take is kept as an attempt even without `--keep-segments`. Other speeds and
+`--show-staging` stay in the work directory. To arrange existing takes
+without recording, use `render`; see [presentations.md](presentations.md).
 
 ```bash
 backstage produce tour                        # a declared production
