@@ -10,6 +10,7 @@ backstage <command> [args]
 | `backstage status [DIR]` | report which recording takes are stale, blocked or missing |
 | `backstage play SCENE` | stage the scene, record it, write the `.mp4` |
 | `backstage takes prune` | remove abandoned or old recorded takes |
+| `backstage cache prune` | shrink the presentation track and audio cache |
 | `backstage rehearse SCENE` | run the scene fast, **without** recording (dry-run) |
 | `backstage produce [PRODUCTION]` | record several scenes + transitions into one video |
 | `backstage setup --stage LAYOUT` | stage a layout only, no recording |
@@ -279,6 +280,20 @@ and `--max-size` also remove old unreferenced
 generations and attempts. The published generation, a recording in progress,
 and a generation a render is reading are never removed. Duration accepts Go
 durations and a day count (`7d`). Size accepts `K`, `M`, or `G` (1024).
+
+## cache prune
+
+```bash
+backstage cache prune [--max-size SIZE] [--dry-run] [--json]
+```
+
+Removes least-recently-used prepared tracks and mixed audio under
+`${XDG_CACHE_HOME:-~/.cache}/backstage/render` until the store is below
+`--max-size` (default `10G`, same `K`/`M`/`G` grammar as `takes prune`).
+Orphans from an interrupted render are deleted. A lock file for a key is
+never removed. An entry a live render is reading is skipped. Stale memo
+rows (path gone, or size/mtime/inode mismatch) are dropped. `--dry-run`
+prints the plan; `--json` writes a report.
 
 ## setup
 

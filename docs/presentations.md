@@ -178,7 +178,8 @@ export also writes a `timings` object beside `render`: phase seconds
 `total-seconds`), per-frame stages (`decode`, `transfer`, `draw`, `screenshot`,
 `encode-write`) with total, mean, max, p95 and frame count, and intermediate
 byte sizes (`track-bytes`, `audio-part-bytes`, `mix-wav-bytes`,
-`video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`).
+`video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`)
+and cache counters (`cache-hits`, `cache-misses`, each `{tracks, audio}`).
 Absent phases and missing files are omitted. Progress ends with
 `>> render timings: ...`. Source and template input hashes stay the same;
 `builtin:runtime.html` changes only because the runtime adds `drawTimed`.
@@ -193,7 +194,13 @@ Visual reproducibility assumes fixed inputs, browser, fonts and tool versions;
 MP4 byte identity across environments is not promised. Prepared FFV1 tracks use
 `-g 1` so every frame is a seek point. Screenshots stay lossless PNG with
 `optimizeForSpeed`. Track prepare runs in parallel (at most one worker per
-CPU). Project `render.threads` sets FFmpeg counts for that prepare and for
+CPU). Prepared tracks and the mixed soundtrack are cached under the user
+cache directory (`backstage/render`). A warm render reuses those files when
+the source bytes, compiled cuts, fps, FFmpeg version and encode recipe
+match. Thread counts are not part of the key. Warm and cold renders keep
+the same `inputs` hashes and the same composed frames before H.264.
+`backstage cache prune` drops least-recently-used entries (default 10G).
+Project `render.threads` sets FFmpeg counts for that prepare and for
 libx264; the encoder runs at the same time as the Chromium frame loop, not
 after it. A faster encode is accepted when every decoded H.264 frame keeps
 PSNR-Y ≥ 40 dB against the previous thread count (mean ≥ 45 dB), and when

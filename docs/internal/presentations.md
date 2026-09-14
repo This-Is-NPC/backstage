@@ -8,8 +8,12 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 1. Load the project, strict version 1 presentation JSON and referenced scenes.
 2. Probe sources and compile track spans, cue placement and selected audio.
 3. Prepare cuts and rates as lossless FFV1 tracks (`-g 1`, in parallel up to
-   the CPU count) and mix stereo 48 kHz audio. The H.264 encoder is started
-   before the frame loop and runs while Chromium draws and captures.
+   the CPU count) and mix stereo 48 kHz audio. Hits come from
+   `${UserCacheDir}/backstage/render` (hardlink into the work dir, copy on
+   `EXDEV`). Work files that came from the cache are read-only (0444); the
+   render must never open `track-N.mkv` or `mix.wav` for writing. The H.264
+   encoder is started before the frame loop and runs while Chromium draws
+   and captures.
 4. Read PNG frames sequentially through FFmpeg pipes with bounded frame buffers.
 5. Pass the selected frames and time to the embedded Chromium HTML runtime.
    Render calls `drawTimed`; Check and initialize keep using `draw`. Measured
@@ -22,8 +26,17 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    loop (about 4.3 s and 3.7 s of a ~10 s `complete` render).
 
 `model.go` owns validation and timing, `media.go` owns FFmpeg preparation,
-`render.go` owns Chromium and export, and `preview.go` owns preview and template
-initialization. The browser runtime and default HTML are embedded under `web/`.
+`cache.go` owns the track/audio cache, `render.go` owns Chromium and export,
+and `preview.go` owns preview and template initialization. The browser
+runtime and default HTML are embedded under `web/`.
+
+Cache keys are SHA-256 of a `v1` JSON object (source content hash, compiled
+plan, fps, FFmpeg version, encode args that change bytes). A memo maps
+resolved path + size + mtime-ns + inode to the content hash. Entries are
+written to a `.tmp-*` name, `fsync`'d, chmod 0444, then renamed. Each key
+has a lock file that prune never deletes. A live render holds `LOCK_SH` on
+that lock until it finishes. `encode-seconds` is still Start→Wait. Timings
+record `cache-hits` and `cache-misses` by type.
 
 ## Preview and isolation
 

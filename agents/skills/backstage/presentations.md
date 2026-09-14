@@ -174,7 +174,9 @@ animation frame. Project `render.threads` (`prepare`, `filter`, `encode`)
 applies only to presentation render; `0` uses the CPU defaults. The encoder
 shares the machine with Chromium during the frame loop; `encode-seconds`
 overlaps that loop and is not the bottleneck. Screenshot and draw are the
-loop cost. Preview renders first, then opens the exact MP4 with playback,
+loop cost. A second render reuses cached tracks and the mix when the
+footage and the compiled plan match (`backstage cache prune` reclaims
+that cache, default 10G). Preview renders first, then opens the exact MP4 with playback,
 seek and frame-step controls. Ctrl-C closes it and removes its temporary files.
 It is not a live editor. Check the final animation state and that audio/captions
 follow the intended clock before exporting.
