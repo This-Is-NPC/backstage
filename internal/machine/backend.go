@@ -175,6 +175,7 @@ func (m *Manager) Doctor(ctx context.Context) []Check {
 	checks = append(checks, m.poolACLCheck())
 	checks = append(checks, m.catalogACLChecks()...)
 	checks = append(checks, m.imageDepthCheck())
+	checks = append(checks, m.pendingMarkerCheck())
 	return checks
 }
 

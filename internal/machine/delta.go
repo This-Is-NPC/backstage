@@ -48,10 +48,12 @@ type deltaDecision struct {
 }
 
 type capturedImage struct {
-	Image    *Image
-	Mode     string
-	Depth    int
-	Fallback string
+	Image       *Image
+	Mode        string
+	Depth       int
+	Fallback    string
+	CatalogWait time.Duration
+	pending     pendingCapture
 }
 
 func parseBackingChain(out string) ([]qemuImgInfo, error) {
@@ -182,20 +184,16 @@ func (m *Manager) capture(ctx context.Context, r *Record) (*Image, error) {
 	return got.Image, nil
 }
 
-func (m *Manager) captureImage(ctx context.Context, r *Record, allowDelta bool, maxDepth int) (*capturedImage, error) {
+func (m *Manager) planCapture(ctx context.Context, r *Record, allowDelta bool, maxDepth int) (*capturedImage, *Image, error) {
 	state, err := m.State(ctx, r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if state != "shut off" {
-		return nil, errors.New("snapshot requires a stopped stage")
-	}
-	c, err := m.Store.Credentials(r.Name)
-	if err != nil {
-		return nil, err
+		return nil, nil, errors.New("snapshot requires a stopped stage")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	mode := CaptureModeComplete
 	fallback := ""
@@ -207,7 +205,7 @@ func (m *Manager) captureImage(ctx context.Context, r *Record, allowDelta bool, 
 	} else if allowDelta {
 		decision := m.decideDelta(ctx, r, maxDepth)
 		if decision.unreadable != nil {
-			return nil, decision.unreadable
+			return nil, nil, decision.unreadable
 		}
 		if decision.ok {
 			mode = CaptureModeDelta
@@ -220,8 +218,23 @@ func (m *Manager) captureImage(ctx context.Context, r *Record, allowDelta bool, 
 	}
 	id := randomID()
 	i := &Image{Schema: ImageSchema, ID: id, Disk: m.diskPath(id, "-image.qcow2"), NVRAM: m.diskPath(id, "-image.fd"), Firmware: r.Firmware, Spec: r.Spec, Source: r.Source, Created: time.Now().UTC()}
-	var created []string
-	fail := func(err error) (*capturedImage, error) {
+	parentID := ""
+	if parent != nil {
+		parentID = parent.ID
+	}
+	got := &capturedImage{Image: i, Mode: mode, Depth: depth, Fallback: fallback, pending: pendingCapture{
+		ID: id, Stage: r.Name, Parent: parentID, Disk: i.Disk, NVRAM: i.NVRAM,
+		Keys: filepath.Join(m.Store.Root, "images", id), Created: i.Created,
+	}}
+	return got, parent, nil
+}
+
+func (m *Manager) writeCaptureFiles(ctx context.Context, r *Record, i *Image, parent *Image, mode string) (created []string, err error) {
+	c, err := m.Store.Credentials(r.Name)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) ([]string, error) {
 		for n := len(created) - 1; n >= 0; n-- {
 			_ = os.RemoveAll(created[n])
 		}
@@ -248,7 +261,7 @@ func (m *Manager) captureImage(ctx context.Context, r *Record, allowDelta bool, 
 		return fail(err)
 	}
 	created = append(created, i.NVRAM)
-	keyDir := filepath.Join(m.Store.Root, "images", id)
+	keyDir := filepath.Join(m.Store.Root, "images", i.ID)
 	if err := os.MkdirAll(keyDir, 0o700); err != nil {
 		return fail(err)
 	}
@@ -259,22 +272,106 @@ func (m *Manager) captureImage(ctx context.Context, r *Record, allowDelta bool, 
 			return fail(err)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
+	return created, nil
+}
+
+func (m *Manager) commitCaptureJSON(i *Image, parent *Image, mode string) error {
 	if mode == CaptureModeDelta {
 		promoted := *parent
 		promoted.Schema = ImageSchemaV2
 		if err := writeImageJSON(m.Store.imageJSON(parent.ID), promoted); err != nil {
-			return fail(err)
+			return err
 		}
 		i.Schema = ImageSchemaV2
 		i.Parent = parent.ID
 	}
-	jsonPath := m.Store.imageJSON(id)
-	if err := writeImageJSON(jsonPath, i); err != nil {
-		return fail(err)
+	return writeImageJSON(m.Store.imageJSON(i.ID), i)
+}
+
+func (m *Manager) captureImage(ctx context.Context, r *Record, allowDelta bool, maxDepth int) (*capturedImage, error) {
+	got, parent, err := m.planCapture(ctx, r, allowDelta, maxDepth)
+	if err != nil {
+		return nil, err
 	}
-	created = append(created, jsonPath)
+	created, err := m.writeCaptureFiles(ctx, r, got.Image, parent, got.Mode)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.commitCaptureJSON(got.Image, parent, got.Mode); err != nil {
+		for n := len(created) - 1; n >= 0; n-- {
+			_ = os.RemoveAll(created[n])
+		}
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
-		return fail(err)
+		for n := len(created) - 1; n >= 0; n-- {
+			_ = os.RemoveAll(created[n])
+		}
+		_ = os.Remove(m.Store.imageJSON(got.Image.ID))
+		return nil, err
 	}
-	return &capturedImage{Image: i, Mode: mode, Depth: depth, Fallback: fallback}, nil
+	return got, nil
+}
+
+// captureSnapshotImage is the Snapshot / ReplaceSnapshot path. Catalog is
+// held twice after convert: once for the child JSON, then again for the
+// stage mapping. A10 1c asked for one hold; the marker stays across the
+// gap, so Collect cannot drop the child (TestCollectCountsPendingChildJSON).
+func (m *Manager) captureSnapshotImage(ctx context.Context, r *Record, allowDelta bool, maxDepth int) (*capturedImage, error) {
+	var waited time.Duration
+	w, release, err := m.lockCatalog(ctx)
+	waited += w
+	if err != nil {
+		return nil, err
+	}
+	got, parent, err := m.planCapture(ctx, r, allowDelta, maxDepth)
+	if err != nil {
+		release()
+		return &capturedImage{CatalogWait: waited}, err
+	}
+	if err := m.writePending(got.pending); err != nil {
+		release()
+		return &capturedImage{CatalogWait: waited}, err
+	}
+	release()
+	created, err := m.writeCaptureFiles(ctx, r, got.Image, parent, got.Mode)
+	if err != nil {
+		w, cerr := m.failPending(ctx, got.pending, created)
+		waited += w
+		if cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+		return &capturedImage{CatalogWait: waited}, err
+	}
+	w, release, err = m.lockCatalog(ctx)
+	waited += w
+	if err != nil {
+		w, _ = m.failPending(ctx, got.pending, append(created, m.Store.imageJSON(got.Image.ID)))
+		waited += w
+		return &capturedImage{CatalogWait: waited}, err
+	}
+	if err := m.commitCaptureJSON(got.Image, parent, got.Mode); err != nil {
+		release()
+		w, cerr := m.failPending(ctx, got.pending, append(created, m.Store.imageJSON(got.Image.ID)))
+		waited += w
+		if cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+		return &capturedImage{CatalogWait: waited}, err
+	}
+	if err := ctx.Err(); err != nil {
+		release()
+		w, cerr := m.failPending(ctx, got.pending, append(created, m.Store.imageJSON(got.Image.ID)))
+		waited += w
+		if cerr != nil {
+			err = errors.Join(err, cerr)
+		}
+		return &capturedImage{CatalogWait: waited}, err
+	}
+	release()
+	got.CatalogWait = waited
+	return got, nil
 }

@@ -402,15 +402,45 @@ func (m *Manager) Snapshot(ctx context.Context, r *Record, name string) error {
 	}
 	m.logTiming(r, "shutdown-seconds", *secondsPtr(m.since(began)))
 	began = m.now()
-	got, err := m.captureImage(ctx, r, true, limit)
+	got, err := captureStageImage(m, ctx, r, true, limit)
+	waited := time.Duration(0)
+	if got != nil {
+		waited = got.CatalogWait
+	}
 	if err != nil {
+		m.noteCatalogWait(r, waited)
 		return err
 	}
 	i := got.Image
-	m.noteCapture(r, began, i.Disk)
+	m.noteCapture(r, began, i.Disk, waited)
 	m.noteCaptureMeta(r, got.Mode, got.Depth, got.Fallback)
+	w, release, err := m.lockCatalog(ctx)
+	waited += w
+	if err != nil {
+		w, _ = m.failPending(ctx, got.pending, []string{m.Store.imageJSON(i.ID)})
+		waited += w
+		m.noteCatalogWait(r, waited)
+		return err
+	}
+	defer release()
+	m.noteCatalogWait(r, waited)
 	r.Snapshots[name] = i.ID
-	return m.Store.Save(r)
+	if err := commitStageRecord(m.Store, r); err != nil {
+		if errors.Is(err, ErrCommitted) {
+			_ = m.removePending(got.pending.ID)
+			m.warn(pendingCleanup(err))
+			return nil
+		}
+		delete(r.Snapshots, name)
+		removeCapturedImage(m, i)
+		_ = m.removePending(got.pending.ID)
+		return err
+	}
+	if err := removePendingMarker(m, got.pending.ID); err != nil {
+		m.warn("pending marker left; the next stage operation removes it")
+		return nil
+	}
+	return nil
 }
 
 func (m *Manager) Restore(ctx context.Context, r *Record, name string) error {
@@ -541,7 +571,7 @@ func (m *Manager) Recover(ctx context.Context, r *Record) error {
 	path := filepath.Join(m.Store.Dir(r.Name), "activate.json")
 	var a activation
 	if err := readJSON(path, &a); os.IsNotExist(err) {
-		return nil
+		return m.recoverPending(r)
 	} else if err != nil {
 		return err
 	}
@@ -567,7 +597,10 @@ func (m *Manager) Recover(ctx context.Context, r *Record) error {
 	}
 	*r = a.Next
 	_ = os.Remove(filepath.Join(m.Store.Dir(r.Name), "known_hosts"))
-	return os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return m.recoverPending(r)
 }
 
 func (m *Manager) customize(ctx context.Context, r *Record, disk string, c Credentials) error {
@@ -677,16 +710,67 @@ func (m *Manager) Delete(ctx context.Context, r *Record) error {
 	if err := os.RemoveAll(m.Store.Dir(r.Name)); err != nil {
 		return err
 	}
+	if err := m.recoverPending(r); err != nil {
+		return err
+	}
 	return m.Collect()
 }
 
 // Collect removes only catalogued images with no stage or base-cache reference.
 // A direct id with neither JSON nor disk is ignored. A disk without JSON
-// stops the scan before any removal. Called while holding image-catalog,
+// stops the scan before any removal. An unreadable pending marker returns
+// before any Remove. A readable marker whose stage has no record is leftover
+// and is removed with its files. Called while holding image-catalog,
 // after the stage registry mutation commits.
 func (m *Manager) Collect() error {
+	scan, err := m.scanPending()
+	if err != nil {
+		return err
+	}
+	if len(scan.Unread) > 0 {
+		return fmt.Errorf("pending %s: unreadable", scan.Unread[0])
+	}
+	for _, p := range scan.Found {
+		if err := m.pendingManagedPaths(p); err != nil {
+			return err
+		}
+	}
+	var pendings []pendingCapture
+	for _, p := range scan.Found {
+		missing, err := m.pendingStageMissing(p)
+		if err != nil {
+			return err
+		}
+		if missing {
+			removePendingFiles(p)
+			if err := m.removePending(p.ID); err != nil {
+				return err
+			}
+			continue
+		}
+		pendings = append(pendings, p)
+	}
+	protected := map[string]bool{}
+	for _, p := range pendings {
+		for _, path := range m.pendingProtects(p) {
+			protected[path] = true
+		}
+	}
 	used, err := m.usedImageIDs()
 	if err != nil {
+		return err
+	}
+	for _, p := range pendings {
+		if p.Parent != "" {
+			if err := m.noteUsedImage(used, p.Parent, fmt.Sprintf("pending %s parent", p.ID)); err != nil {
+				return err
+			}
+		}
+		if _, err := os.Stat(m.Store.imageJSON(p.ID)); err == nil {
+			used[p.ID] = true
+		}
+	}
+	if err := m.markAncestors(used); err != nil {
 		return err
 	}
 	files, err := filepath.Glob(filepath.Join(m.Store.Root, "images", "*.json"))
@@ -701,7 +785,7 @@ func (m *Manager) Collect() error {
 	var victims []victim
 	for _, path := range files {
 		id := strings.TrimSuffix(filepath.Base(path), ".json")
-		if used[id] {
+		if used[id] || protected[path] {
 			continue
 		}
 		i, err := m.Store.Image(id)
@@ -711,10 +795,16 @@ func (m *Manager) Collect() error {
 		if i.Disk != m.diskPath(id, "-image.qcow2") || i.NVRAM != m.diskPath(id, "-image.fd") {
 			return errors.New("refusing to collect an image outside managed storage")
 		}
+		if protected[i.Disk] || protected[i.NVRAM] {
+			continue
+		}
 		victims = append(victims, victim{id: id, path: path, img: i})
 	}
 	for _, v := range victims {
 		for _, file := range []string{v.img.Disk, v.img.NVRAM, v.path} {
+			if protected[file] {
+				continue
+			}
 			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -830,7 +920,7 @@ func (m *Manager) markAncestors(used map[string]bool) error {
 }
 
 var captureStageImage = func(m *Manager, ctx context.Context, r *Record, allowDelta bool, maxDepth int) (*capturedImage, error) {
-	return m.captureImage(ctx, r, allowDelta, maxDepth)
+	return m.captureSnapshotImage(ctx, r, allowDelta, maxDepth)
 }
 
 var commitStageRecord = func(s *Store, r *Record) error {
@@ -853,11 +943,12 @@ type ReplaceResult struct {
 	CaptureMode          *string
 	ImageDepth           *int
 	CaptureFallback      *string
+	CatalogWaitSeconds   *float64
 }
 
 // ReplaceSnapshot captures the stopped guest and commits the mapping and
 // origin in one record write. The caller holds the stage lock. image-catalog
-// is taken here, the same way Begin locks around Restore.
+// is taken only around the decision/marker and the catalog commit.
 func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, origin SnapshotOrigin, adopt bool) (ReplaceResult, error) {
 	if err := checkReplace(r, name, origin, adopt); err != nil {
 		return ReplaceResult{}, err
@@ -869,11 +960,6 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	if err != nil {
 		return ReplaceResult{}, err
 	}
-	release, err := m.Store.LockWait(ctx, "image-catalog")
-	if err != nil {
-		return ReplaceResult{}, err
-	}
-	defer release()
 	began := m.now()
 	if err := m.Stop(ctx, r, false); err != nil {
 		return ReplaceResult{}, err
@@ -882,16 +968,35 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	m.logTiming(r, "shutdown-seconds", *out.ShutdownSeconds)
 	began = m.now()
 	got, err := captureStageImage(m, ctx, r, true, limit)
+	waited := time.Duration(0)
+	if got != nil {
+		waited = got.CatalogWait
+	}
 	if err != nil {
+		out.CatalogWaitSeconds = m.noteCatalogWait(r, waited)
 		return out, err
 	}
 	img := got.Image
-	out.CaptureSeconds, out.CaptureBytes, out.CaptureApparentBytes = m.noteCapture(r, began, img.Disk)
+	out.CaptureSeconds, out.CaptureBytes, out.CaptureApparentBytes = m.noteCapture(r, began, img.Disk, waited)
 	out.CaptureMode, out.ImageDepth, out.CaptureFallback = m.noteCaptureMeta(r, got.Mode, got.Depth, got.Fallback)
 	if err := ctx.Err(); err != nil {
+		w, _ := m.failPending(ctx, got.pending, nil)
+		waited += w
+		removeCapturedImage(m, img)
+		out.CatalogWaitSeconds = m.noteCatalogWait(r, waited)
+		return out, err
+	}
+	w, release, err := m.lockCatalog(ctx)
+	waited += w
+	out.CatalogWaitSeconds = m.noteCatalogWait(r, waited)
+	if err != nil {
+		w, _ = m.failPending(ctx, got.pending, nil)
+		waited += w
+		out.CatalogWaitSeconds = m.noteCatalogWait(r, waited)
 		removeCapturedImage(m, img)
 		return out, err
 	}
+	defer release()
 	prevSnaps := cloneStringMap(r.Snapshots)
 	prevOrigins := cloneOriginMap(r.SnapshotOrigins)
 	if r.Snapshots == nil {
@@ -908,6 +1013,7 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	r.SnapshotOrigins[name] = origin
 	if err := commitStageRecord(m.Store, r); err != nil {
 		if errors.Is(err, ErrCommitted) {
+			_ = m.removePending(got.pending.ID)
 			if cerr := collectUnusedImages(m); cerr != nil {
 				out.Image = img
 				out.Warning = pendingCleanup(errors.Join(err, cerr))
@@ -920,7 +1026,13 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 		r.Snapshots = prevSnaps
 		r.SnapshotOrigins = prevOrigins
 		removeCapturedImage(m, img)
+		_ = m.removePending(got.pending.ID)
 		return out, err
+	}
+	if err := m.removePending(got.pending.ID); err != nil {
+		out.Image = img
+		out.Warning = pendingCleanup(err)
+		return out, nil
 	}
 	out.Image = img
 	if err := collectUnusedImages(m); err != nil {

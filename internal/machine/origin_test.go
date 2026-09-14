@@ -181,12 +181,7 @@ func TestReplaceSnapshotRefusesNotReady(t *testing.T) {
 	if err := m.Store.Save(r); err != nil {
 		t.Fatal(err)
 	}
-	release, err := m.Store.LockMany("image-catalog")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	_, err = m.ReplaceSnapshot(context.Background(), r, "ready", testOrigin("/proj", "alpha"), false)
+	_, err := m.ReplaceSnapshot(context.Background(), r, "ready", testOrigin("/proj", "alpha"), false)
 	if err == nil || !strings.Contains(err.Error(), "ready") {
 		t.Fatalf("not ready: %v", err)
 	}

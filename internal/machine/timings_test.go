@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestSnapshotWritesTimingLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := readProvisionLog(t, m, "demo")
-	for _, name := range []string{"timing shutdown-seconds", "timing capture-seconds", "timing capture-bytes", "timing capture-apparent-bytes"} {
+	for _, name := range []string{"timing shutdown-seconds", "timing capture-seconds", "timing capture-bytes", "timing capture-apparent-bytes", "timing catalog-wait-seconds"} {
 		if !strings.Contains(log, name) {
 			t.Fatalf("missing %s in %s", name, log)
 		}
@@ -436,7 +437,7 @@ func TestNoteCaptureUsesAllocatedBytes(t *testing.T) {
 	imageDiskSizes = func(string) (int64, int64, error) { return 1610612736, 99, nil }
 	t.Cleanup(func() { imageDiskSizes = prev })
 	began := m.now()
-	secs, alloc, appar := m.noteCapture(r, began, "unused")
+	secs, alloc, appar := m.noteCapture(r, began, "unused", 0)
 	if secs == nil || alloc == nil || *alloc != 1610612736 || appar == nil || *appar != 99 {
 		t.Fatalf("noteCapture %v %v %v", secs, alloc, appar)
 	}
@@ -463,7 +464,7 @@ func TestNoteCaptureStatFailureOmitsSize(t *testing.T) {
 	if !strings.Contains(got, "warning: timing log: image size:") {
 		t.Fatalf("warning: %s", got)
 	}
-	if !strings.Contains(got, ">> stage demo: capture (1.0s)\n") || strings.Contains(got, "GiB") {
+	if !strings.Contains(got, ">> stage demo: capture (3.0s)\n") || strings.Contains(got, "GiB") {
 		t.Fatalf("progress: %s", got)
 	}
 	if !strings.Contains(got, ">> stage demo: capture complete (missing-ancestor)") {
@@ -472,5 +473,134 @@ func TestNoteCaptureStatFailureOmitsSize(t *testing.T) {
 	log := readProvisionLog(t, m, "demo")
 	if !strings.Contains(log, "timing capture-seconds") || strings.Contains(log, "timing capture-bytes") {
 		t.Fatalf("log: %s", log)
+	}
+}
+
+func TestCaptureSecondsExcludeCatalogWait(t *testing.T) {
+	m, r := captureReady(t, "demo")
+	var mu sync.Mutex
+	clk := time.Unix(1000, 0)
+	m.Now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clk
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		clk = clk.Add(d)
+		mu.Unlock()
+	}
+	m.Runner = runnerFunc(func(_ context.Context, _ io.Reader, bin string, args ...string) (string, error) {
+		if bin == "qemu-img" {
+			if len(args) > 0 && args[0] == "info" {
+				return `[{"filename":"` + r.Disk + `"}]`, nil
+			}
+			if len(args) > 0 && args[0] == "convert" {
+				advance(2 * time.Second)
+			}
+			return "", os.WriteFile(args[len(args)-1], []byte("image"), 0o600)
+		}
+		switch args[2] {
+		case "domuuid":
+			return uuid(r.ID), nil
+		case "domstate":
+			return "shut off", nil
+		default:
+			t.Fatalf("unexpected %s %v", bin, args)
+			return "", nil
+		}
+	})
+	hold, err := m.Store.LockMany("image-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- m.Snapshot(context.Background(), r, "hand") }()
+	time.Sleep(150 * time.Millisecond)
+	advance(5 * time.Second)
+	hold()
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	log := readProvisionLog(t, m, "demo")
+	if !strings.Contains(log, "timing capture-seconds 2.000") {
+		t.Fatalf("capture-seconds: %s", log)
+	}
+	if !strings.Contains(log, "timing catalog-wait-seconds 5.000") {
+		t.Fatalf("catalog-wait-seconds: %s", log)
+	}
+}
+
+func TestReplaceSnapshotCaptureSecondsExcludeCatalogWait(t *testing.T) {
+	m, r := captureReady(t, "demo")
+	var mu sync.Mutex
+	clk := time.Unix(1000, 0)
+	m.Now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clk
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		clk = clk.Add(d)
+		mu.Unlock()
+	}
+	m.Runner = runnerFunc(func(_ context.Context, _ io.Reader, bin string, args ...string) (string, error) {
+		if bin == "qemu-img" {
+			if len(args) > 0 && args[0] == "info" {
+				return `[{"filename":"` + r.Disk + `"}]`, nil
+			}
+			if len(args) > 0 && args[0] == "convert" {
+				advance(2 * time.Second)
+			}
+			return "", os.WriteFile(args[len(args)-1], []byte("image"), 0o600)
+		}
+		switch args[2] {
+		case "domuuid":
+			return uuid(r.ID), nil
+		case "domstate":
+			return "shut off", nil
+		default:
+			t.Fatalf("unexpected %s %v", bin, args)
+			return "", nil
+		}
+	})
+	hold, err := m.Store.LockMany("image-catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	var result ReplaceResult
+	go func() {
+		var e error
+		result, e = m.ReplaceSnapshot(context.Background(), r, "saved", testOrigin("/p", "s"), false)
+		errc <- e
+	}()
+	time.Sleep(150 * time.Millisecond)
+	advance(5 * time.Second)
+	hold()
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if result.CaptureSeconds == nil || *result.CaptureSeconds != 2 {
+		got := any(nil)
+		if result.CaptureSeconds != nil {
+			got = *result.CaptureSeconds
+		}
+		t.Fatalf("ReplaceResult capture-seconds: %v", got)
+	}
+	if result.CatalogWaitSeconds == nil || *result.CatalogWaitSeconds != 5 {
+		got := any(nil)
+		if result.CatalogWaitSeconds != nil {
+			got = *result.CatalogWaitSeconds
+		}
+		t.Fatalf("ReplaceResult catalog-wait-seconds: %v", got)
+	}
+	log := readProvisionLog(t, m, "demo")
+	if !strings.Contains(log, "timing capture-seconds 2.000") {
+		t.Fatalf("capture-seconds: %s", log)
+	}
+	if !strings.Contains(log, "timing catalog-wait-seconds 5.000") {
+		t.Fatalf("catalog-wait-seconds: %s", log)
 	}
 }

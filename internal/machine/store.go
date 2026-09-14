@@ -238,6 +238,10 @@ func (s *Store) Init() error {
 	return nil
 }
 
+func validImageID(id string) bool {
+	return regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id)
+}
+
 func randomID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

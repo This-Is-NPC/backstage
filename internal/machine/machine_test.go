@@ -42,7 +42,7 @@ func stubCapture(fn func(*Manager, context.Context, *Record) (*Image, error)) {
 
 func restoreDefaultCapture() {
 	captureStageImage = func(m *Manager, ctx context.Context, r *Record, allowDelta bool, maxDepth int) (*capturedImage, error) {
-		return m.captureImage(ctx, r, allowDelta, maxDepth)
+		return m.captureSnapshotImage(ctx, r, allowDelta, maxDepth)
 	}
 }
 

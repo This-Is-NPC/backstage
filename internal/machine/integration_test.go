@@ -41,7 +41,7 @@ func TestRealOmarchyStages(t *testing.T) {
 		name = requested
 	}
 	cloneName := name + "-clone"
-	release, err := m.Store.LockMany(name, cloneName, "image-catalog")
+	release, err := m.Store.LockMany(name, cloneName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,13 +77,17 @@ func TestRealOmarchyStages(t *testing.T) {
 		if err := atomicJSON(m.Store.Root+"/bases/"+baseKey(spec, source)+".json", base.ID); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.Delete(ctx, r); err != nil {
+		if err := withCatalog(m, func() error { return m.Delete(ctx, r) }); err != nil {
 			t.Fatal(err)
 		}
 		return
 	}
-	r, err := m.Create(ctx, name, spec)
-	if err != nil {
+	var r *Record
+	if err := withCatalog(m, func() error {
+		var cerr error
+		r, cerr = m.Create(ctx, name, spec)
+		return cerr
+	}); err != nil {
 		t.Fatalf("create %s (retained for diagnosis): %v", name, err)
 	}
 	t.Logf("origin: %s", name)
@@ -113,8 +117,11 @@ func TestRealOmarchyStages(t *testing.T) {
 	}
 	clone, err := m.Store.Load(cloneName)
 	if err != nil || clone.Status != "ready" {
-		clone, err = m.Clone(ctx, r, cloneName, "installed")
-		if err != nil {
+		if err := withCatalog(m, func() error {
+			var cerr error
+			clone, cerr = m.Clone(ctx, r, cloneName, "installed")
+			return cerr
+		}); err != nil {
 			t.Fatal(err)
 		}
 	} else {
@@ -129,7 +136,7 @@ func TestRealOmarchyStages(t *testing.T) {
 	// The CLI must acquire its own stage locks while recording.
 	release()
 	acceptanceScenes(t, ctx, m, clone)
-	release, err = m.Store.LockMany(name, cloneName, "image-catalog")
+	release, err = m.Store.LockMany(name, cloneName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +171,7 @@ func TestRealOmarchyStages(t *testing.T) {
 	if _, err := cg.InSession("rm /home/omarchy/backstage-acceptance"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Restore(ctx, clone, "initial"); err != nil {
+	if err := withCatalog(m, func() error { return m.Restore(ctx, clone, "initial") }); err != nil {
 		t.Fatal(err)
 	}
 	logProvisionTimings(t, filepath.Join(m.Store.Dir(clone.Name), "provision.log"),
@@ -176,7 +183,7 @@ func TestRealOmarchyStages(t *testing.T) {
 	if _, err := cg.Root("test -f /home/omarchy/backstage-acceptance"); err != nil {
 		t.Fatal("restore did not recover initial clone state")
 	}
-	if err := m.Delete(ctx, r); err != nil {
+	if err := withCatalog(m, func() error { return m.Delete(ctx, r) }); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Stop(ctx, clone, false); err != nil {
@@ -185,9 +192,18 @@ func TestRealOmarchyStages(t *testing.T) {
 	if _, err := m.Start(ctx, clone); err != nil {
 		t.Fatal("clone depends on deleted origin", err)
 	}
-	if err := m.Delete(ctx, clone); err != nil {
+	if err := withCatalog(m, func() error { return m.Delete(ctx, clone) }); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func withCatalog(m *Manager, fn func() error) error {
+	rel, err := m.Store.LockMany("image-catalog")
+	if err != nil {
+		return err
+	}
+	defer rel()
+	return fn()
 }
 
 func logProvisionTimings(t *testing.T, path string, names ...string) {
@@ -317,26 +333,30 @@ func TestRealDeltaImages(t *testing.T) {
 	defer cancel()
 	name := "accept-" + randomID()[:8]
 	cloneName := name + "-clone"
-	release, err := m.Store.LockMany(name, cloneName, "image-catalog")
+	release, err := m.Store.LockMany(name, cloneName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { release() }()
-	r, err := m.Create(ctx, name, DefaultSpec())
-	if err != nil {
+	var r *Record
+	if err := withCatalog(m, func() error {
+		var cerr error
+		r, cerr = m.Create(ctx, name, DefaultSpec())
+		return cerr
+	}); err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
 	originGone := false
 	t.Cleanup(func() {
 		if !originGone {
-			_ = m.Delete(context.Background(), r)
+			_ = withCatalog(m, func() error { return m.Delete(context.Background(), r) })
 		}
 	})
 	initial, err := m.Store.Image(r.Snapshots["initial"])
 	if err != nil || initial.Parent != "" || initial.Schema != ImageSchema {
 		t.Fatalf("save-initial must stay complete: %+v %v", initial, err)
 	}
-	if err := m.Restore(ctx, r, "initial"); err != nil {
+	if err := withCatalog(m, func() error { return m.Restore(ctx, r, "initial") }); err != nil {
 		t.Fatal(err)
 	}
 	g, err := m.Start(ctx, r)
@@ -365,7 +385,7 @@ func TestRealDeltaImages(t *testing.T) {
 	m.MaxImageDepth = nil
 	requireDeltaMarker := func(snap string) {
 		t.Helper()
-		if err := m.Restore(ctx, r, snap); err != nil {
+		if err := withCatalog(m, func() error { return m.Restore(ctx, r, snap) }); err != nil {
 			t.Fatal(err)
 		}
 		g, err := m.Start(ctx, r)
@@ -378,7 +398,7 @@ func TestRealDeltaImages(t *testing.T) {
 	}
 	requireDeltaMarker("marked")
 	requireDeltaMarker("marked-full")
-	if err := m.Restore(ctx, r, "marked"); err != nil {
+	if err := withCatalog(m, func() error { return m.Restore(ctx, r, "marked") }); err != nil {
 		t.Fatal(err)
 	}
 	g, err = m.Start(ctx, r)
@@ -397,7 +417,7 @@ func TestRealDeltaImages(t *testing.T) {
 	}
 	one := 1
 	m.MaxImageDepth = &one
-	if err := m.Restore(ctx, r, "marked2"); err != nil {
+	if err := withCatalog(m, func() error { return m.Restore(ctx, r, "marked2") }); err != nil {
 		t.Fatal(err)
 	}
 	originLog := filepath.Join(m.Store.Dir(r.Name), "provision.log")
@@ -413,12 +433,16 @@ func TestRealDeltaImages(t *testing.T) {
 	if !strings.Contains(strings.Join(freshFlat, "\n"), "timing capture-fallback "+fallbackDepthLimit) {
 		t.Fatalf("flat missing depth-limit: %v", freshFlat)
 	}
-	clone, err := m.Clone(ctx, r, cloneName, "marked")
-	if err != nil {
+	var clone *Record
+	if err := withCatalog(m, func() error {
+		var cerr error
+		clone, cerr = m.Clone(ctx, r, cloneName, "marked")
+		return cerr
+	}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = m.Delete(context.Background(), clone)
+		_ = withCatalog(m, func() error { return m.Delete(context.Background(), clone) })
 	})
 	if clone.Source.Image != delta.ID {
 		t.Fatalf("clone source: %s", clone.Source.Image)
@@ -428,7 +452,7 @@ func TestRealDeltaImages(t *testing.T) {
 		t.Fatalf("clone initial must stay complete: %+v %v", initClone, err)
 	}
 	logProvisionTimings(t, filepath.Join(m.Store.Dir(r.Name), "provision.log"))
-	if err := m.Delete(ctx, r); err != nil {
+	if err := withCatalog(m, func() error { return m.Delete(ctx, r) }); err != nil {
 		t.Fatal(err)
 	}
 	originGone = true
@@ -476,19 +500,23 @@ func TestMeasureImageDepthChain(t *testing.T) {
 	t.Logf("depth-row N is boot and read of the depth-N image; mode/capture/bytes are the capture that makes depth N+1, or a complete image when N+1 exceeds the limit")
 	t.Logf("host page cache is not dropped (no sudo); guest read may underestimate backing-chain cost")
 	name := "accept-" + randomID()[:8]
-	release, err := m.Store.LockMany(name, "image-catalog")
+	release, err := m.Store.LockMany(name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { release() }()
-	r, err := m.Create(ctx, name, DefaultSpec())
-	if err != nil {
+	var r *Record
+	if err := withCatalog(m, func() error {
+		var cerr error
+		r, cerr = m.Create(ctx, name, DefaultSpec())
+		return cerr
+	}); err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
 	t.Cleanup(func() {
-		_ = m.Delete(context.Background(), r)
+		_ = withCatalog(m, func() error { return m.Delete(context.Background(), r) })
 	})
-	if err := m.Restore(ctx, r, "initial"); err != nil {
+	if err := withCatalog(m, func() error { return m.Restore(ctx, r, "initial") }); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(m.Store.Dir(r.Name), "provision.log")
@@ -537,7 +565,7 @@ func TestMeasureImageDepthChain(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Logf("depth-row depth=%d mode=%s boot=%g read=%g capture=%s bytes=%s parent=%s", depth, mode, boot, read, capture, bytes, img.Parent)
-		if err := m.Restore(ctx, r, snap); err != nil {
+		if err := withCatalog(m, func() error { return m.Restore(ctx, r, snap) }); err != nil {
 			t.Fatal(err)
 		}
 		seen = len(provisionTimingLines(t, logPath))

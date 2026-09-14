@@ -1156,6 +1156,9 @@ func TestReplaceSnapshotWritesCaptureMeta(t *testing.T) {
 	if result.CaptureFallback != nil {
 		t.Fatalf("fallback: %+v", result)
 	}
+	if result.CatalogWaitSeconds == nil {
+		t.Fatal("catalog-wait-seconds omitted")
+	}
 }
 
 func TestParseBackingChainAcceptsImagesWrapper(t *testing.T) {

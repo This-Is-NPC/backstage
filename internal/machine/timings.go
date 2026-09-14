@@ -110,8 +110,12 @@ func statImageDiskSizes(path string) (allocated, apparent int64, err error) {
 
 var imageDiskSizes = statImageDiskSizes
 
-func (m *Manager) noteCapture(r *Record, began time.Time, disk string) (secs *float64, allocated, apparent *int64) {
-	secs = secondsPtr(m.since(began))
+func (m *Manager) noteCapture(r *Record, began time.Time, disk string, exclude time.Duration) (secs *float64, allocated, apparent *int64) {
+	d := m.since(began) - exclude
+	if d < 0 {
+		d = 0
+	}
+	secs = secondsPtr(d)
 	m.logTiming(r, "capture-seconds", *secs)
 	alloc, appar, err := imageDiskSizes(disk)
 	if err != nil {
