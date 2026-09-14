@@ -30,8 +30,8 @@ records ordered steps against a staged layout.
 | `name` | the name of the output file, `<out>/<name>.mp4` |
 | `layout` | the layout to stage, from `backstage.json` |
 | `vm` | the guest to run inside; empty stages on this machine |
-| `vm-start` | `{"mode":"clean"}`, `{"mode":"reuse"}`, or `{"mode":"continue","after":"previous-scene"}` |
-| `vm-end` | `{"snapshot":"theme-installed"}` — save that disk state after a successful take |
+| `vm-start` | `{"mode":"clean"}`, `{"mode":"reuse"}`, or `{"mode":"continue","after":"previous-scene"}`. Clean may add `"group":"household"` with a required `snapshot` |
+| `vm-end` | `{"snapshot":"theme-installed"}` — save that disk state after a successful take. May add `"group":"household"` |
 | `recorder` | `inside` or `framebuffer`; it overrides the guest |
 | `fresh` | `true` runs the `setup` hook in place of `reset` |
 | `reset` | `false` skips setup/reset hooks; it does not preserve open windows |
@@ -42,9 +42,12 @@ records ordered steps against a staged layout.
 contents and reorganizes the desktop; `continue` preserves the live session and
 skips reset/setup hooks. Clean and continue require managed stages. `vm-end`
 requires a managed stage, refuses `initial`, and cannot be the predecessor of
-`continue`. A production that consumes a snapshot another scene in the same
-run produces must list the producer first. See
-[Manage VM stages](how-to-manage-vm-stages.md#choose-how-each-scene-starts).
+`continue`. `group` is only valid on a clean start or a `vm-end`, and then
+`snapshot` is required. The scene `vm` must be a member of that group. A scene
+cannot start and save the same group snapshot. A production that consumes a
+snapshot another scene in the same run produces must list the producer first.
+See [Manage VM stages](how-to-manage-vm-stages.md#choose-how-each-scene-starts)
+and [state groups](how-to-manage-vm-stages.md#state-groups).
 
 ## Actions
 
@@ -96,7 +99,8 @@ kept. A successful `vm-end` rewrites the sidecar with
 `end-state: { snapshot, image }`; a failed capture writes
 `end-state: { snapshot, status: "failed" }`. A guest take also records the
 machine it was filmed on; a clean start records the restored image and
-snapshot name. Completed VM phases go in `timings` (`shutdown-seconds`,
+snapshot name. A group start also records `group-members` (stage, snapshot,
+image, generation of every member, including the filmed one). Completed VM phases go in `timings` (`shutdown-seconds`,
 `capture-seconds`, `capture-bytes`, `capture-apparent-bytes`,
 `restore-stop-seconds`, `restore-activate-seconds`, `boot-seconds`
 (only when Begin booted a stopped domain),

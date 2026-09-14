@@ -3,7 +3,13 @@
 `play` records one scene. `play --with-deps` records that scene's stale or
 missing producers first, after printing the plan and reserving every stage
 in it. Different stages run together under the host budget; a host-display
-take never overlaps a VM take. `--jobs 1` is serial. `--stale` is a switch and the workspace is an optional
+take never overlaps a VM take. A group consumer occupies every member
+stage, so no other take on those stages runs with it. Remaking one
+group producer also remakes its `group-sibling` producers in the same
+project so the run keeps one generation, and remakes a stale or missing
+producer on a sibling's chain. A blocked sibling stops the
+plan before the lock. `--with-deps` and `--stale` mint the generation;
+they refuse `--internal-state-generation` and `--internal-reserved-*`. `--jobs 1` is serial. `--stale` is a switch and the workspace is an optional
 argument (`--stale [DIR]`, default `.`). It records every seeded scene in
 the workspace, plus consumers that would go stale after those takes, with
 the same rules. Each take is a
@@ -20,6 +26,9 @@ take (`steps-failed`, `short`, or `capture-failed`) is kept as an attempt
 even without `--keep-segments`. A scene with `vm-end` rewrites facts in the
 work directory before that import. If one scene produces a snapshot another
 scene in the same production consumes, the producer comes first.
+A `state-groups` consumer waits for the producer of every member. The
+production mints one generation and reserves every member stage. Silent
+members are restored and stay off; only the scene `vm` boots.
 `continue` cannot follow a scene that ends the guest. Other speeds and
 `--show-staging` stay in the work directory. To arrange existing takes
 without recording, use `render`; see [presentations.md](presentations.md).

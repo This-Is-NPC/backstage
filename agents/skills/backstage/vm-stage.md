@@ -35,7 +35,11 @@ Choose the scene's starting state explicitly when it matters:
   `restore-skipped` with `start-image` equal to the captured image. A
   `--stale` or `--with-deps` consumer on the same stage is the usual
   case. Any difference, or a recording from a rehearsal snapshot, restores
-  as before.
+  as before. A `"group": "household"` on that clean start (snapshot
+  required) restores or skips every member of `state-groups.household`
+  first, then boots only this `vm`. Silent members stay shut off. A group
+  skip also needs `origin.generation` to match. Do not write a scene that
+  talks to another group member during the take.
 - `"vm-start": {"mode": "reuse"}` keeps disk contents and reorganizes the
   desktop, like the existing behavior.
 - `"vm-start": {"mode": "continue", "after": "01-install"}` preserves the
@@ -47,7 +51,15 @@ Choose the scene's starting state explicitly when it matters:
   successful take. Missing snapshots are created. A manual snapshot needs
   `play --adopt` and typing the snapshot name. A rehearsal will not replace a
   recording without `rehearse --replace-state`. A recording will not start
-  `clean` from a rehearsal. Produce has neither flag.   `play --with-deps`
+  `clean` from a rehearsal. Produce has neither flag. `"group": "household"`
+  stamps `origin.group` and a 16-byte hex `origin.generation`. `produce`,
+`--with-deps` and `--stale` mint one generation for the run and remake
+every `group-sibling` producer of that snapshot in the same project,
+plus a stale or missing producer on a sibling's chain. Those commands
+refuse the child generation and reserved-stage flags. A group consumer occupies
+every member stage in the scheduler. An isolated
+producer mints a new id; an isolated consumer reads the members and locks
+all of them.   `play --with-deps`
   and `rehearse --with-deps` walk that chain from declared producers, keep
   a `continue` pair adjacent on the stage, refuse a replacement that
   belongs to another scene before the lock, and do not treat `--adopt` or
@@ -79,12 +91,15 @@ installed version.
 `stage snapshots` is the name-to-image map. `--origins` adds `{ image, origin }`
 (`origin` is `null` for `initial` and any hand-made snapshot). A produced
 state records the leaf project, scene, inputs digest, images, take kind,
-time and Backstage version. `inspect --json` includes `snapshot-origins`
+time and Backstage version. A group `vm-end` also stores `group` and
+`generation`. `inspect --json` includes `snapshot-origins`
 and `at-state` when a `vm-end` left the overlay at that capture.
 `stage doctor` prints `at-state SNAPSHOT (fingerprint ok|stale)` when
 the field exists. An older binary ignores `at-state` and does not clear
 it on Start; the fingerprint (ctime included) makes the next current
-Begin restore.
+Begin restore. It also ignores `origin.group` / `generation` and
+`state-groups`, and restores only the scene `vm`. Groups need the
+current binary. The record schema stays 1.
 `snapshot-delete` refuses `initial` and removes the mapping and origin
 together. `prune-states STAGE --workspace DIR` runs that deletion for
 produced snapshots no valid scene in the workspace still declares as
@@ -99,7 +114,7 @@ keeps `initial`, manual or relative origins, an origin path that is not
 already clean (`..`, `.`, `//`), origins outside the workspace (a hidden
 directory or a nested workspace is outside), `missing-project` unless
 `--include-missing-projects`, snapshots a `vm-start clean` consumer still
-uses, and the image the stage is on. Reasons: `undeclared`, `initial`,
+uses (including a group consumer on another stage), and the image the stage is on. Reasons: `undeclared`, `initial`,
 `manual`, `outside-workspace`, `missing-project`, `consumed`, `in-use`.
 A failure mid-run lists `failed` and `not attempted`. Every error,
 including a missing argument or an unknown flag, is printed once to

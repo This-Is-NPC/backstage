@@ -138,6 +138,61 @@ A scene that declares `vm-end` cannot be the predecessor of `continue`.
 `clean` and `continue` require managed stages. Omitting `vm-start` retains the
 existing behavior: preserve disk contents, then prepare the desktop.
 
+## State groups
+
+Two (or more) managed machines can share one snapshot generation. Declare the
+aliases once:
+
+```json
+"state-groups": { "household": ["laptop", "server"] }
+```
+
+Each member is a `vms` alias with a managed `stage`. An alias or a stage
+belongs to at most one group. The group name follows the snapshot name rule.
+Then a producer and a consumer name the group:
+
+```json
+"vm-end":   { "snapshot": "linked", "group": "household" }
+"vm-start": { "mode": "clean", "snapshot": "linked", "group": "household" }
+```
+
+`group` is only valid on `clean` and on `vm-end`, and then `snapshot` is
+required. The scene `vm` must be a member. Each member still has its own
+producer; the graph is one producer per `(stage, snapshot)`.
+
+A group start checks every member, including the filmed guest, before any
+Restore: the snapshot exists, `origin.group` matches, and `origin.generation`
+is the same. A recording refuses a rehearsal origin on any member. Then it
+restores (or A12-skips) the silent members and `Begin`s only the scene `vm`.
+Silent members stay shut off. The group keeps disks consistent at rest. A
+guest that must talk to its pair during the take will find that pair dark;
+film each computer in its own scene and compose afterwards.
+
+`produce`, `play --with-deps` and `play --stale` mint one generation and pass
+it to every take, including A11 children (`--internal-state-generation`).
+Those child flags are refused on the parent `--with-deps` / `--stale`
+command: a parent never takes a generation from outside.
+`--with-deps` and `--stale` also select every producer of the same
+`vm-end` snapshot and group in the same project (`group-sibling`) so that
+run writes a complete generation. A stale or missing producer on a
+sibling's chain is remade with its A7 seed reason. A sibling that cannot run (missing
+start state, a scene error, or an A7 refusal) stops the plan before any
+lock. The requested scene stays last. An isolated producer play mints a new id for that member only;
+the group start then reports `blocked:group-incomplete` until the others are
+remade with the same id. An isolated consumer reads the generation already
+on the members and locks every member stage before Begin. A group consumer
+in the scheduler occupies every member stage: those takes do not overlap,
+and the consumer waits until all those lanes are free.
+
+The A12 skip is per member: fingerprint, `shut off`, and — when the start
+has a generation — `origin.generation`. A start without a group keeps the
+A12 rule unchanged.
+
+`prune-states` keeps a snapshot as `consumed` when a group consumer on
+another stage still starts that name. `stage snapshots --origins` shows
+`group` and `generation` on the origin when they were written. Clip facts
+gain `group-members`.
+
 Save a disk state at the end of a successful take:
 
 ```json
@@ -278,6 +333,7 @@ the `activate.json` journal and cached bases.
 or `initial`). A produced snapshot records the leaf project, scene,
 `inputs-sha256`, the start and captured images, whether the take was a
 recording or a rehearsal, when it was made, and the Backstage version.
+A group `vm-end` also stores `group` and `generation` on that origin.
 `inspect --json` includes `snapshot-origins` next to `snapshots`, and
 `at-state` when a `vm-end` left the overlay at that capture.
 
@@ -287,8 +343,9 @@ images. A collection failure leaves the deletion committed and reports
 cleanup as pending; the next catalog mutation retries it.
 
 `prune-states` uses the same deletion for every produced snapshot that no
-valid scene in `--workspace` still declares as `vm-end` on that stage. It
-walks the workspace the way `status` does. A configuration or scene error,
+valid scene in `--workspace` still declares as `vm-end` on that stage, and
+that no group consumer on another stage still starts. It walks the
+workspace the way `status` does. A configuration or scene error,
 or an unreadable `backstage.json` under the workspace, aborts before any
 lock — `--dry-run` included — and lists those errors and warnings, with
 no plan: the broken file may be the one that still names the state. A
@@ -368,6 +425,14 @@ guest, libvirt's dynamic ownership changes ctime even when a short boot
 leaves mtime and size alone; any write changes size or mtime. The next
 current `Begin` sees a different fingerprint, clears `at-state`, and
 restores. Manual `virsh start` is the same.
+
+`state-groups`, `origin.group` and `origin.generation` are also
+`omitempty`. The stage schema stays 1. An older binary ignores those
+fields and restores only the scene `vm`. Groups need the current binary.
+An origin without a generation cannot start a group
+(`blocked:group-incomplete`). `--internal-state-generation` has the same
+reach as `--internal-reserved-stage`: a user who already holds the idle
+stage lock on this machine can pass a verified fd and stamp that id.
 
 ## Contributor acceptance tests
 

@@ -51,6 +51,7 @@ workspace.
 | `templates` | named HTML entries for presentation layouts | built-in when omitted |
 | `presentations` | named presentation JSON files, templates and outputs | — |
 | `vms` | named external VM connections or shared managed-stage references | — |
+| `state-groups` | named lists of `vms` aliases that share one snapshot generation | — |
 
 The video is written to `<project>/<record.out>/<scene-name>.mp4`. That path
 is a projection of the last successful take. A failed or short take is kept
@@ -70,7 +71,7 @@ decoding. The nearest file that **has** a key wins:
 
 | Kind | Keys | Rule |
 |---|---|---|
-| Named maps | `vms`, `layouts`, `aliases`, `templates`, `presentations`, `transitions`, `productions`, `env` | Union by name. The nearest entry replaces the inherited one whole. `null` removes that entry. |
+| Named maps | `vms`, `layouts`, `aliases`, `templates`, `presentations`, `transitions`, `productions`, `env`, `state-groups` | Union by name. The nearest entry replaces the inherited one whole. `null` removes that entry. |
 | Settings | `record`, `popup`, `popup.style`, `render`, `hooks` | Field by field. `popup.size` is replaced whole. |
 | Scalars | `term` | The nearest present value wins. |
 
@@ -102,6 +103,19 @@ To use a managed VM, declare `"vms": {"demo": {"stage": "shared-name"}}` and
 set `"vm": "demo"` in the scene. `open`, `language` and `recorder` are optional
 project-level overrides. `stage` cannot be mixed with explicit connection fields.
 See [Manage VM stages](how-to-manage-vm-stages.md).
+
+A state group names two or more of those aliases so their snapshots stay one
+generation:
+
+```json
+"state-groups": { "household": ["laptop", "server"] }
+```
+
+Every member must be a managed `vms` alias. An alias or a stage belongs to at
+most one group. The group name follows the snapshot name rule. Validation runs
+after the merge; a bad group is a `config-error`. Scenes point at the group
+with `vm-start.group` / `vm-end.group`. See
+[Manage VM stages](how-to-manage-vm-stages.md#state-groups).
 
 ## Popup style
 

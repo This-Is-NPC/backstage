@@ -63,7 +63,8 @@ shared take reader (generation or legacy pair) and never reads attempts.
 
 Each recording scene is one row: project-relative name, status, short detail.
 The first matching status wins: `error`, `blocked:no-producer`,
-`blocked:state-missing`, `blocked:rehearsal-state`, `missing`, `stale:inputs`,
+`blocked:state-missing`, `blocked:rehearsal-state`,
+`blocked:group-incomplete`, `missing`, `stale:inputs`,
 `stale:state-mismatch`, `stale:start-state`, `stale:upstream`, `unverifiable`,
 `ok`. `error` is a take that cannot be opened, a scene file that does not
 load or validate, or a project whose `backstage.json` parses and whose
@@ -87,10 +88,18 @@ are not `stale:upstream`. `stale:inputs` compares the take's own start-state
 digest (`clean:<facts.start-image>`, `continue:<after>`). `stale:start-state`
 is a clean take whose `facts.start-image` is not the current snapshot image,
 so re-recording a producer leaves each consumer `stale:start-state`.
+`blocked:group-incomplete` is a clean group start whose members do not share
+the same `origin.group` and `origin.generation` (a member is missing, or an
+isolated play minted a new generation on only one of them). It sits after
+`blocked:rehearsal-state`: a rehearsal origin on any member, including a
+silent one, is named first.
 
 `--json` adds the project, every matching reason, generation clip and facts
 paths, the stable clip and facts paths, stage, start and end snapshots, the
-`manual` label of each known state, `warnings`, and `errors`.
+`manual` label of each known state, `warnings`, and `errors`. A scene that
+declares a state group also adds `group` and, when the pair is complete,
+`generation`. `group-member` names the member that blocked a group start.
+Those fields are additive; existing names stay.
 
 Two valid scenes that save the same snapshot on one stage, or a cycle among
 valid scenes (including a scene that both starts from and saves the same
@@ -125,8 +134,19 @@ not take this flag.
 producer beneath one that will run) before the scene. It needs a scene under
 `<project>/scenes`. It reserves every stage in that plan first and hands each
 lock to a child process for that stage. Takes on different stages run together
-when the host budget allows. A take that uses the host display never overlaps
-another host take or any VM take. `--jobs N` caps how many takes run at once;
+when the host budget allows. A group consumer occupies the lane of every
+member stage: it starts only when all those lanes are free, and no other take
+on those stages runs with it. A take that uses the host display never overlaps
+another host take or any VM take. When the plan selects a producer that saves
+a group snapshot, it also selects every other producer of that same snapshot
+and group in the same project (`group-sibling`) so the run stamps one
+complete generation. A stale or missing producer on a sibling's chain is
+selected with the same A7 seed reason (`missing`, `stale:*`, rehearsal
+state on play). A sibling that is blocked (`no-producer`, a chain
+error, or an A7 refusal) stops the plan before any lock. `--with-deps`
+and `--stale` mint the generation; `--internal-state-generation` and
+`--internal-reserved-*` are refused on those commands. An
+isolated play of one producer still mints a generation for that member only. `--jobs N` caps how many takes run at once;
 `--jobs 1` is the old serial order. `--json` writes one `job.progress` line
 per status change, a `plan.warning` line for each plan warning, and a final
 JSON report that repeats those warnings. `--jobs` and `--json` need
@@ -150,10 +170,13 @@ takes lists the next step as `interrupted before` and as not run. A busy
 default `.`), so `play --stale tutorials/pt --json` works; `--stale` is not
 a string flag. `--stale [DIR]` records every scene in the workspace that `--with-deps`
 would seed (`missing`, `stale:*`, and a recording whose state is still a
-rehearsal), plus the same upstream and continue closure and the consumers
+rehearsal), plus the same upstream and continue closure, every
+`group-sibling` producer of a selected group snapshot, stale or missing
+producers on those siblings' chains, and the consumers
 of every planned take (including scenes that are still `ok` and would go
 stale after the run). The same refusals apply to that final set before
-any lock. `--adopt` applies to each seeded scene, not to a scene that
+any lock. `--internal-state-generation` and `--internal-reserved-*` are
+refused here too: the parent mints the id. `--adopt` applies to each seeded scene, not to a scene that
 entered only as a downstream consumer; type every snapshot name when more
 than one must be replaced.
 
@@ -220,7 +243,8 @@ only around each snapshot deletion.
 
 A snapshot is removed only when it has a readable origin inside the workspace
 and no valid scene still declares that name as `vm-end` on this stage (the
-scene was deleted, renamed, or changed the snapshot). A relative
+scene was deleted, renamed, or changed the snapshot). A group consumer on
+another stage that starts that snapshot also keeps the member (`consumed`). A relative
 `origin.project`, or one that is not already clean (`..`, `.`, `//`), is
 unreadable. The engine writes a cleaned, resolved path. An origin whose
 project directory is gone but still belongs to this workspace is kept as
