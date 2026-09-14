@@ -45,6 +45,11 @@ func run(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 func num(n float64) string { return strconv.FormatFloat(n, 'f', 9, 64) }
+
+// inspectMedia probes a file. Tests replace it so Load can resolve takes
+// without calling ffprobe.
+var inspectMedia = probe
+
 func probe(path string) (Media, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

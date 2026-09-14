@@ -18,6 +18,7 @@ func renderCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		defer plan.Close()
 		output, err := plan.Output(out)
 		if err != nil {
 			return err
@@ -49,6 +50,7 @@ func previewCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		defer plan.Close()
 		return presentation.Preview(c.Context(), plan, c.OutOrStdout())
 	}}
 }
