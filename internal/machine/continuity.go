@@ -47,7 +47,7 @@ func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, p
 				return nil, fmt.Errorf("cannot record from rehearsal snapshot %q", snapshot)
 			}
 		}
-		if m.canSkipRestore(ctx, r, snapshot) {
+		if m.canSkipRestore(ctx, r, snapshot, "") {
 			if err := m.clearAtState(r); err != nil {
 				return nil, err
 			}

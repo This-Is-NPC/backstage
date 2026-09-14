@@ -132,6 +132,8 @@ type SnapshotOrigin struct {
 	Take         string    `json:"take"`
 	Made         time.Time `json:"made"`
 	Backstage    string    `json:"backstage"`
+	Group        string    `json:"group,omitempty"`
+	Generation   string    `json:"generation,omitempty"`
 }
 
 // SnapshotInfo is the --origins view of one named state.

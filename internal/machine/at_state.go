@@ -60,12 +60,18 @@ func (m *Manager) clearAtState(r *Record) error {
 	return m.Store.Save(r)
 }
 
-func (m *Manager) canSkipRestore(ctx context.Context, r *Record, snapshot string) bool {
+func (m *Manager) canSkipRestore(ctx context.Context, r *Record, snapshot, generation string) bool {
 	if r == nil || r.AtState == nil {
 		return false
 	}
 	if snapshot != r.AtState.Snapshot || r.Snapshots[snapshot] != r.AtState.Image {
 		return false
+	}
+	if generation != "" {
+		o, ok := originOf(r, snapshot)
+		if !ok || o.Generation != generation {
+			return false
+		}
 	}
 	state, err := m.State(ctx, r)
 	if err != nil || state != "shut off" {
