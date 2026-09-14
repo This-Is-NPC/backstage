@@ -320,7 +320,7 @@ BACKSTAGE_VM_INSTALL_TEST=1 go test ./internal/machine -run TestRealOmarchyStage
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealOmarchyStages -v -timeout 70m
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/engine -run TestRealVMEndProducerConsumer -v -timeout 180m -count=1
 BACKSTAGE_VM_INTEGRATION=1 go test ./internal/machine -run TestRealDeltaImages -v -timeout 90m -count=1
-BACKSTAGE_VM_DEPTH_MEASURE=1 go test ./internal/machine -run TestMeasureImageDepthChain -v -timeout 90m -count=1
+BACKSTAGE_IMAGE_DEPTH=8 BACKSTAGE_VM_DEPTH_MEASURE=1 go test ./internal/machine -run TestMeasureImageDepthChain -v -timeout 120m -count=1
 ```
 
 `TestRealVMEndProducerConsumer` installs a stage and records two takes.
