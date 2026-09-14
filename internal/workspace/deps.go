@@ -24,6 +24,7 @@ const (
 	ReasonContinueSession = "continue session"
 	ReasonDownstream      = "downstream"
 	ReasonGroupSibling    = "group-sibling"
+	ReasonGroupIncomplete = "group-incomplete"
 )
 
 // DepsOptions name the scene to play or rehearse and the command flags.
@@ -236,6 +237,9 @@ func (e *Evaluation) planStale(opts DepsOptions) (*Plan, error) {
 func (e *Evaluation) closeStale(selected map[string]string, kind Kind) {
 	for {
 		changed := e.closeGroupSiblings(selected, "")
+		if e.closeIncompleteGroup(selected, "") {
+			changed = true
+		}
 		if e.seedEnteredChains(selected, "", kind) {
 			changed = true
 		}
@@ -293,6 +297,9 @@ func skipPlanNode(n node) bool {
 func (e *Evaluation) closeWithDeps(selected map[string]string, extra string, kind Kind) {
 	for {
 		changed := e.closeGroupSiblings(selected, extra)
+		if e.closeIncompleteGroup(selected, extra) {
+			changed = true
+		}
 		if e.seedEnteredChains(selected, extra, kind) {
 			changed = true
 		}
@@ -462,6 +469,65 @@ func (e *Evaluation) closeGroupSiblings(selected map[string]string, extra string
 		}
 	}
 	return changed
+}
+
+// closeIncompleteGroup remakes every member producer of a group start
+// that entered the set as blocked:group-incomplete, so one run stamps
+// a complete generation. It does not change that consumer's status.
+func (e *Evaluation) closeIncompleteGroup(selected map[string]string, extra string) bool {
+	changed := false
+	for _, n := range e.order {
+		if selected[n.id] == "" && n.id != extra {
+			continue
+		}
+		if skipPlanNode(n) || e.status[n.id].Status != BlockedGroupIncomplete {
+			continue
+		}
+		for _, p := range e.groupMemberProducers(n) {
+			if selected[p.id] != "" || skipPlanNode(p) || p.id == extra {
+				continue
+			}
+			selected[p.id] = ReasonGroupIncomplete
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (e *Evaluation) groupMemberProducers(n node) []node {
+	if skipPlanNode(n) || n.project == nil || n.scene.StartGroup() == "" {
+		return nil
+	}
+	snap := n.startSnapshot()
+	if snap == "" {
+		return nil
+	}
+	group := n.scene.StartGroup()
+	members, err := n.project.GroupMembers(group)
+	if err != nil {
+		return nil
+	}
+	stages := map[string]bool{}
+	for _, m := range members {
+		stages[m.Stage] = true
+	}
+	var out []node
+	for _, m := range e.order {
+		if m.id == n.id || skipPlanNode(m) || m.project == nil {
+			continue
+		}
+		if !sameProject(n.project.Dir, m.project.Dir) {
+			continue
+		}
+		if m.scene.EndGroup() != group || m.endSnapshot() != snap {
+			continue
+		}
+		if !stages[m.stage()] {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func (e *Evaluation) consumers(n node) []node {

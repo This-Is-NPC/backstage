@@ -514,6 +514,87 @@ func TestWithDepsOfGroupProducerSelectsSibling(t *testing.T) {
 	}
 }
 
+func writeDivergentOKPair(t *testing.T, dir string, store *machine.Store) {
+	t.Helper()
+	writeFile(t, filepath.Join(dir, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t", "cmd": "bash"}]}},
+		"vms": {
+			"a": {"stage": "stage-a"},
+			"b": {"stage": "stage-b"}
+		},
+		"state-groups": {"pair": ["a", "b"]}
+	}`)
+	writeScene(t, dir, "make-a", groupScene("make-a", "a", "", "linked", "pair"))
+	writeScene(t, dir, "make-b", groupScene("make-b", "b", "", "linked", "pair"))
+	writeScene(t, dir, "use", groupScene("use", "a", "linked", "", "pair"))
+	saveStage(t, store, "stage-a", map[string]string{"initial": imgInitial, "linked": imgReady}, map[string]machine.SnapshotOrigin{
+		"linked": {Project: dir, Scene: "make-a", Take: machine.TakeRecording, Image: imgReady, Group: "pair", Generation: "gen-a"},
+	})
+	saveStage(t, store, "stage-b", map[string]string{"initial": imgInitial, "linked": imgOther}, map[string]machine.SnapshotOrigin{
+		"linked": {Project: dir, Scene: "make-b", Take: machine.TakeRecording, Image: imgOther, Group: "pair", Generation: "gen-b"},
+	})
+	publishGroupProducer(t, dir, store, "make-a", "stage-a", facts.Facts{})
+	publishGroupProducer(t, dir, store, "make-b", "stage-b", facts.Facts{})
+}
+
+func TestWithDepsRemakesIncompleteGroupMembers(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeDivergentOKPair(t, dir, store)
+	if st := statusOf(t, report(t, dir, store), "use"); st.Status != BlockedGroupIncomplete {
+		t.Fatalf("use status %s, want %s", st.Status, BlockedGroupIncomplete)
+	}
+	got := planScene(t, filepath.Join(dir, "scenes", "use.json"), store, KindPlay)
+	want := []string{"./make-a " + ReasonGroupIncomplete, "./make-b " + ReasonGroupIncomplete, "./use requested"}
+	if names := stepSummary(got); !equal(names, want) {
+		t.Fatalf("plan %v, want %v", names, want)
+	}
+	if !got.Steps[len(got.Steps)-1].Requested || got.Steps[len(got.Steps)-1].Scene != "use" {
+		t.Fatalf("requested must be last: %v", stepSummary(got))
+	}
+}
+
+func TestStaleRemakesIncompleteGroupMembers(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeDivergentOKPair(t, dir, store)
+	got, err := PlanStale(DepsOptions{Options: Options{Dir: dir, Store: store}, Kind: KindPlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"./make-a " + ReasonGroupIncomplete, "./make-b " + ReasonGroupIncomplete, "./use " + BlockedGroupIncomplete}
+	if names := stepSummary(got); !equal(names, want) {
+		t.Fatalf("plan %v, want %v", names, want)
+	}
+}
+
+func TestIncompleteGroupRefusesBlockedMemberProducer(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t)
+	writeFile(t, filepath.Join(dir, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t", "cmd": "bash"}]}},
+		"vms": {
+			"a": {"stage": "stage-a"},
+			"b": {"stage": "stage-b"}
+		},
+		"state-groups": {"pair": ["a", "b"]}
+	}`)
+	writeScene(t, dir, "make-a", groupScene("make-a", "a", "", "linked", "pair"))
+	writeScene(t, dir, "make-b", `{"name":"make-b","layout":"solo","vm":"b","vm-start":{"mode":"clean","snapshot":"ghost"},"vm-end":{"snapshot":"linked","group":"pair"},"steps":[{"action":"wait","delay-after":0.05}]}`)
+	writeScene(t, dir, "use", groupScene("use", "a", "linked", "", "pair"))
+	saveStage(t, store, "stage-a", map[string]string{"initial": imgInitial, "linked": imgReady}, map[string]machine.SnapshotOrigin{
+		"linked": {Project: dir, Scene: "make-a", Take: machine.TakeRecording, Image: imgReady, Group: "pair", Generation: "gen-a"},
+	})
+	saveStage(t, store, "stage-b", map[string]string{"initial": imgInitial, "linked": imgOther}, map[string]machine.SnapshotOrigin{
+		"linked": {Project: dir, Scene: "make-b", Take: machine.TakeRecording, Image: imgOther, Group: "pair", Generation: "gen-b"},
+	})
+	publishGroupProducer(t, dir, store, "make-a", "stage-a", facts.Facts{})
+	_, err := PlanDeps(DepsOptions{Options: Options{Dir: dir, Store: store}, ScenePath: filepath.Join(dir, "scenes", "use.json"), Kind: KindPlay})
+	if err == nil || !strings.Contains(err.Error(), "make-b") || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("blocked member producer: %v", err)
+	}
+}
+
 func TestPlanStepLanesIncludeStartGroupMembers(t *testing.T) {
 	dir := t.TempDir()
 	store := testStore(t)
