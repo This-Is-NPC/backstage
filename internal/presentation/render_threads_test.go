@@ -96,7 +96,7 @@ func TestPreparedTrackOrderIsSortedKeys(t *testing.T) {
 	var saw renderNote
 	observeRender = func(n renderNote) { saw = n }
 	defer resetSeams()
-	if _, _, err = prepareTracks(context.Background(), plan, t.TempDir(), io.Discard); err != nil {
+	if _, _, err = prepareTracks(context.Background(), plan, t.TempDir(), io.Discard, nil); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{"a": "track-0.mkv", "m": "track-1.mkv", "z": "track-2.mkv"}
@@ -137,7 +137,7 @@ func TestPrepareErrorCancelsOthers(t *testing.T) {
 	}
 	defer resetSeams()
 	startedAt := time.Now()
-	_, _, err = prepareTracks(context.Background(), plan, t.TempDir(), io.Discard)
+	_, _, err = prepareTracks(context.Background(), plan, t.TempDir(), io.Discard, nil)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("want first error, got %v", err)
 	}
@@ -177,7 +177,7 @@ func TestPrepareCancelKillsFFmpeg(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { _, _, err := prepareTracks(ctx, plan, work, io.Discard); done <- err }()
+	go func() { _, _, err := prepareTracks(ctx, plan, work, io.Discard, nil); done <- err }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		running, _ := exec.Command("pgrep", "-af", "ffmpeg").Output()
@@ -385,7 +385,7 @@ func decodedTrackFrames(ctx context.Context, p *Plan) (map[string][][]byte, erro
 		return nil, err
 	}
 	defer os.RemoveAll(work)
-	paths, _, err := prepareTracks(ctx, p, work, io.Discard)
+	paths, _, err := prepareTracks(ctx, p, work, io.Discard, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +434,7 @@ func composedShotPairs(ctx context.Context, p *Plan) ([]shotPair, error) {
 		return nil, err
 	}
 	defer os.RemoveAll(work)
-	paths, _, err := prepareTracks(ctx, p, work, io.Discard)
+	paths, _, err := prepareTracks(ctx, p, work, io.Discard, nil)
 	if err != nil {
 		return nil, err
 	}

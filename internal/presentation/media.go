@@ -252,10 +252,17 @@ func tempo(rate float64) string {
 	}
 	return strings.Join(append(s, "atempo="+num(rate)), ",")
 }
-func (p *Plan) mix(ctx context.Context, dir string) (string, []namedSeconds, error) {
+func (p *Plan) mix(ctx context.Context, dir string, cache *renderCache) (string, []namedSeconds, error) {
 	if len(p.AudioParts) == 0 {
 		return "", nil, nil
 	}
+	if cache != nil {
+		return cache.mix(ctx, p, dir)
+	}
+	return p.mixDirect(ctx, dir)
+}
+
+func (p *Plan) mixDirect(ctx context.Context, dir string) (string, []namedSeconds, error) {
 	args := []string{"-v", "error", "-y", "-threads", "1"}
 	var paths []string
 	var parts []namedSeconds
@@ -314,7 +321,7 @@ func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps, thr
 	return out, append([]string(nil), args...), run(ctx, "ffmpeg", args...)
 }
 
-func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer) (map[string]string, map[string]float64, error) {
+func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer, cache *renderCache) (map[string]string, map[string]float64, error) {
 	ids := sortedKeys(p.Tracks)
 	if len(ids) == 0 {
 		noteRender(renderNote{PreparedPaths: map[string]string{}})
@@ -358,7 +365,16 @@ func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer
 			}
 			fmt.Fprintf(progress, ">> prepare track %s\n", id)
 			started := time.Now()
-			path, args, err := prepareOne(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads, ffv1GOP)
+			var (
+				path string
+				args []string
+				err  error
+			)
+			if cache != nil {
+				path, args, err = cache.prepareTrack(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads, ffv1GOP)
+			} else {
+				path, args, err = prepareOne(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads, ffv1GOP)
+			}
 			if err != nil {
 				errOnce.Do(func() {
 					first = err

@@ -56,6 +56,8 @@ type renderTimings struct {
 	FinalMP4Bytes   *int64           `json:"final-mp4-bytes,omitempty"`
 	DecodedPNGBytes int64            `json:"decoded-png-bytes"`
 	ScreenshotBytes int64            `json:"screenshot-bytes"`
+	CacheHits       cacheCounts      `json:"cache-hits"`
+	CacheMisses     cacheCounts      `json:"cache-misses"`
 }
 
 // msHist is 1000 one-millisecond buckets plus overflow. It does not store a duration per frame.
@@ -165,7 +167,8 @@ func (t renderTimings) progressLine(frames int) string {
 	for _, s := range t.PrepareTrackSeconds {
 		prep += s
 	}
-	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f prepare=%.3f audio=%.3f encode=%.3f mux=%.3f frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f\n",
+	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f prepare=%.3f audio=%.3f encode=%.3f mux=%.3f frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f cache-hits=%d cache-misses=%d\n",
 		t.TotalSeconds, t.RendererStartSeconds, prep, audio, t.EncodeSeconds, mux, frames,
-		t.Decode.P95Seconds, t.Transfer.P95Seconds, t.Draw.P95Seconds, t.Screenshot.P95Seconds, t.EncodeWrite.P95Seconds)
+		t.Decode.P95Seconds, t.Transfer.P95Seconds, t.Draw.P95Seconds, t.Screenshot.P95Seconds, t.EncodeWrite.P95Seconds,
+		t.CacheHits.Tracks+t.CacheHits.Audio, t.CacheMisses.Tracks+t.CacheMisses.Audio)
 }

@@ -126,6 +126,7 @@ func asFloat(t *testing.T, v any, name string) float64 {
 
 func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 	requireRenderTest(t)
+	useTempCache(t)
 	plan := timedPlan(t)
 	out := filepath.Join(t.TempDir(), "show.mp4")
 	var log bytes.Buffer
@@ -155,7 +156,7 @@ func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 		"decode", "transfer", "draw", "screenshot", "encode-write",
 		"encode-seconds", "mux-seconds", "metadata-seconds", "total-seconds",
 		"track-bytes", "audio-part-bytes", "mix-wav-bytes", "video-mp4-bytes", "final-mp4-bytes",
-		"decoded-png-bytes", "screenshot-bytes",
+		"decoded-png-bytes", "screenshot-bytes", "cache-hits", "cache-misses",
 	} {
 		if _, ok := timings[key]; !ok {
 			t.Fatalf("timings missing %s", key)

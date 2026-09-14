@@ -229,7 +229,12 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 			d.close()
 		}
 	}()
-	trackPaths, prepare, err := prepareTracks(ctx, p, work, progress)
+	cache, err := openRenderCache(ctx, progress)
+	if err != nil {
+		return err
+	}
+	defer cache.Close()
+	trackPaths, prepare, err := prepareTracks(ctx, p, work, progress, cache)
 	if err != nil {
 		return err
 	}
@@ -245,7 +250,7 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	}
 	fmt.Fprintln(progress, ">> prepare audio")
 	mixAt := time.Now()
-	audio, parts, err := p.mix(ctx, work)
+	audio, parts, err := p.mix(ctx, work, cache)
 	if err != nil {
 		return err
 	}
@@ -345,6 +350,8 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	timings.EncodeWrite = writeH.snapshot()
 	timings.DecodedPNGBytes = decodedPNG
 	timings.ScreenshotBytes = screenshotBytes
+	timings.CacheHits = cache.hits
+	timings.CacheMisses = cache.misses
 	collectWorkBytes(&timings, work, p, trackPaths)
 	if err = r.metadata(work, &timings, started); err != nil {
 		return err

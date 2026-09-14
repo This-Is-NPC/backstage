@@ -34,7 +34,7 @@ func TestAudioPolicyIsPerUse(t *testing.T) {
 	if a.At != 0.5 || a.Rate != 2 || math.Abs(a.Duration-1) > 0.001 || b.At != 2 || b.Rate != 1 || math.Abs(b.Duration-2) > 0.001 {
 		t.Fatalf("%+v %+v", a, b)
 	}
-	mixed, _, err := p.mix(context.Background(), t.TempDir())
+	mixed, _, err := p.mix(context.Background(), t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestLoopedMusicHasBoundedDuration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	path, _, err := p.mix(ctx, t.TempDir())
+	path, _, err := p.mix(ctx, t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

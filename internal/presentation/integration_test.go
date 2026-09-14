@@ -17,6 +17,7 @@ func TestRealPresentation(t *testing.T) {
 	if os.Getenv("BACKSTAGE_RENDER_TEST") != "1" {
 		t.Skip("set BACKSTAGE_RENDER_TEST=1 with Chromium and FFmpeg installed")
 	}
+	useTempCache(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	p, err := scene.LoadProject("../../examples/presentation/backstage.json")
