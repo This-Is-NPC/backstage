@@ -71,26 +71,57 @@ func LoadScene(path string) (*Scene, error) {
 	return &s, nil
 }
 
-// LoadProject reads a project config, records its directory as both Dir and
-// Workspace, fills defaults, and expands ${PROJECT}/$PROJECT in env values to
-// the project root.
+// LoadProject reads a project config and any ancestor files it extends, merges
+// them, records Dir and Workspace, fills defaults, and expands ${PROJECT} /
+// ${WORKSPACE} in env values.
 func LoadProject(cfgPath string) (*Project, error) {
-	b, err := os.ReadFile(cfgPath)
+	return loadProject(cfgPath, true)
+}
+
+func loadProject(cfgPath string, strict bool) (*Project, error) {
+	files, err := loadConfigChain(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	leafDir, err := filepath.Abs(filepath.Dir(cfgPath))
+	if err != nil {
+		return nil, err
+	}
+	workspace, err := filepath.Abs(filepath.Dir(files[0].path))
+	if err != nil {
+		return nil, err
+	}
+	merged, origins, err := mergeConfigFiles(files)
+	if err != nil {
+		return nil, err
+	}
+	if err := rewriteInheritedRefs(merged, origins, leafDir); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(merged)
 	if err != nil {
 		return nil, err
 	}
 	var p Project
-	if err := json.Unmarshal(b, &p); err != nil {
+	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, fmt.Errorf("config %s: %w", cfgPath, err)
 	}
-	p.Dir = filepath.Dir(cfgPath)
-	p.Workspace = p.Dir
+	p.Dir = leafDir
+	p.Workspace = workspace
+	p.Origins = origins
+	if leaf := files[len(files)-1]; leaf.extends != "" {
+		p.Extends = leaf.extends
+	}
 	// Validate the raw fontSize before defaulting: applyDefaults coerces 0 → the
 	// default, so a negative value is the only invalid raw input to reject here.
 	if p.Popup.Style.FontSize < 0 {
 		return nil, fmt.Errorf("popup.style.fontSize must not be negative")
 	}
 	p.applyDefaults()
+	p.expandCommands()
+	if !strict {
+		return &p, nil
+	}
 	if err := p.ValidateConfig(); err != nil {
 		return nil, err
 	}
@@ -99,6 +130,9 @@ func LoadProject(cfgPath string) (*Project, error) {
 			return nil, err
 		}
 		p.Env[k] = p.Expand(v)
+	}
+	if err := p.validateMergedPaths(); err != nil {
+		return nil, err
 	}
 	return &p, nil
 }
@@ -144,19 +178,16 @@ func (p *Project) applyDefaults() {
 }
 
 // PopupClassFor returns the configured popup window class for a project config,
-// tolerating an otherwise-invalid config. The kill/close path uses it so a popup
+// tolerating an otherwise-invalid config. It reads the merged extends chain so
+// an inherited class is still found. The kill/close path uses it so a popup
 // opened with a custom class is reliably dismissible even when the rest of the
 // config no longer validates. Returns the default class if the config can't be
 // read, names no class, or names a class that fails the same validation
 // ValidateConfig applies (popupClassRE) — so a class with spaces or shell
 // metacharacters is never handed to hyprctl, even on this tolerant path.
 func PopupClassFor(cfgPath string) string {
-	b, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return defPopupClass
-	}
-	var p Project
-	if err := json.Unmarshal(b, &p); err != nil {
+	p, err := loadProject(cfgPath, false)
+	if err != nil || p == nil {
 		return defPopupClass
 	}
 	class := p.Popup.Style.Class
@@ -166,8 +197,104 @@ func PopupClassFor(cfgPath string) string {
 	return class
 }
 
-// Expand replaces ${PROJECT} and $PROJECT with the project root directory.
+// Expand replaces ${PROJECT}/$PROJECT with the leaf project directory and
+// ${WORKSPACE}/$WORKSPACE with the workspace root.
 func (p *Project) Expand(value string) string {
 	r := strings.ReplaceAll(value, "${PROJECT}", p.Dir)
-	return strings.ReplaceAll(r, "$PROJECT", p.Dir)
+	r = strings.ReplaceAll(r, "$PROJECT", p.Dir)
+	r = strings.ReplaceAll(r, "${WORKSPACE}", p.WorkspaceRoot())
+	return strings.ReplaceAll(r, "$WORKSPACE", p.WorkspaceRoot())
+}
+
+func (p *Project) expandWorkspaceRef(value string) string {
+	return strings.ReplaceAll(value, "${WORKSPACE}", p.WorkspaceRoot())
+}
+
+func (p *Project) expandCommands() {
+	for name, layout := range p.Layouts {
+		for i := range layout.Panes {
+			layout.Panes[i].Cmd = p.expandWorkspaceRef(layout.Panes[i].Cmd)
+		}
+		p.Layouts[name] = layout
+	}
+	for name, tr := range p.Transitions {
+		tr.Cmd = p.expandWorkspaceRef(tr.Cmd)
+		p.Transitions[name] = tr
+	}
+}
+
+func (p *Project) origin(key string) string {
+	if p.Origins != nil {
+		if file, ok := p.Origins[key]; ok && file != "" {
+			return file
+		}
+	}
+	return filepath.Join(p.Dir, configName)
+}
+
+func (p *Project) validateMergedPaths() error {
+	checkIn := func(rel, key, originKey string) error {
+		if rel == "" {
+			return nil
+		}
+		if _, err := p.InputPath(rel); err != nil {
+			return fmt.Errorf("%s: %w (declared in %s)", key, err, p.origin(originKey))
+		}
+		return nil
+	}
+	checkOut := func(rel, key, originKey string) error {
+		if rel == "" {
+			return nil
+		}
+		if _, err := p.OutputPath(rel); err != nil {
+			return fmt.Errorf("%s: %w (declared in %s)", key, err, p.origin(originKey))
+		}
+		return nil
+	}
+	if err := checkIn(p.Hooks.Setup, "hooks.setup", "hooks.setup"); err != nil {
+		return err
+	}
+	if err := checkIn(p.Hooks.Reset, "hooks.reset", "hooks.reset"); err != nil {
+		return err
+	}
+	if err := checkOut(p.Record.Out, "record.out", "record.out"); err != nil {
+		return err
+	}
+	for name, tmpl := range p.Templates {
+		key := "templates." + name + ".entry"
+		if err := checkIn(tmpl.Entry, key, "templates."+name); err != nil {
+			return err
+		}
+	}
+	for name, ref := range p.Presentations {
+		base := "presentations." + name
+		if err := checkIn(ref.File, base+".file", base); err != nil {
+			return err
+		}
+		if err := checkOut(ref.Out, base+".out", base); err != nil {
+			return err
+		}
+	}
+	for name, tr := range p.Transitions {
+		key := "transitions." + name + ".live.prop"
+		if err := checkIn(tr.Live.Prop, key, "transitions."+name); err != nil {
+			return err
+		}
+	}
+	for name, layout := range p.Layouts {
+		for i, pane := range layout.Panes {
+			key := fmt.Sprintf("layouts.%s.panes[%d].cwd", name, i)
+			if err := checkIn(orDot(pane.Cwd), key, "layouts."+name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func orDot(s string) string {
+	if s == "" {
+		return "."
+	}
+	return s
 }

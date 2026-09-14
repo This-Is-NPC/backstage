@@ -34,16 +34,34 @@ func ValidateEnvKey(key string) error {
 }
 
 // InputPath joins project-relative path parts for a file that is read.
-// Base and boundary are both the leaf project until inheritance moves the
-// boundary to the workspace.
+// Paths resolve from the leaf project and must stay inside the workspace.
 func (p *Project) InputPath(parts ...string) (string, error) {
-	return confinedPath(p.Dir, p.Dir, parts...)
+	return confinedPath(p.Dir, p.WorkspaceRoot(), parts...)
 }
 
 // OutputPath joins project-relative path parts for a file that is written.
 // Base and boundary are both the leaf project.
 func (p *Project) OutputPath(parts ...string) (string, error) {
 	return confinedPath(p.Dir, p.Dir, parts...)
+}
+
+// WorkspaceRoot is the directory of the topmost file in an extends chain,
+// or Dir when the project does not extend another or Workspace is unset.
+func (p *Project) WorkspaceRoot() string {
+	if p != nil && p.Workspace != "" {
+		return p.Workspace
+	}
+	if p != nil {
+		return p.Dir
+	}
+	return ""
+}
+
+// ConfinedPath joins parts onto base and rejects absolute parts, .. escapes,
+// or symlink ancestors that leave boundary. InputPath and OutputPath use it;
+// the presentation asset handler uses it with the workspace as both arguments.
+func ConfinedPath(base, boundary string, parts ...string) (string, error) {
+	return confinedPath(base, boundary, parts...)
 }
 
 // confinedPath joins parts onto base and rejects absolute parts, .. escapes,

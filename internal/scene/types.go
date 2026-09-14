@@ -88,9 +88,13 @@ type Project struct {
 	// Dir is the leaf project root (directory holding this project's config).
 	// Set by LoadProject.
 	Dir string `json:"-"`
-	// Workspace is the workspace root. It equals Dir until a project can
-	// inherit configuration from ancestor directories.
+	// Workspace is the workspace root: the directory of the topmost file in
+	// an extends chain, or Dir when the project does not extend another.
 	Workspace string `json:"-"`
+	// Extends is the leaf file's extends value, if it declared one.
+	Extends string `json:"-"`
+	// Origins maps a dotted configuration key to the file that supplied it.
+	Origins map[string]string `json:"-"`
 }
 
 // VMCfg is one Omarchy guest a scene can run on.

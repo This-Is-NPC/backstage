@@ -6,6 +6,35 @@ import (
 	"testing"
 )
 
+func TestInputPathUsesWorkspaceBoundary(t *testing.T) {
+	workspace := t.TempDir()
+	leaf := filepath.Join(workspace, "leaf")
+	if err := os.Mkdir(leaf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(workspace, "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := &Project{Dir: leaf, Workspace: workspace}
+	got, err := p.InputPath("..", "hooks", "reset.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(workspace, "hooks", "reset.sh"))
+	if err != nil {
+		want = filepath.Join(workspace, "hooks", "reset.sh")
+	}
+	if got != want && filepath.Dir(got) != filepath.Join(workspace, "hooks") {
+		t.Fatalf("InputPath workspace = %s, want under %s", got, want)
+	}
+	if _, err := p.InputPath("..", "..", "outside"); err == nil {
+		t.Fatal("InputPath should reject leaving the workspace")
+	}
+	if _, err := p.OutputPath("..", "hooks", "out.mp4"); err == nil {
+		t.Fatal("OutputPath should stay inside the leaf")
+	}
+}
+
 func TestConfinedPathSameBaseAndBoundary(t *testing.T) {
 	dir := t.TempDir()
 	got, err := confinedPath(dir, dir, "recordings", "demo.mp4")
