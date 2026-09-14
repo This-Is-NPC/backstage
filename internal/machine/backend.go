@@ -51,6 +51,12 @@ type Manager struct {
 	URI     string
 	Timeout time.Duration
 	Output  io.Writer
+	// Now, if set, is the clock for duration measurements. Nil uses time.Now.
+	Now func() time.Time
+	// Log, if set, receives every provision.log line. Tests inject failures.
+	Log func(message string) error
+	// StartTimes is what the last Restore or Begin completed.
+	StartTimes StartTimes
 }
 
 func New() (*Manager, error) {
@@ -58,7 +64,7 @@ func New() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{s, ExecRunner{}, "qemu:///system", 40 * time.Minute, os.Stderr}, nil
+	return &Manager{Store: s, Runner: ExecRunner{}, URI: "qemu:///system", Timeout: 40 * time.Minute, Output: os.Stderr}, nil
 }
 
 func (m *Manager) run(ctx context.Context, name string, args ...string) (string, error) {
@@ -88,6 +94,9 @@ func (m *Manager) phase(r *Record, phase string) error {
 }
 
 func (m *Manager) log(r *Record, message string) error {
+	if m.Log != nil {
+		return m.Log(message)
+	}
 	f, err := os.OpenFile(filepath.Join(m.Store.Dir(r.Name), "provision.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -410,10 +419,14 @@ func (m *Manager) Start(ctx context.Context, r *Record) (*guest.Guest, error) {
 		return nil, err
 	}
 	g.Context = ctx
-	if err := g.Start(5 * time.Minute); err != nil {
+	if err := bootGuest(g, 5*time.Minute); err != nil {
 		return nil, err
 	}
 	return g, nil
+}
+
+var bootGuest = func(g *guest.Guest, patience time.Duration) error {
+	return g.Start(patience)
 }
 
 func ParseSize(s string) (uint64, error) {

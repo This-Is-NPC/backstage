@@ -190,8 +190,12 @@ func TestReplaceSnapshotCancelAfterCaptureRemovesImage(t *testing.T) {
 			return mgr.capture(ctx, rec)
 		}
 	})
-	if _, err := m.ReplaceSnapshot(ctx, r, "ready", testOrigin("/proj", "alpha"), false); err == nil {
+	result, err := m.ReplaceSnapshot(ctx, r, "ready", testOrigin("/proj", "alpha"), false)
+	if err == nil {
 		t.Fatal("expected cancel")
+	}
+	if result.CaptureSeconds == nil || result.CaptureBytes == nil || result.CaptureApparentBytes == nil {
+		t.Fatalf("capture timings lost: %+v", result)
 	}
 	assertUnchanged(t, m, "ready", old, origin)
 	if captured == "" {

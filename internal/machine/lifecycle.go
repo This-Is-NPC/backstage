@@ -454,18 +454,23 @@ func (m *Manager) Snapshot(ctx context.Context, r *Record, name string) error {
 	if r.Status != "ready" {
 		return errors.New("only ready stages can be snapshotted")
 	}
+	began := m.now()
 	if err := m.Stop(ctx, r, false); err != nil {
 		return err
 	}
+	m.logTiming(r, "shutdown-seconds", *secondsPtr(m.since(began)))
+	began = m.now()
 	i, err := m.capture(ctx, r)
 	if err != nil {
 		return err
 	}
+	m.noteCapture(r, began, i.Disk)
 	r.Snapshots[name] = i.ID
 	return m.Store.Save(r)
 }
 
 func (m *Manager) Restore(ctx context.Context, r *Record, name string) error {
+	m.StartTimes = StartTimes{}
 	id, ok := r.Snapshots[name]
 	if !ok {
 		return fmt.Errorf("snapshot %q not found", name)
@@ -474,10 +479,19 @@ func (m *Manager) Restore(ctx context.Context, r *Record, name string) error {
 	if err != nil {
 		return err
 	}
+	began := m.now()
 	if err := m.Stop(ctx, r, false); err != nil {
 		return err
 	}
-	return m.activate(ctx, r, i, false)
+	m.StartTimes.RestoreStopSeconds = secondsPtr(m.since(began))
+	m.logTiming(r, "restore-stop-seconds", *m.StartTimes.RestoreStopSeconds)
+	began = m.now()
+	if err := m.activate(ctx, r, i, false); err != nil {
+		return err
+	}
+	m.StartTimes.RestoreActivateSeconds = secondsPtr(m.since(began))
+	m.logTiming(r, "restore-activate-seconds", *m.StartTimes.RestoreActivateSeconds)
+	return nil
 }
 
 func (m *Manager) materialize(ctx context.Context, r *Record, i *Image) error {
@@ -797,8 +811,12 @@ var collectUnusedImages = func(m *Manager) error {
 // ReplaceResult is a committed snapshot replacement. Warning is set when
 // collection failed after the record was saved; the new snapshot stays.
 type ReplaceResult struct {
-	Image   *Image
-	Warning string
+	Image                *Image
+	Warning              string
+	ShutdownSeconds      *float64
+	CaptureSeconds       *float64
+	CaptureBytes         *int64
+	CaptureApparentBytes *int64
 }
 
 // ReplaceSnapshot captures the stopped guest and commits the mapping and
@@ -816,16 +834,21 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 		return ReplaceResult{}, err
 	}
 	defer release()
+	began := m.now()
 	if err := m.Stop(ctx, r, false); err != nil {
 		return ReplaceResult{}, err
 	}
+	out := ReplaceResult{ShutdownSeconds: secondsPtr(m.since(began))}
+	m.logTiming(r, "shutdown-seconds", *out.ShutdownSeconds)
+	began = m.now()
 	img, err := captureStageImage(m, ctx, r)
 	if err != nil {
-		return ReplaceResult{}, err
+		return out, err
 	}
+	out.CaptureSeconds, out.CaptureBytes, out.CaptureApparentBytes = m.noteCapture(r, began, img.Disk)
 	if err := ctx.Err(); err != nil {
 		removeCapturedImage(m, img)
-		return ReplaceResult{}, err
+		return out, err
 	}
 	prevSnaps := cloneStringMap(r.Snapshots)
 	prevOrigins := cloneOriginMap(r.SnapshotOrigins)
@@ -844,19 +867,25 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	if err := commitStageRecord(m.Store, r); err != nil {
 		if errors.Is(err, ErrCommitted) {
 			if cerr := collectUnusedImages(m); cerr != nil {
-				return ReplaceResult{Image: img, Warning: pendingCleanup(errors.Join(err, cerr))}, nil
+				out.Image = img
+				out.Warning = pendingCleanup(errors.Join(err, cerr))
+				return out, nil
 			}
-			return ReplaceResult{Image: img, Warning: pendingCleanup(err)}, nil
+			out.Image = img
+			out.Warning = pendingCleanup(err)
+			return out, nil
 		}
 		r.Snapshots = prevSnaps
 		r.SnapshotOrigins = prevOrigins
 		removeCapturedImage(m, img)
-		return ReplaceResult{}, err
+		return out, err
 	}
+	out.Image = img
 	if err := collectUnusedImages(m); err != nil {
-		return ReplaceResult{Image: img, Warning: pendingCleanup(err)}, nil
+		out.Warning = pendingCleanup(err)
+		return out, nil
 	}
-	return ReplaceResult{Image: img}, nil
+	return out, nil
 }
 
 // DeleteSnapshot removes a named state and its origin, then collects unused

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/This-Is-NPC/backstage/internal/guest"
 )
@@ -30,6 +31,7 @@ func CheckContinuity(last *Continuity, project, after string, recording bool, se
 // Begin is called under the stage lock, before project hooks. Continuity is
 // consumed before any action so a failed or interrupted take cannot certify it.
 func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, project string, recording bool) (*guest.Guest, error) {
+	m.StartTimes = StartTimes{}
 	if err := m.Recover(ctx, r); err != nil {
 		return nil, err
 	}
@@ -69,9 +71,17 @@ func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, p
 			return nil, errors.New("continuation requires a running stage; it will not be booted automatically")
 		}
 	}
+	var booted time.Time
+	if state, err := m.State(ctx, r); err == nil && state != "running" {
+		booted = m.now()
+	}
 	g, err := m.Start(ctx, r)
 	if err != nil {
 		return nil, err
+	}
+	if !booted.IsZero() {
+		m.StartTimes.BootSeconds = secondsPtr(m.since(booted))
+		m.logTiming(r, "boot-seconds", *m.StartTimes.BootSeconds)
 	}
 	g.StartMode = mode
 	if mode == "clean" {
