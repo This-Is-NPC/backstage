@@ -203,6 +203,11 @@ Every recorded clip gets a `.facts.json` beside it, on the host and on a VM:
 the Backstage version, when it was made, and a `result` (`ok`, `steps-failed`,
 or `short`, or `capture-failed` when `vm-end` does not commit). A guest clip
 also records the machine; a clean start records `start-image` and
-`start-state.snapshot`. A successful `vm-end` adds `end-state`. A film is
+`start-state.snapshot`. A successful `vm-end` adds `end-state`. Completed
+VM phases go in `timings` (seconds and capture bytes); they are not an
+input. `boot-seconds` only when Begin booted a stopped domain. The stage
+`provision.log` records `timing <field> <value>` for
+the same measures, including a manual `stage snapshot` and
+`stage restore`. A film is
 evidence, and evidence has a provenance. That file is the difference between
 a take that can be reproduced and one that can only be re-shot.

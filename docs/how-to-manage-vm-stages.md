@@ -168,7 +168,20 @@ and the time it was made. A guest clip also records the stage, image origin,
 start mode, snapshot, ISO version/checksum, provisioning recipe, domain,
 user, address and Omarchy package version. A `vm-start: clean` take adds
 `start-image` (the restored image) and `start-state.snapshot` (the snapshot
-name). Host takes omit the guest fields.
+name). Host takes omit the guest fields. A guest take also records
+`timings` when a phase completed: `restore-stop-seconds` and
+`restore-activate-seconds` on a clean start, `boot-seconds` only when
+Begin booted a stopped domain, `session-seconds` plus `stage-phases`
+(`up`, `omarchy`, `tools`, `desktop`, `terminal`), and on `vm-end`
+`shutdown-seconds`, `capture-seconds`, `capture-bytes` (`st_blocks*512`)
+and `capture-apparent-bytes`. A failed or skipped phase is omitted.
+Timings do not enter `inputs-sha256` or status. The stage
+`provision.log` gets one `timing <field> <value>` line per measure;
+`stage snapshot` writes shutdown, capture and bytes, and
+`stage restore` writes the two restore times. Capture progress is
+`>> stage NAME: capture (12.3s, 4.1 GiB)`; without a measured size it
+is `>> stage NAME: capture (12.3s)`. A timing-log write
+failure is a warning on stderr and does not fail the take.
 VM takes start recording after staging even with `produce --show-staging`;
 installation and disk restoration are not part of the recorded clip.
 

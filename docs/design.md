@@ -162,6 +162,10 @@ start image or predecessor), and whether the take finished (`ok`), a step
 failed (`steps-failed`), or the clip came back short (`short`). A guest
 clip also records the domain, the accounts, the address, the Omarchy
 version, and, on a clean start, the restored image and snapshot name.
+A guest take may include a `timings` object (seconds to the millisecond,
+captured image bytes) for the phases that finished. `boot-seconds` only
+when Begin booted a stopped domain. Those numbers are
+not part of `inputs-sha256`.
 Narration is not an input. A missing declared file fails the take before
 the recorder starts.
 

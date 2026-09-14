@@ -96,7 +96,12 @@ kept. A successful `vm-end` rewrites the sidecar with
 `end-state: { snapshot, image }`; a failed capture writes
 `end-state: { snapshot, status: "failed" }`. A guest take also records the
 machine it was filmed on; a clean start records the restored image and
-snapshot name.
+snapshot name. Completed VM phases go in `timings` (`shutdown-seconds`,
+`capture-seconds`, `capture-bytes`, `capture-apparent-bytes`,
+`restore-stop-seconds`, `restore-activate-seconds`, `boot-seconds`
+(only when Begin booted a stopped domain),
+`session-seconds`, `stage-phases`). They are omitted when the phase
+did not run or failed. They are not part of `inputs-sha256`.
 
 ## Inputs digest
 
