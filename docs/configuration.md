@@ -72,7 +72,7 @@ decoding. The nearest file that **has** a key wins:
 | Kind | Keys | Rule |
 |---|---|---|
 | Named maps | `vms`, `layouts`, `aliases`, `templates`, `presentations`, `transitions`, `productions`, `env`, `state-groups` | Union by name. The nearest entry replaces the inherited one whole. `null` removes that entry. |
-| Settings | `record`, `popup`, `popup.style`, `render`, `hooks` | Field by field. `popup.size` is replaced whole. |
+| Settings | `record`, `popup`, `popup.style`, `render`, `render.threads`, `hooks` | Field by field. `popup.size` is replaced whole. |
 | Scalars | `term` | The nearest present value wins. |
 
 In named maps, only `null` removes an inherited entry. An empty string or `0`
@@ -246,6 +246,21 @@ The target geometry every clip is normalized to before concatenation.
 |-----|---------|---------|
 | `render.w` / `render.h` | output size | `0` = the first scene clip's size (monitor native) |
 | `render.fps` | output frame rate | falls back to `record.fps` |
+| `render.threads.prepare` | FFmpeg/FFV1 threads while preparing each presentation track | `max(1, n/w)` (`n` = CPUs, `w` = parallel tracks) |
+| `render.threads.filter` | `-filter_complex_threads` for that prepare | `1` |
+| `render.threads.encode` | libx264 threads for the presentation encoder | `n` |
+
+`render.threads` is read only by presentation `render` / `preview`. `produce`
+does not use these keys. `0`, `null` or an omitted field means the default.
+A negative value is a configuration error. A very large value is accepted as
+written and passed to FFmpeg.
+
+The encoder starts before the frame loop and codes while Chromium draws and
+captures screenshots, so `encode` threads share the CPUs with the browser.
+`encode-seconds` is that process from Start to Wait and overlaps the loop;
+it is not a bottleneck reading. Screenshot and draw are the loop cost. The
+default encode count is still `n`; measure screenshot/draw/transfer p95 and
+the frame-loop total before raising it.
 
 ### transitions
 

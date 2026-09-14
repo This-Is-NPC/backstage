@@ -183,12 +183,23 @@ Absent phases and missing files are omitted. Progress ends with
 `>> render timings: ...`. Source and template input hashes stay the same;
 `builtin:runtime.html` changes only because the runtime adds `drawTimed`.
 Measured draw includes what `draw` itself waits for — image load and the final
-`requestAnimationFrame` — not pure canvas cost.
+`requestAnimationFrame` — not pure canvas cost. `encode-seconds` is the
+encoder process from Start to Wait and overlaps the whole Chromium frame
+loop; it does not mean the encoder is the bottleneck. On a typical
+`complete` render the loop itself spends about 4.3 s in screenshot and
+3.7 s in draw of about 10 s total.
 
 Visual reproducibility assumes fixed inputs, browser, fonts and tool versions;
-MP4 byte identity across environments is not promised. The renderer uses bounded
-frame buffers and lossless intermediate video on disk rather than storing a
-whole take as PNGs. Disk use can still be significant for long/high-resolution
-sources. Ctrl-C cancels work and removes intermediates.
+MP4 byte identity across environments is not promised. Prepared FFV1 tracks use
+`-g 1` so every frame is a seek point. Screenshots stay lossless PNG with
+`optimizeForSpeed`. Track prepare runs in parallel (at most one worker per
+CPU). Project `render.threads` sets FFmpeg counts for that prepare and for
+libx264; the encoder runs at the same time as the Chromium frame loop, not
+after it. A faster encode is accepted when every decoded H.264 frame keeps
+PSNR-Y ≥ 40 dB against the previous thread count (mean ≥ 45 dB), and when
+frame count, timestamps, duration and audio stay aligned. The renderer uses
+bounded frame buffers and lossless intermediate video on disk rather than
+storing a whole take as PNGs. Disk use can still be significant for
+long/high-resolution sources. Ctrl-C cancels work and removes intermediates.
 
 See [Templates](templates.md) for visual slots and animation timing.

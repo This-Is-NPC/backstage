@@ -7,7 +7,9 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 
 1. Load the project, strict version 1 presentation JSON and referenced scenes.
 2. Probe sources and compile track spans, cue placement and selected audio.
-3. Prepare cuts and rates as lossless FFV1 tracks, and mix stereo 48 kHz audio.
+3. Prepare cuts and rates as lossless FFV1 tracks (`-g 1`, in parallel up to
+   the CPU count) and mix stereo 48 kHz audio. The H.264 encoder is started
+   before the frame loop and runs while Chromium draws and captures.
 4. Read PNG frames sequentially through FFmpeg pipes with bounded frame buffers.
 5. Pass the selected frames and time to the embedded Chromium HTML runtime.
    Render calls `drawTimed`; Check and initialize keep using `draw`. Measured
@@ -15,6 +17,9 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 6. Capture the composed frames and encode H.264/yuv420p; mux AAC when selected.
 7. Publish the MP4 and companion facts containing configuration, input hashes
    and render `timings` (phase seconds, per-frame p95, intermediate bytes).
+   `encode-seconds` is encoder Start to Wait and overlaps the frame loop; it
+   does not mean encode is the bottleneck. Screenshot and draw dominate the
+   loop (about 4.3 s and 3.7 s of a ~10 s `complete` render).
 
 `model.go` owns validation and timing, `media.go` owns FFmpeg preparation,
 `render.go` owns Chromium and export, and `preview.go` owns preview and template
@@ -50,6 +55,7 @@ Run the standard quality gate, then opt into real Chromium/FFmpeg coverage:
 ```bash
 python3 examples/presentation/generate.py
 BACKSTAGE_RENDER_TEST=1 go test ./internal/presentation -v -count=1
+BACKSTAGE_RENDER_TEST=1 go test -race -count=1 ./internal/presentation
 ```
 
 The tests cover cuts and repeated spans, cue clocks, independent/following audio,
