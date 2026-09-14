@@ -72,13 +72,14 @@ var retimeClip = Retime
 var importTake = take.ImportContext
 
 type producer struct {
-	opts     Options
-	reserved map[string]bool
-	segDir   string
-	speed    float64
-	cleanup  func()
-	raw      []string
-	first    string
+	opts       Options
+	reserved   map[string]bool
+	generation string
+	segDir     string
+	speed      float64
+	cleanup    func()
+	raw        []string
+	first      string
 }
 
 // plan flattens a production into an ordered list of scene/transition segments.
@@ -184,12 +185,13 @@ func Run(opts Options) (string, error) {
 	// first scene clip early so transitions can receive real {{w}}/{{h}} values.
 	segs := plan(opts.Prod)
 	pr := &producer{
-		opts:     opts,
-		reserved: reserved,
-		segDir:   segDir,
-		speed:    speed,
-		cleanup:  cleanupSegmentsOnInterrupt,
-		raw:      make([]string, len(segs)),
+		opts:       opts,
+		reserved:   reserved,
+		generation: engine.NewStateGeneration(),
+		segDir:     segDir,
+		speed:      speed,
+		cleanup:    cleanupSegmentsOnInterrupt,
+		raw:        make([]string, len(segs)),
 	}
 	firstSceneIndex := -1
 	for i, sg := range segs {
@@ -298,6 +300,7 @@ func (pr *producer) recordScene(i int, sg segment) error {
 		Context: pr.opts.Context, ReservedStages: pr.reserved,
 		Record: true, OutPath: clip, ShowStaging: pr.opts.ShowStaging, Speed: pr.speed,
 		OnInterrupt: pr.cleanup, Version: pr.opts.Version,
+		StateGeneration: pr.generation,
 	})
 	pubErr := pr.finishTake(s, clip, runErr)
 	var teardownErr error
@@ -425,7 +428,9 @@ func renderOfflineTransition(cmdText string, v transition.Vars, env []string, di
 	return transition.VerifyOutput(v.Out)
 }
 
-func runProductionCommand(cmd *exec.Cmd, onInterrupt func()) error {
+var runProductionCommand = runProductionCommandImpl
+
+func runProductionCommandImpl(cmd *exec.Cmd, onInterrupt func()) error {
 	scene.SetProcessGroup(cmd)
 	cmdGuard := &engine.CommandGuard{}
 	guard := newInterruptGuard(func() error {

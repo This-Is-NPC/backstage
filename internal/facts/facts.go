@@ -34,25 +34,34 @@ type EndState struct {
 
 // Facts records what a take was made against, beside the clip.
 type Facts struct {
-	Stage        string      `json:"stage,omitempty"`
-	Origin       string      `json:"origin,omitempty"`
-	StartMode    string      `json:"vm-start,omitempty"`
-	Snapshot     string      `json:"snapshot,omitempty"`
-	ISOVersion   string      `json:"iso-version,omitempty"`
-	ISOChecksum  string      `json:"iso-sha256,omitempty"`
-	Recipe       string      `json:"recipe,omitempty"`
-	Domain       string      `json:"domain,omitempty"`
-	User         string      `json:"user,omitempty"`
-	Omarchy      string      `json:"omarchy,omitempty"`
-	Address      string      `json:"address,omitempty"`
-	Made         string      `json:"made,omitempty"`
-	Backstage    string      `json:"backstage,omitempty"`
-	StartImage   string      `json:"start-image,omitempty"`
-	StartState   *StartState `json:"start-state,omitempty"`
-	InputsSHA256 string      `json:"inputs-sha256,omitempty"`
-	EndState     *EndState   `json:"end-state,omitempty"`
-	Result       string      `json:"result,omitempty"`
-	Timings      *Timings    `json:"timings,omitempty"`
+	Stage        string        `json:"stage,omitempty"`
+	Origin       string        `json:"origin,omitempty"`
+	StartMode    string        `json:"vm-start,omitempty"`
+	Snapshot     string        `json:"snapshot,omitempty"`
+	ISOVersion   string        `json:"iso-version,omitempty"`
+	ISOChecksum  string        `json:"iso-sha256,omitempty"`
+	Recipe       string        `json:"recipe,omitempty"`
+	Domain       string        `json:"domain,omitempty"`
+	User         string        `json:"user,omitempty"`
+	Omarchy      string        `json:"omarchy,omitempty"`
+	Address      string        `json:"address,omitempty"`
+	Made         string        `json:"made,omitempty"`
+	Backstage    string        `json:"backstage,omitempty"`
+	StartImage   string        `json:"start-image,omitempty"`
+	StartState   *StartState   `json:"start-state,omitempty"`
+	InputsSHA256 string        `json:"inputs-sha256,omitempty"`
+	EndState     *EndState     `json:"end-state,omitempty"`
+	GroupMembers []GroupMember `json:"group-members,omitempty"`
+	Result       string        `json:"result,omitempty"`
+	Timings      *Timings      `json:"timings,omitempty"`
+}
+
+// GroupMember is one stage restored for a group start.
+type GroupMember struct {
+	Stage      string `json:"stage"`
+	Snapshot   string `json:"snapshot"`
+	Image      string `json:"image"`
+	Generation string `json:"generation"`
 }
 
 // Timings is the cost of a guest take. Missing pointers were not measured:

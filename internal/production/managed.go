@@ -46,6 +46,16 @@ func managedStages(p *scene.Project, prod scene.Production) (map[string]bool, er
 			continue
 		}
 		reserved[cfg.Stage] = true
+		for _, st := range scene.StartGroupStages(p, s) {
+			reserved[st] = true
+		}
+		if s.EndGroup() != "" {
+			if members, err := p.GroupMembers(s.EndGroup()); err == nil {
+				for _, m := range members {
+					reserved[m.Stage] = true
+				}
+			}
+		}
 		if s.VMStartMode() == "continue" && last[cfg.Stage].name != s.VMStart.After {
 			return nil, fmt.Errorf("scene %q must follow %q on stage %q within this production", s.Name, s.VMStart.After, cfg.Stage)
 		}

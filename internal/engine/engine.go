@@ -51,6 +51,9 @@ type Options struct {
 	ReplaceState bool
 	// ConfirmAdopt asks the operator to type the snapshot name. Used with Adopt.
 	ConfirmAdopt func(snapshot string) error
+	// StateGeneration is the id of one producing run. Empty on an isolated
+	// group consumer, which reads the generation already on the members.
+	StateGeneration string
 }
 
 // Engine runs a scene over the stage/recorder/prompter/pane drivers.
@@ -81,6 +84,7 @@ type Engine struct {
 	leafProject   string
 	endFacts      endFactsWrite
 	timings       facts.Timings
+	groupMembers  []facts.GroupMember
 }
 
 // ErrCaptureFailed is returned when vm-end cannot commit a snapshot.
@@ -229,6 +233,8 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	e.managedRec = nil
 	e.leafProject = ""
 	e.endFacts = endFactsWrite{}
+	e.groupMembers = nil
+	ensureProducerGeneration(s, &opts)
 	prevRehearsing := e.rehearsing
 	e.rehearsing = !opts.Record
 	defer func() { e.rehearsing = prevRehearsing }()
@@ -316,11 +322,15 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	}()
 
 	if e.Managed != nil {
-		if !opts.ReservedStages[e.ManagedName] {
-			release, err := e.Managed.Store.LockMany(e.ManagedName)
-			if err != nil {
-				return err
-			}
+		lockNames := []string{e.ManagedName}
+		if extra := scene.StartGroupStages(e.Project, s); len(extra) > 0 {
+			lockNames = extra
+		}
+		release, err := lockUnreserved(e.Managed.Store, opts.ReservedStages, lockNames)
+		if err != nil {
+			return err
+		}
+		if release != nil {
 			defer release()
 		}
 		r, err := e.Managed.Store.Load(e.ManagedName)
@@ -339,6 +349,9 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		// overwrites this with the restored snapshot after Begin.
 		e.startImage = r.Source.Image
 		if err := e.checkVMEnd(r, s, project, opts); err != nil {
+			return err
+		}
+		if err := e.prepareGroup(ctx, s, opts); err != nil {
 			return err
 		}
 		snapshot, after := "", ""
@@ -587,6 +600,9 @@ func (e *Engine) writeClipFacts(clip string, s *scene.Scene, version, result str
 		f.StartState = &facts.StartState{Snapshot: snap}
 		f.StartImage = e.startImage
 	}
+	if len(e.groupMembers) > 0 {
+		f.GroupMembers = append([]facts.GroupMember(nil), e.groupMembers...)
+	}
 	f.EndState = end
 	if !e.timings.Empty() {
 		t := e.timings
@@ -692,6 +708,8 @@ func (e *Engine) saveEndState(ctx context.Context, s *scene.Scene, clip string, 
 		StartImage:   e.startImage,
 		Take:         kind,
 		Backstage:    opts.Version,
+		Group:        s.EndGroup(),
+		Generation:   opts.StateGeneration,
 	}
 	result, err := replaceTakeState(e.Managed, ctx, e.managedRec, s.VMEnd.Snapshot, origin, opts.Adopt)
 	e.mergeCapture(result)
