@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/This-Is-NPC/backstage/internal/machine"
@@ -51,6 +52,56 @@ func (p *Project) ValidateConfig() error {
 	}
 	if err := prompter.ValidateTitle(style.Title); err != nil {
 		return err
+	}
+	return p.validateStateGroups()
+}
+
+func (p *Project) validateStateGroups() error {
+	if p == nil || len(p.StateGroups) == 0 {
+		return nil
+	}
+	aliasOwner := map[string]string{}
+	stageOwner := map[string]string{}
+	names := make([]string, 0, len(p.StateGroups))
+	for name := range p.StateGroups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := machine.ValidateName(name); err != nil {
+			return fmt.Errorf("state-group %q: invalid name", name)
+		}
+		aliases := p.StateGroups[name]
+		if len(aliases) < 2 {
+			return fmt.Errorf("state-group %q: need at least two members", name)
+		}
+		seenAlias := map[string]bool{}
+		seenStage := map[string]bool{}
+		for _, alias := range aliases {
+			if alias == "" || seenAlias[alias] {
+				return fmt.Errorf("state-group %q: alias %q is repeated", name, alias)
+			}
+			seenAlias[alias] = true
+			vm, ok := p.VMs[alias]
+			if !ok {
+				return fmt.Errorf("state-group %q: %q is not a vm alias", name, alias)
+			}
+			if vm.Stage == "" {
+				return fmt.Errorf("state-group %q: %q is not a managed stage", name, alias)
+			}
+			if seenStage[vm.Stage] {
+				return fmt.Errorf("state-group %q: stage %q is repeated", name, vm.Stage)
+			}
+			seenStage[vm.Stage] = true
+			if other, ok := aliasOwner[alias]; ok && other != name {
+				return fmt.Errorf("vm %q belongs to state-groups %q and %q", alias, other, name)
+			}
+			aliasOwner[alias] = name
+			if other, ok := stageOwner[vm.Stage]; ok && other != name {
+				return fmt.Errorf("stage %q belongs to state-groups %q and %q", vm.Stage, other, name)
+			}
+			stageOwner[vm.Stage] = name
+		}
 	}
 	return nil
 }
@@ -176,13 +227,16 @@ func (s *Scene) ValidateVMStart(p *Project) error {
 		if x.Snapshot != "" && !regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`).MatchString(x.Snapshot) {
 			return fmt.Errorf("invalid snapshot name")
 		}
+		if err := s.validateSceneGroup(p, x.Group, x.Snapshot, "vm-start"); err != nil {
+			return err
+		}
 	case "reuse":
-		if x.Snapshot != "" || x.After != "" {
-			return fmt.Errorf("reuse cannot specify snapshot or after")
+		if x.Snapshot != "" || x.After != "" || x.Group != "" {
+			return fmt.Errorf("reuse cannot specify snapshot, after or group")
 		}
 	case "continue":
-		if vm.Stage == "" || x.After == "" || x.Snapshot != "" {
-			return fmt.Errorf("continue requires a managed stage and after, and cannot specify snapshot")
+		if vm.Stage == "" || x.After == "" || x.Snapshot != "" || x.Group != "" {
+			return fmt.Errorf("continue requires a managed stage and after, and cannot specify snapshot or group")
 		}
 		if x.After == s.Name {
 			return fmt.Errorf("a scene cannot continue itself")
@@ -209,6 +263,29 @@ func (s *Scene) ValidateVMEnd(p *Project) error {
 	}
 	if err := machine.ValidateName(s.VMEnd.Snapshot); err != nil {
 		return err
+	}
+	if err := s.validateSceneGroup(p, s.VMEnd.Group, s.VMEnd.Snapshot, "vm-end"); err != nil {
+		return err
+	}
+	if s.StartGroup() != "" && s.VMStart != nil && s.VMStart.Snapshot == s.VMEnd.Snapshot {
+		return fmt.Errorf("a scene cannot start and save the same group snapshot")
+	}
+	return nil
+}
+
+func (s *Scene) validateSceneGroup(p *Project, group, snapshot, field string) error {
+	if group == "" {
+		return nil
+	}
+	if snapshot == "" {
+		return fmt.Errorf("%s group requires a snapshot", field)
+	}
+	members, err := p.GroupMembers(group)
+	if err != nil {
+		return err
+	}
+	if !memberAlias(members, s.VM) {
+		return fmt.Errorf("vm %q is not a member of state-group %q", s.VM, group)
 	}
 	return nil
 }

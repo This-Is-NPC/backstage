@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	namedMapKeys = []string{"vms", "layouts", "aliases", "templates", "presentations", "transitions", "productions", "env"}
+	namedMapKeys = []string{"vms", "layouts", "aliases", "templates", "presentations", "transitions", "productions", "env", "state-groups"}
 	settingsKeys = []string{"record", "popup", "render", "hooks"}
 	scalarKeys   = []string{"term"}
 )

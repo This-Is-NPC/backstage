@@ -41,6 +41,7 @@ func WriteConfigShow(w io.Writer, p *Project) error {
 	writeShowMap(w, p, "aliases", anyMap(p.Aliases))
 	writeShowMap(w, p, "layouts", anyMap(p.Layouts))
 	writeShowMap(w, p, "vms", anyMap(p.VMs))
+	writeShowMap(w, p, "state-groups", anyMap(p.StateGroups))
 	writeShowMap(w, p, "templates", anyMap(p.Templates))
 	writeShowMap(w, p, "presentations", anyMap(p.Presentations))
 	writeShowMap(w, p, "transitions", anyMap(p.Transitions))

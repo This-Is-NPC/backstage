@@ -80,6 +80,8 @@ type Project struct {
 	Layouts map[string]Layout `json:"layouts"`
 	// VMs are the Omarchy guests a scene can be staged on, by name.
 	VMs map[string]VMCfg `json:"vms,omitempty"`
+	// StateGroups name sets of VM aliases that share one generation.
+	StateGroups map[string][]string `json:"state-groups,omitempty"`
 
 	// Render targets the final video when stitching a production (concat needs a
 	// consistent size/fps across clips).
@@ -154,6 +156,7 @@ type VMStart struct {
 	Mode     string `json:"mode"`
 	Snapshot string `json:"snapshot,omitempty"`
 	After    string `json:"after,omitempty"`
+	Group    string `json:"group,omitempty"`
 }
 
 func (s *Scene) VMStartMode() string {
@@ -166,6 +169,7 @@ func (s *Scene) VMStartMode() string {
 // VMEnd names a disk state to save after a successful take.
 type VMEnd struct {
 	Snapshot string `json:"snapshot"`
+	Group    string `json:"group,omitempty"`
 }
 
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the
