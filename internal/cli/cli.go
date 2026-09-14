@@ -29,8 +29,12 @@ const rehearseSpeed = 0.2
 // up from the current directory.
 var projectFlag string
 
+// binVersion is the binary version passed to Execute, written into clip facts.
+var binVersion string
+
 // Execute runs the backstage CLI.
 func Execute(version string) error {
+	binVersion = version
 	root := &cobra.Command{
 		Use:     "backstage",
 		Short:   "Declarative terminal screencast recorder — Lights, camera... Automation!",
@@ -72,6 +76,7 @@ func produceCmd() *cobra.Command {
 				Context: c.Context(),
 				Project: p, Prod: prod, OutPath: out,
 				ShowStaging: showStaging, KeepSegments: keepSegments, Speed: speed,
+				Version: binVersion,
 			})
 			if err != nil {
 				return err
@@ -272,6 +277,9 @@ func runScene(scenePath string, opts engine.Options) error {
 	eng, err := engine.NewForScene(p, s)
 	if err != nil {
 		return err
+	}
+	if opts.Version == "" {
+		opts.Version = binVersion
 	}
 	return eng.Run(s, opts)
 }

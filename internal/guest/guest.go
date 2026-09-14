@@ -553,39 +553,3 @@ func (g *Guest) Key(name string) error {
 	}
 	return nil
 }
-
-// Facts records what a take was made against, beside the clip.
-//
-// A film is evidence and evidence has a provenance. `pacman -Q omarchy` today
-// and `pacman -Q omarchy` in six months are the difference between a take that
-// can be reproduced and one that can only be re-shot.
-type Facts struct {
-	Stage       string `json:"stage,omitempty"`
-	Origin      string `json:"origin,omitempty"`
-	StartMode   string `json:"vm-start,omitempty"`
-	Snapshot    string `json:"snapshot,omitempty"`
-	ISOVersion  string `json:"iso-version,omitempty"`
-	ISOChecksum string `json:"iso-sha256,omitempty"`
-	Recipe      string `json:"recipe,omitempty"`
-	Domain      string `json:"domain"`
-	User        string `json:"user"`
-	Omarchy     string `json:"omarchy"`
-	Address     string `json:"address"`
-	Made        string `json:"made"`
-}
-
-// WriteFacts drops the sidecar beside a clip.
-func (g *Guest) WriteFacts(clip, version string) error {
-	facts := Facts{
-		Stage: g.StageName, Origin: g.Origin, StartMode: g.StartMode,
-		Snapshot: g.Snapshot, ISOVersion: g.ISOVersion, ISOChecksum: g.ISOChecksum, Recipe: g.Recipe,
-		Domain: g.Domain, User: g.User, Omarchy: version,
-		Address: g.Address, Made: time.Now().Format(time.RFC3339),
-	}
-	body, err := json.MarshalIndent(facts, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(strings.TrimSuffix(clip, filepath.Ext(clip))+".facts.json",
-		append(body, '\n'), 0o644)
-}

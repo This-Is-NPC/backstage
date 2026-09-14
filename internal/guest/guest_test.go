@@ -1,11 +1,9 @@
 package guest
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestNewExpandsTheKeyAndDefaultsTheURI(t *testing.T) {
@@ -65,30 +63,6 @@ func TestSessionNamesThisAccountsOwnRuntime(t *testing.T) {
 		if !strings.Contains(session, want) {
 			t.Errorf("session %q is missing %q", session, want)
 		}
-	}
-}
-
-func TestWriteFactsLandsBesideTheClip(t *testing.T) {
-	dir := t.TempDir()
-	clip := filepath.Join(dir, "01-take.mp4")
-	g := New("omahouse-kid", "kid", "parent", "", "")
-	g.Address = "192.168.122.230"
-	if err := g.WriteFacts(clip, "4.0.2-1"); err != nil {
-		t.Fatal(err)
-	}
-	body, err := os.ReadFile(filepath.Join(dir, "01-take.facts.json"))
-	if err != nil {
-		t.Fatalf("no sidecar beside the clip: %v", err)
-	}
-	for _, want := range []string{"omahouse-kid", "4.0.2-1", "192.168.122.230"} {
-		if !strings.Contains(string(body), want) {
-			t.Errorf("the sidecar does not record %q:\n%s", want, body)
-		}
-	}
-	// The instant is what makes two takes comparable rather than merely
-	// different, so a sidecar without one is not evidence of anything.
-	if !strings.Contains(string(body), time.Now().Format("2006")) {
-		t.Errorf("the sidecar records no time:\n%s", body)
 	}
 }
 

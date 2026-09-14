@@ -31,6 +31,7 @@ type Options struct {
 	ShowStaging  bool    // include the stage montage in scene clips
 	KeepSegments bool    // keep intermediate clips for debugging
 	Speed        float64 // scene timing multiplier (1 = real time)
+	Version      string  // Backstage binary version written into scene-clip facts
 }
 
 // segment is one ordered piece of the final video.
@@ -176,7 +177,7 @@ func Run(opts Options) (string, error) {
 		runErr := eng.Run(s, engine.Options{
 			Context: opts.Context, ReservedStages: reserved,
 			Record: true, OutPath: clip, ShowStaging: opts.ShowStaging, Speed: speed,
-			OnInterrupt: cleanupSegmentsOnInterrupt,
+			OnInterrupt: cleanupSegmentsOnInterrupt, Version: opts.Version,
 		})
 		var teardownErr error
 		if s.VM == "" {

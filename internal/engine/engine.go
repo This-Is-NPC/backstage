@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/facts"
 	"github.com/This-Is-NPC/backstage/internal/guest"
 	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/pane"
@@ -38,6 +39,8 @@ type Options struct {
 	// OnInterrupt runs after recorder/popup/stage cleanup but before the interrupt
 	// handler exits. Production uses this to remove its segment work directory.
 	OnInterrupt func()
+	// Version is the Backstage binary version written into clip facts.
+	Version string
 }
 
 // Engine runs a scene over the stage/recorder/prompter/pane drivers.
@@ -52,10 +55,16 @@ type Engine struct {
 	Speed float64
 	// PaneDriver overrides the default tmux driver. A vm stage sets it,
 	// because on that stage a target names a computer and not a pane.
-	PaneDriver pane.Driver
-	pane       pane.Driver
-	rehearsing bool
-	cmdGuard   *CommandGuard
+	PaneDriver    pane.Driver
+	pane          pane.Driver
+	rehearsing    bool
+	cmdGuard      *CommandGuard
+	startImage    string
+	startSnapshot string
+}
+
+type recordingGuest interface {
+	RecordingGuest() (*guest.Guest, string)
 }
 
 // New builds an Engine with the default Hyprland/gpu drivers for a project.
@@ -159,6 +168,8 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	if e.Speed <= 0 {
 		e.Speed = 1
 	}
+	e.startImage = ""
+	e.startSnapshot = ""
 	prevRehearsing := e.rehearsing
 	e.rehearsing = !opts.Record
 	defer func() { e.rehearsing = prevRehearsing }()
@@ -274,6 +285,16 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		g.Language = vm.Guest.Language
 		*vm.Guest = *g
 		vm.Continue = s.VMStartMode() == "continue"
+		if s.VMStartMode() == "clean" {
+			e.startSnapshot = snapshot
+			if e.startSnapshot == "" {
+				e.startSnapshot = "initial"
+			}
+			e.startImage = r.Snapshots[e.startSnapshot]
+			if e.startImage == "" {
+				e.startImage = r.Source.Image
+			}
+		}
 		defer func() {
 			if runErr == nil {
 				runErr = e.Managed.Finish(r, g, project, s.Name, opts.Record)
@@ -366,23 +387,68 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		if err := stopRec(); err != nil {
 			return err
 		}
-		if vm, ok := e.Stager.(*stage.VM); ok {
-			if err := vm.Facts(out); err != nil {
-				return err
-			}
-		}
 		// Joined and not returned: the take is on disk and a short one is still
 		// worth keeping and looking at, the same reason a failed step does not
 		// abandon the rest of the scene. What must not happen is finishing quietly.
+		stepsFailed := runErr != nil
 		if err := checkTake(out, window); err != nil {
 			fmt.Fprintf(os.Stderr, "   !! %v\n", err)
 			runErr = errors.Join(runErr, err)
+		}
+		result := facts.ResultOK
+		switch {
+		case stepsFailed:
+			result = facts.ResultStepsFailed
+		case runErr != nil:
+			result = facts.ResultShort
+		}
+		if err := e.writeClipFacts(out, s, opts.Version, result); err != nil {
+			return errors.Join(runErr, err)
 		}
 		fmt.Printf(">> done. %s  (stage open — backstage kill)\n", out)
 	} else {
 		fmt.Println(">> rehearsal done (no recording).  (stage open — backstage kill)")
 	}
 	return runErr
+}
+
+func (e *Engine) writeClipFacts(clip string, s *scene.Scene, version, result string) error {
+	f := facts.Facts{
+		Backstage: version,
+		Result:    result,
+		Made:      time.Now().Format(time.RFC3339),
+	}
+	if src, ok := e.Stager.(recordingGuest); ok {
+		g, omarchy := src.RecordingGuest()
+		if omarchy == "" {
+			return fmt.Errorf("the stage never read the guest's Omarchy version")
+		}
+		if g != nil {
+			f.Stage = g.StageName
+			f.Origin = g.Origin
+			f.StartMode = g.StartMode
+			f.Snapshot = g.Snapshot
+			f.ISOVersion = g.ISOVersion
+			f.ISOChecksum = g.ISOChecksum
+			f.Recipe = g.Recipe
+			f.Domain = g.Domain
+			f.User = g.User
+			f.Address = g.Address
+		}
+		f.Omarchy = omarchy
+	}
+	if s.VMStartMode() == "clean" {
+		snap := e.startSnapshot
+		if snap == "" && s.VMStart != nil && s.VMStart.Snapshot != "" {
+			snap = s.VMStart.Snapshot
+		}
+		if snap == "" {
+			snap = "initial"
+		}
+		f.StartState = &facts.StartState{Snapshot: snap}
+		f.StartImage = e.startImage
+	}
+	return facts.Write(facts.Path(clip), f)
 }
 
 func (e *Engine) cleanupOnInterrupt(extra func()) {

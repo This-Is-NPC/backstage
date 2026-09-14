@@ -28,9 +28,14 @@ type VM struct {
 	Guest    *guest.Guest
 	// Patience is how long to wait for the domain to boot and answer ssh.
 	Patience time.Duration
-	// Omarchy is the version the guest reported, filled by Setup and written
-	// beside the clip so a take can be reproduced rather than only re-shot.
+	// Omarchy is the version the guest reported, filled by Setup. The engine
+	// writes it beside the clip so a take can be reproduced rather than only re-shot.
 	Omarchy string
+}
+
+// RecordingGuest returns the guest and the Omarchy version recorded at Setup.
+func (v *VM) RecordingGuest() (*guest.Guest, string) {
+	return v.Guest, v.Omarchy
 }
 
 // NewVM returns a stager for one guest.
@@ -116,12 +121,4 @@ func (v *VM) Teardown() error {
 	_, _ = g.InSession("systemctl --user stop backstage-open")
 	_, _ = g.Root("pkill -u " + g.User + " -x foot")
 	return nil
-}
-
-// Facts writes the provenance sidecar for a clip recorded on this stage.
-func (v *VM) Facts(clip string) error {
-	if v.Omarchy == "" {
-		return fmt.Errorf("the stage never read the guest's Omarchy version")
-	}
-	return v.Guest.WriteFacts(clip, v.Omarchy)
 }
