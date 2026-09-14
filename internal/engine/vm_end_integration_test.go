@@ -146,6 +146,11 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r, err = m.Store.Load(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preBegin := logConsumerAtState(t, r)
 	if err := eng.Run(consumer, Options{Context: ctx, Record: true, Speed: 1, Version: "test"}); err != nil {
 		t.Fatal(err)
 	}
@@ -160,13 +165,71 @@ func TestRealVMEndProducerConsumer(t *testing.T) {
 	if got.Result != facts.ResultOK {
 		t.Fatalf("consumer facts: %+v", got)
 	}
-	if got.Timings == nil || got.Timings.RestoreStopSeconds == nil || got.Timings.RestoreActivateSeconds == nil || got.Timings.BootSeconds == nil || got.Timings.SessionSeconds == nil {
-		t.Fatalf("consumer timings: %+v", got.Timings)
+	if !consumerSkippedRestore(got.Timings) {
+		t.Fatalf("consumer did not skip restore\ntimings: %+v\npre-begin at-state:\n%s", got.Timings, preBegin)
 	}
 	requireProvisionTimings(t, filepath.Join(m.Store.Dir(name), "provision.log"),
 		"shutdown-seconds", "capture-seconds", "capture-bytes",
 		"restore-stop-seconds", "restore-activate-seconds", "boot-seconds", "session-seconds",
-		"capture-mode", "image-depth")
+		"capture-mode", "image-depth", "restore-skipped")
+}
+
+func consumerSkippedRestore(tm *facts.Timings) bool {
+	return tm != nil &&
+		tm.RestoreSkipped != nil && *tm.RestoreSkipped &&
+		tm.RestoreStopSeconds == nil &&
+		tm.RestoreActivateSeconds == nil &&
+		tm.BootSeconds != nil &&
+		tm.SessionSeconds != nil
+}
+
+type atStateProbe struct {
+	Snapshot string            `json:"snapshot,omitempty"`
+	Image    string            `json:"image,omitempty"`
+	Recorded *machine.AtState  `json:"recorded"`
+	DiskNow  machine.FilePrint `json:"disk-now"`
+	DiskErr  string            `json:"disk-err,omitempty"`
+	NVRAMNow machine.FilePrint `json:"nvram-now"`
+	NVRAMErr string            `json:"nvram-err,omitempty"`
+}
+
+func (p atStateProbe) String() string {
+	body, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err.Error()
+	}
+	return string(body)
+}
+
+func logConsumerAtState(t *testing.T, r *machine.Record) atStateProbe {
+	t.Helper()
+	p := probeAtState(r)
+	t.Logf("consumer pre-begin at-state:\n%s", p)
+	return p
+}
+
+func probeAtState(r *machine.Record) atStateProbe {
+	p := atStateProbe{}
+	if r != nil && r.AtState != nil {
+		cp := *r.AtState
+		p.Recorded = &cp
+		p.Snapshot = cp.Snapshot
+		p.Image = cp.Image
+	}
+	if r == nil {
+		return p
+	}
+	if disk, err := statPrint(r.Disk); err != nil {
+		p.DiskErr = err.Error()
+	} else {
+		p.DiskNow = disk
+	}
+	if nvram, err := statPrint(r.NVRAM); err != nil {
+		p.NVRAMErr = err.Error()
+	} else {
+		p.NVRAMNow = nvram
+	}
+	return p
 }
 
 func logClipTimings(t *testing.T, label string, tm *facts.Timings) {
