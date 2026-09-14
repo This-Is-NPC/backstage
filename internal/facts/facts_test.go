@@ -112,6 +112,10 @@ func TestTimingsJSONNamesAndOmitEmpty(t *testing.T) {
 	if !(Timings{}).Empty() {
 		t.Fatal("empty timings")
 	}
+	skipped := true
+	if (Timings{RestoreSkipped: &skipped}).Empty() {
+		t.Fatal("restore-skipped-only must not be empty")
+	}
 }
 
 func TestPathSitsBesideTheClip(t *testing.T) {

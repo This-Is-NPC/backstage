@@ -47,14 +47,26 @@ func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, p
 				return nil, fmt.Errorf("cannot record from rehearsal snapshot %q", snapshot)
 			}
 		}
-		release, err := m.Store.LockWait(ctx, "image-catalog")
-		if err != nil {
-			return nil, err
-		}
-		err = m.Restore(ctx, r, snapshot)
-		release()
-		if err != nil {
-			return nil, err
+		if m.canSkipRestore(ctx, r, snapshot) {
+			if err := m.clearAtState(r); err != nil {
+				return nil, err
+			}
+			skipped := true
+			m.StartTimes.RestoreSkipped = &skipped
+			m.logTiming(r, "restore-skipped", true)
+		} else {
+			if err := m.clearAtState(r); err != nil {
+				return nil, err
+			}
+			release, err := m.Store.LockWait(ctx, "image-catalog")
+			if err != nil {
+				return nil, err
+			}
+			err = m.Restore(ctx, r, snapshot)
+			release()
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	last := r.Continuity

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/This-Is-NPC/backstage/internal/engine"
 	"github.com/This-Is-NPC/backstage/internal/facts"
+	"github.com/This-Is-NPC/backstage/internal/guest"
 	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/workspace"
 )
@@ -243,6 +245,69 @@ func TestSameStageNeverOverlaps(t *testing.T) {
 	}
 	if a[0].Before(g[1]) && g[0].Before(a[1]) {
 		t.Fatalf("same stage overlapped: alpha=%v gamma=%v", a, g)
+	}
+}
+
+func TestSchedulerSameStageSkipRestore(t *testing.T) {
+	machine.SetBootGuest(func(*guest.Guest, time.Duration) error { return nil })
+	t.Cleanup(func() { machine.SetBootGuest(nil) })
+
+	m, r := cliLiveStage(t)
+	store := m.Store
+	var (
+		mu      sync.Mutex
+		spans   = map[string][2]time.Time{}
+		skipped bool
+	)
+	d := testSched(t, store)
+	d.Launch = func(_ context.Context, spec jobSpec) (jobProc, error) {
+		start := time.Now()
+		switch spec.Step.Scene {
+		case "make":
+			if _, err := m.ReplaceSnapshot(context.Background(), r, "ready", machine.SnapshotOrigin{Project: "/p", Scene: "make"}, false); err != nil {
+				return doneProc{err: err}, nil
+			}
+			loaded, err := store.Load("demo")
+			if err != nil {
+				return doneProc{err: err}, nil
+			}
+			r = loaded
+		case "use":
+			if _, err := m.Begin(context.Background(), r, "clean", "ready", "", "/p", true); err != nil {
+				return doneProc{err: err}, nil
+			}
+			mu.Lock()
+			skipped = m.StartTimes.RestoreSkipped != nil && *m.StartTimes.RestoreSkipped
+			mu.Unlock()
+		}
+		end := time.Now()
+		mu.Lock()
+		spans[spec.Step.Scene] = [2]time.Time{start, end}
+		mu.Unlock()
+		return doneProc{}, nil
+	}
+	plan := &workspace.Plan{
+		Steps: []workspace.PlanStep{
+			{ID: "./make", Scene: "make", Path: filepath.Join(t.TempDir(), "make.json"), Stage: "demo", Reason: workspace.ReasonRequested, Requested: true},
+			{ID: "./use", Scene: "use", Path: filepath.Join(t.TempDir(), "use.json"), Stage: "demo", Reason: workspace.ReasonDownstream},
+		},
+		Stages: []string{"demo"},
+	}
+	if err := d.schedule(plan, engine.Options{Record: true, Speed: 1}, "stale"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	makeSpan, useSpan := spans["make"], spans["use"]
+	got := skipped
+	mu.Unlock()
+	if makeSpan[0].IsZero() || useSpan[0].IsZero() {
+		t.Fatalf("spans %v", spans)
+	}
+	if useSpan[0].Before(makeSpan[1]) {
+		t.Fatalf("consumer started before producer finished: make=%v use=%v", makeSpan, useSpan)
+	}
+	if !got {
+		t.Fatal("consumer did not skip restore")
 	}
 }
 
@@ -1271,6 +1336,75 @@ func TestStaleAdoptStaysOnSeeded(t *testing.T) {
 	if len(adopt) != 3 || !adopt["a"] || adopt["b"] || adopt["c"] {
 		t.Fatalf("adopt must stay on the seed: %v", adopt)
 	}
+}
+
+func cliLiveStage(t *testing.T) (*machine.Manager, *machine.Record) {
+	t.Helper()
+	store := &machine.Store{
+		Root:    filepath.Join(t.TempDir(), "reg"),
+		Cache:   filepath.Join(t.TempDir(), "cache"),
+		Storage: filepath.Join(t.TempDir(), "storage"),
+	}
+	if err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Storage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := &machine.Manager{Store: store, URI: "qemu:///system", Timeout: time.Second, Output: io.Discard}
+	r := &machine.Record{
+		Schema:    machine.Schema,
+		ID:        strings.Repeat("ab", 16),
+		Name:      "demo",
+		Domain:    "backstage-test-demo",
+		URI:       m.URI,
+		Spec:      machine.DefaultSpec(),
+		Status:    "ready",
+		Video:     "bochs",
+		Firmware:  "firmware",
+		Snapshots: map[string]string{},
+	}
+	r.Disk = filepath.Join(store.Storage, r.ID+".qcow2")
+	r.NVRAM = filepath.Join(store.Storage, r.ID+".fd")
+	for _, p := range []string{r.Disk, r.NVRAM} {
+		if err := os.WriteFile(p, []byte("disk"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := filepath.Join(store.Dir(r.Name), "id_ed25519")
+	if err := os.MkdirAll(filepath.Dir(key), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(key, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(key+".pub", []byte("pub"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveCredentials(r.Name, machine.Credentials{Password: "pw", Key: key}); err != nil {
+		t.Fatal(err)
+	}
+	m.Runner = cliRunner(func(_ context.Context, _ io.Reader, bin string, args ...string) (string, error) {
+		if bin == "qemu-img" {
+			if len(args) > 0 && args[0] == "info" {
+				return `[{"filename":"` + r.Disk + `"}]`, nil
+			}
+			return "", os.WriteFile(args[len(args)-1], []byte("image"), 0o600)
+		}
+		if len(args) > 2 {
+			switch args[2] {
+			case "domuuid":
+				return r.ID[:8] + "-" + r.ID[8:12] + "-" + r.ID[12:16] + "-" + r.ID[16:20] + "-" + r.ID[20:], nil
+			case "domstate":
+				return "shut off", nil
+			}
+		}
+		return "", nil
+	})
+	return m, r
 }
 
 func testSched(t *testing.T, store *machine.Store) *depsExec {

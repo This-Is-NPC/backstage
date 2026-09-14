@@ -171,6 +171,39 @@ func TestStageInspectJSONIncludesSnapshotOrigins(t *testing.T) {
 	}
 }
 
+func TestStageInspectJSONIncludesAtState(t *testing.T) {
+	m := testStageRegistry(t)
+	r := testStageRecord()
+	r.AtState = &machine.AtState{
+		Snapshot: "ready",
+		Image:    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Disk:     machine.FilePrint{Path: "/disk", Inode: 1, Size: 2, MtimeNs: 3, CtimeNs: 4},
+		NVRAM:    machine.FilePrint{Path: "/nvram", Inode: 5, Size: 6, MtimeNs: 7, CtimeNs: 8},
+	}
+	if err := m.Store.Save(r); err != nil {
+		t.Fatal(err)
+	}
+	cmd := stageInspectCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--json", "demo"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		AtState *machine.AtState `json:"at-state"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.AtState == nil || got.AtState.Snapshot != "ready" || got.AtState.Image != r.AtState.Image {
+		t.Fatalf("at-state: %+v\n%s", got.AtState, out.String())
+	}
+	if got.AtState.Disk.CtimeNs != 4 || got.AtState.NVRAM.Inode != 5 {
+		t.Fatalf("fingerprint: %+v", got.AtState)
+	}
+}
+
 func testStageRegistry(t *testing.T) *machine.Manager {
 	t.Helper()
 	t.Setenv("XDG_DATA_HOME", t.TempDir())

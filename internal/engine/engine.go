@@ -602,6 +602,7 @@ func (e *Engine) mergeStart(t machine.StartTimes) {
 	e.timings.RestoreStopSeconds = t.RestoreStopSeconds
 	e.timings.RestoreActivateSeconds = t.RestoreActivateSeconds
 	e.timings.BootSeconds = t.BootSeconds
+	e.timings.RestoreSkipped = t.RestoreSkipped
 }
 
 func (e *Engine) mergeSession(phases map[string]float64, session *float64) {

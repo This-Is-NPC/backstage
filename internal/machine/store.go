@@ -166,6 +166,24 @@ type Record struct {
 	Snapshots       map[string]string         `json:"snapshots"`
 	SnapshotOrigins map[string]SnapshotOrigin `json:"snapshot-origins,omitempty"`
 	Continuity      *Continuity               `json:"continuity,omitempty"`
+	AtState         *AtState                  `json:"at-state,omitempty"`
+}
+
+// FilePrint is the identity of one stage file at capture time.
+type FilePrint struct {
+	Path    string `json:"path"`
+	Inode   uint64 `json:"inode"`
+	Size    int64  `json:"size"`
+	MtimeNs int64  `json:"mtime-ns"`
+	CtimeNs int64  `json:"ctime-ns"`
+}
+
+// AtState is the last vm-end capture still sitting on the live overlay.
+type AtState struct {
+	Snapshot string    `json:"snapshot"`
+	Image    string    `json:"image"`
+	Disk     FilePrint `json:"disk"`
+	NVRAM    FilePrint `json:"nvram"`
 }
 
 // SnapshotInfo reports each saved state and its origin, if any.

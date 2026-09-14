@@ -392,6 +392,9 @@ func (m *Manager) Snapshot(ctx context.Context, r *Record, name string) error {
 	if r.Status != "ready" {
 		return errors.New("only ready stages can be snapshotted")
 	}
+	if err := m.clearAtState(r); err != nil {
+		return err
+	}
 	limit, _, err := m.imageDepthLimit()
 	if err != nil {
 		return err
@@ -445,6 +448,9 @@ func (m *Manager) Snapshot(ctx context.Context, r *Record, name string) error {
 
 func (m *Manager) Restore(ctx context.Context, r *Record, name string) error {
 	m.StartTimes = StartTimes{}
+	if err := m.clearAtState(r); err != nil {
+		return err
+	}
 	id, ok := r.Snapshots[name]
 	if !ok {
 		return fmt.Errorf("snapshot %q not found", name)
@@ -592,6 +598,7 @@ func (m *Manager) Recover(ctx context.Context, r *Record) error {
 	if err := m.Store.SaveCredentials(r.Name, a.Credentials); err != nil {
 		return err
 	}
+	a.Next.AtState = nil
 	if err := m.Store.Save(&a.Next); err != nil {
 		return err
 	}
@@ -685,6 +692,9 @@ func (m *Manager) Clone(ctx context.Context, source *Record, name, snapshot stri
 }
 
 func (m *Manager) Delete(ctx context.Context, r *Record) error {
+	if err := m.clearAtState(r); err != nil {
+		return err
+	}
 	if _, err := m.virsh(ctx, "domuuid", r.Domain); err == nil {
 		if err := m.Stop(ctx, r, false); err != nil {
 			return err
@@ -999,6 +1009,7 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	defer release()
 	prevSnaps := cloneStringMap(r.Snapshots)
 	prevOrigins := cloneOriginMap(r.SnapshotOrigins)
+	prevAtState := r.AtState
 	if r.Snapshots == nil {
 		r.Snapshots = map[string]string{}
 	}
@@ -1011,6 +1022,16 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 	}
 	r.Snapshots[name] = img.ID
 	r.SnapshotOrigins[name] = origin
+	at, err := readAtState(r, name, img.ID)
+	if err != nil {
+		r.Snapshots = prevSnaps
+		r.SnapshotOrigins = prevOrigins
+		r.AtState = prevAtState
+		removeCapturedImage(m, img)
+		_ = m.removePending(got.pending.ID)
+		return out, err
+	}
+	r.AtState = at
 	if err := commitStageRecord(m.Store, r); err != nil {
 		if errors.Is(err, ErrCommitted) {
 			_ = m.removePending(got.pending.ID)
@@ -1025,6 +1046,7 @@ func (m *Manager) ReplaceSnapshot(ctx context.Context, r *Record, name string, o
 		}
 		r.Snapshots = prevSnaps
 		r.SnapshotOrigins = prevOrigins
+		r.AtState = prevAtState
 		removeCapturedImage(m, img)
 		_ = m.removePending(got.pending.ID)
 		return out, err
@@ -1053,6 +1075,11 @@ func (m *Manager) DeleteSnapshot(r *Record, name string) (string, error) {
 	}
 	if _, ok := r.Snapshots[name]; !ok {
 		return "", fmt.Errorf("snapshot %q not found", name)
+	}
+	if r.AtState != nil && r.AtState.Snapshot == name {
+		if err := m.clearAtState(r); err != nil {
+			return "", err
+		}
 	}
 	prevSnaps := cloneStringMap(r.Snapshots)
 	prevOrigins := cloneOriginMap(r.SnapshotOrigins)

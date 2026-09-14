@@ -71,6 +71,7 @@ type Timings struct {
 	ImageDepth             *int               `json:"image-depth,omitempty"`
 	CaptureFallback        *string            `json:"capture-fallback,omitempty"`
 	CatalogWaitSeconds     *float64           `json:"catalog-wait-seconds,omitempty"`
+	RestoreSkipped         *bool              `json:"restore-skipped,omitempty"`
 }
 
 // Empty reports that no phase completed.
@@ -80,7 +81,7 @@ func (t Timings) Empty() bool {
 		t.RestoreActivateSeconds == nil && t.BootSeconds == nil &&
 		t.SessionSeconds == nil && len(t.StagePhases) == 0 &&
 		t.CaptureMode == nil && t.ImageDepth == nil && t.CaptureFallback == nil &&
-		t.CatalogWaitSeconds == nil
+		t.CatalogWaitSeconds == nil && t.RestoreSkipped == nil
 }
 
 // Path is the sidecar next to clip, named <clip>.facts.json.

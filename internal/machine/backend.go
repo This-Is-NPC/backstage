@@ -176,6 +176,7 @@ func (m *Manager) Doctor(ctx context.Context) []Check {
 	checks = append(checks, m.catalogACLChecks()...)
 	checks = append(checks, m.imageDepthCheck())
 	checks = append(checks, m.pendingMarkerCheck())
+	checks = append(checks, m.atStateChecks(ctx)...)
 	return checks
 }
 
@@ -423,6 +424,9 @@ func (m *Manager) Start(ctx context.Context, r *Record) (*guest.Guest, error) {
 		return nil, err
 	}
 	g.Context = ctx
+	if err := m.clearAtState(r); err != nil {
+		return nil, err
+	}
 	if err := bootGuest(g, 5*time.Minute); err != nil {
 		return nil, err
 	}
@@ -431,6 +435,17 @@ func (m *Manager) Start(ctx context.Context, r *Record) (*guest.Guest, error) {
 
 var bootGuest = func(g *guest.Guest, patience time.Duration) error {
 	return g.Start(patience)
+}
+
+// SetBootGuest is a test hook that replaces guest boot. A nil fn restores the real Start.
+func SetBootGuest(fn func(*guest.Guest, time.Duration) error) {
+	if fn == nil {
+		bootGuest = func(g *guest.Guest, patience time.Duration) error {
+			return g.Start(patience)
+		}
+		return
+	}
+	bootGuest = fn
 }
 
 func ParseSize(s string) (uint64, error) {

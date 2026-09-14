@@ -14,6 +14,7 @@ type StartTimes struct {
 	RestoreStopSeconds     *float64
 	RestoreActivateSeconds *float64
 	BootSeconds            *float64
+	RestoreSkipped         *bool
 }
 
 func (m *Manager) now() time.Time {

@@ -484,6 +484,8 @@ func captureReady(t *testing.T, name string) (*Manager, *Record) {
 	r := testRecord(name)
 	r.Disk = m.diskPath(r.ID, ".qcow2")
 	r.NVRAM = m.diskPath(r.ID, ".fd")
+	r.Video = "bochs"
+	r.Firmware = "firmware"
 	for _, path := range []string{r.Disk, r.NVRAM} {
 		if err := os.WriteFile(path, []byte("disk"), 0o600); err != nil {
 			t.Fatal(err)
