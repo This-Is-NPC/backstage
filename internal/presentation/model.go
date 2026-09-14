@@ -161,7 +161,11 @@ func (p *Plan) input(rel string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("not a regular file: %s", rel)
 	}
-	p.Inputs[rel] = path
+	key, err := workspaceRel(p.Project, path)
+	if err != nil {
+		return "", err
+	}
+	p.Inputs[key] = path
 	return path, nil
 }
 func (p *Plan) loadScene(name string) (*scene.Scene, error) {
@@ -180,8 +184,9 @@ func (p *Plan) loadScene(name string) (*scene.Scene, error) {
 		return nil, err
 	}
 	p.Scenes[name] = s
-	rel, _ := filepath.Rel(p.Project.Dir, path)
-	p.Inputs[rel] = path
+	if rel, err := workspaceRel(p.Project, path); err == nil {
+		p.Inputs[rel] = path
+	}
 	if s.Type == "visual" {
 		if _, err = p.input(s.Entry); err != nil {
 			return nil, err
@@ -198,15 +203,9 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		return nil, rootErr
 	}
 	copyProject.Dir = root
-	workspace := p.Workspace
-	if workspace == "" {
-		workspace = root
-	} else {
-		absWorkspace, err := filepath.Abs(workspace)
-		if err != nil {
-			return nil, err
-		}
-		workspace = absWorkspace
+	workspace, err := filepath.Abs(p.WorkspaceRoot())
+	if err != nil {
+		return nil, err
 	}
 	copyProject.Workspace = workspace
 	p = &copyProject

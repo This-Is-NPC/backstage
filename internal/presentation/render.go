@@ -14,7 +14,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,87 +72,25 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 	prefix := "/" + hex.EncodeToString(token) + "/"
 	r.url = "http://" + listener.Addr().String() + prefix
 	mux := http.NewServeMux()
-	mux.HandleFunc(prefix, func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; frame-src 'self'; connect-src 'none'; media-src 'none'; object-src 'none'; base-uri 'self'")
-		w.Header().Set("Cache-Control", "no-store")
-		rel := strings.TrimPrefix(req.URL.Path, prefix)
-		if strings.HasPrefix(rel, "builtin/") {
-			name := strings.TrimPrefix(rel, "builtin/")
-			if name != "runtime.html" && name != "template.html" && name != "visual.html" {
-				http.NotFound(w, req)
-				return
-			}
-			b, e := web.ReadFile("web/" + name)
-			if e != nil {
-				http.NotFound(w, req)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write(b)
-			return
-		}
-		if !strings.HasPrefix(rel, "asset/") {
-			http.NotFound(w, req)
-			return
-		}
-		rel = strings.TrimPrefix(rel, "asset/")
-		switch strings.ToLower(filepath.Ext(rel)) {
-		case ".html", ".css", ".js", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".woff", ".woff2", ".ttf", ".otf":
-		default:
-			http.NotFound(w, req)
-			return
-		}
-		path, e := p.Project.InputPath(rel)
-		if e != nil {
-			http.NotFound(w, req)
-			return
-		}
-		info, e := os.Stat(path)
-		if e != nil || !info.Mode().IsRegular() {
-			http.NotFound(w, req)
-			return
-		}
-		r.mu.Lock()
-		r.files[rel] = path
-		r.mu.Unlock()
-		http.ServeFile(w, req, path)
-	})
+	mux.HandleFunc(prefix, servePresentation(p.Project, prefix, r.files, &r.mu))
 	r.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = r.server.Serve(listener) }()
+	fail := func(e error) (*Renderer, error) { r.Close(); return nil, e }
+	events, err := timelineEvents(p, r.url)
+	if err != nil {
+		return fail(err)
+	}
 	alloc, stop := chromedp.NewExecAllocator(ctx, append(chromedp.DefaultExecAllocatorOptions[:], chromedp.ExecPath(browser), chromedp.Flag("disable-dev-shm-usage", true), chromedp.Flag("force-color-profile", "srgb"))...)
 	r.stopBrowser = stop
 	r.ctx, r.cancel = chromedp.NewContext(alloc)
-	fail := func(e error) (*Renderer, error) { r.Close(); return nil, e }
 	if err = chromedp.Run(r.ctx, emulation.SetDeviceMetricsOverride(int64(p.Width), int64(p.Height), 1, false), chromedp.Navigate(r.url+"builtin/runtime.html")); err != nil {
 		return fail(err)
-	}
-	events := make([]map[string]any, 0, len(p.Document.Timeline))
-	for _, e := range p.Document.Timeline {
-		u := r.url + "builtin/template.html"
-		if p.Template != "" {
-			rel, _ := filepath.Rel(p.Project.Dir, p.Template)
-			u = r.assetURL(rel)
-		}
-		var narration any
-		if e.Scene != "" {
-			s := p.Scenes[e.Scene]
-			u = r.assetURL(s.Entry)
-			narration = s.Narration
-		}
-		events = append(events, map[string]any{"at": e.At, "layout": e.Layout, "slots": e.Slots, "transition": e.Transition, "url": u, "narration": narration})
 	}
 	config := map[string]any{"events": events, "parameters": p.Document.Parameters, "text": p.Text, "duration": p.Document.Duration}
 	if err = r.eval("initialize", config); err != nil {
 		return fail(err)
 	}
 	return r, nil
-}
-func (r *Renderer) assetURL(rel string) string {
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for i := range parts {
-		parts[i] = url.PathEscape(parts[i])
-	}
-	return r.url + "asset/" + strings.Join(parts, "/")
 }
 func (r *Renderer) eval(fn string, value any) error {
 	b, err := json.Marshal(value)
