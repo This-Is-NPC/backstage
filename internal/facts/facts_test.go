@@ -92,6 +92,7 @@ func TestTimingsJSONNamesAndOmitEmpty(t *testing.T) {
 	}
 	for _, absent := range []string{
 		`"capture-seconds"`, `"restore-stop-seconds"`, `"session-seconds"`,
+		`"capture-mode"`, `"image-depth"`, `"capture-fallback"`,
 	} {
 		if strings.Contains(raw, absent) {
 			t.Fatalf("omitted field present: %s\n%s", absent, raw)

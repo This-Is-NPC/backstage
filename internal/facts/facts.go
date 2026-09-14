@@ -67,6 +67,9 @@ type Timings struct {
 	BootSeconds            *float64           `json:"boot-seconds,omitempty"`
 	SessionSeconds         *float64           `json:"session-seconds,omitempty"`
 	StagePhases            map[string]float64 `json:"stage-phases,omitempty"`
+	CaptureMode            *string            `json:"capture-mode,omitempty"`
+	ImageDepth             *int               `json:"image-depth,omitempty"`
+	CaptureFallback        *string            `json:"capture-fallback,omitempty"`
 }
 
 // Empty reports that no phase completed.
@@ -74,7 +77,8 @@ func (t Timings) Empty() bool {
 	return t.ShutdownSeconds == nil && t.CaptureSeconds == nil && t.CaptureBytes == nil &&
 		t.CaptureApparentBytes == nil && t.RestoreStopSeconds == nil &&
 		t.RestoreActivateSeconds == nil && t.BootSeconds == nil &&
-		t.SessionSeconds == nil && len(t.StagePhases) == 0
+		t.SessionSeconds == nil && len(t.StagePhases) == 0 &&
+		t.CaptureMode == nil && t.ImageDepth == nil && t.CaptureFallback == nil
 }
 
 // Path is the sidecar next to clip, named <clip>.facts.json.
