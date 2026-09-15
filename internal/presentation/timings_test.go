@@ -69,7 +69,7 @@ func writeTinyMedia(t *testing.T, dir string) {
 	if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=1:r=10", "-pix_fmt", "yuv420p", filepath.Join(dir, "clip.mp4")); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1", filepath.Join(dir, "tone.wav")); err != nil {
+	if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=sin(2*PI*(200+1800*t)*t):s=48000:d=1", "-ac", "2", "-c:a", "pcm_s16le", filepath.Join(dir, "tone.wav")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -152,7 +152,7 @@ func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 	}
 	timings := asObject(t, facts["timings"], "timings")
 	for _, key := range []string{
-		"renderer-start-seconds", "prepare-track-seconds", "audio-seconds", "audio-part-seconds",
+		"renderer-start-seconds", "decoder-start-seconds", "prepare-track-seconds", "audio-seconds", "audio-part-seconds",
 		"decode", "transfer", "draw", "screenshot", "encode-write",
 		"encode-seconds", "mux-seconds", "metadata-seconds", "total-seconds",
 		"track-bytes", "audio-part-bytes", "mix-wav-bytes", "video-mp4-bytes", "final-mp4-bytes",

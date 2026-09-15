@@ -391,7 +391,7 @@ func decodedTrackFrames(ctx context.Context, p *Plan) (map[string][][]byte, erro
 	}
 	out := map[string][][]byte{}
 	for _, id := range sortedKeys(p.Tracks) {
-		d, e := newDecoder(ctx, paths[id])
+		d, e := newDecoder(ctx, paths[id], 0, p.FPS)
 		if e != nil {
 			return nil, e
 		}
@@ -450,7 +450,7 @@ func composedShotPairs(ctx context.Context, p *Plan) ([]shotPair, error) {
 		}
 	}()
 	for _, id := range sortedKeys(p.Tracks) {
-		d, e := newDecoder(ctx, paths[id])
+		d, e := newDecoder(ctx, paths[id], 0, p.FPS)
 		if e != nil {
 			return nil, e
 		}
@@ -514,12 +514,12 @@ func samePixels(a, b []byte) error {
 }
 
 func sameDecodedFrames(ctx context.Context, a, b string, frames int) error {
-	da, err := newDecoder(ctx, a)
+	da, err := newDecoder(ctx, a, 0, 10)
 	if err != nil {
 		return err
 	}
 	defer da.close()
-	db, err := newDecoder(ctx, b)
+	db, err := newDecoder(ctx, b, 0, 10)
 	if err != nil {
 		return err
 	}

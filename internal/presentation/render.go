@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"os"
@@ -40,6 +39,7 @@ type Renderer struct {
 	files       map[string]string
 	mu          sync.Mutex
 	url         string
+	scale       float64
 }
 
 func dependencies() (string, error) {
@@ -60,7 +60,7 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Renderer{plan: p, files: map[string]string{}}
+	r := &Renderer{plan: p, files: map[string]string{}, scale: 1}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -138,15 +138,19 @@ func encodeImages(frames map[string][]byte) map[string]string {
 	return images
 }
 
-func captureScreenshot(ctx context.Context) ([]byte, error) {
+func (r *Renderer) captureScreenshot() ([]byte, error) {
 	optimize := screenshotOptimize
 	if screenshotObserver != nil {
 		screenshotObserver(optimize)
 	}
 	var shot []byte
-	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	err := chromedp.Run(r.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+		params := page.CaptureScreenshot().WithFromSurface(true).WithFormat(page.CaptureScreenshotFormatPng).WithOptimizeForSpeed(optimize)
+		if r.scale > 0 && r.scale != 1 {
+			params = params.WithClip(&page.Viewport{X: 0, Y: 0, Width: float64(r.plan.Width), Height: float64(r.plan.Height), Scale: r.scale})
+		}
 		var err error
-		shot, err = page.CaptureScreenshot().WithFromSurface(true).WithFormat(page.CaptureScreenshotFormatPng).WithOptimizeForSpeed(optimize).Do(ctx)
+		shot, err = params.Do(ctx)
 		return err
 	}))
 	return shot, err
@@ -156,7 +160,7 @@ func (r *Renderer) frame(t float64, frames map[string][]byte) ([]byte, error) {
 	if err := r.eval("draw", map[string]any{"time": t, "images": encodeImages(frames)}); err != nil {
 		return nil, err
 	}
-	return captureScreenshot(r.ctx)
+	return r.captureScreenshot()
 }
 
 // frameTimed calls drawTimed. Measured draw includes image load and the final requestAnimationFrame.
@@ -178,7 +182,7 @@ func (r *Renderer) frameTimed(t float64, frames map[string][]byte) ([]byte, fram
 	}
 	st.transfer = t1.Sub(t0) + overhead
 	shotAt := time.Now()
-	shot, err := captureScreenshot(r.ctx)
+	shot, err := r.captureScreenshot()
 	st.screenshot = time.Since(shotAt)
 	return shot, st, err
 }
@@ -198,7 +202,17 @@ func Check(ctx context.Context, p *Plan) error {
 	return nil
 }
 
-func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err error) {
+func Render(ctx context.Context, p *Plan, out string, progress io.Writer) error {
+	return renderRange(ctx, p, out, progress, fullRenderOpts(p))
+}
+
+func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, opts renderOpts) (err error) {
+	if opts.Scale == 0 {
+		opts.Scale = 1
+	}
+	if opts.End <= opts.First {
+		return fmt.Errorf("interval has no frames")
+	}
 	started := time.Now()
 	if progress == nil {
 		progress = io.Discard
@@ -222,6 +236,7 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	if err != nil {
 		return err
 	}
+	r.scale = opts.Scale
 	timings.RendererStartSeconds = roundSec(time.Since(rendererAt))
 	defer r.Close()
 	decoders := map[string]*decoder{}
@@ -242,13 +257,20 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	if len(prepare) > 0 {
 		timings.PrepareTrackSeconds = prepare
 	}
+	decoderAt := time.Now()
 	for _, id := range sortedKeys(p.Tracks) {
-		d, e := newDecoder(ctx, trackPaths[id])
+		tr := p.Tracks[id]
+		if !trackNeeded(tr, opts.First, opts.End, p.FPS) {
+			continue
+		}
+		index := trackIndexAt(tr, opts.First, p.FPS)
+		d, e := openTrackDecoder(ctx, trackPaths[id], index, p.FPS)
 		if e != nil {
 			return e
 		}
 		decoders[id] = d
 	}
+	timings.DecoderStartSeconds = roundSec(time.Since(decoderAt))
 	fmt.Fprintln(progress, ">> prepare audio")
 	mixAt := time.Now()
 	audio, parts, err := p.mix(ctx, work, cache)
@@ -264,7 +286,11 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	}
 	video := filepath.Join(work, "video.mp4")
 	_, _, encodeThreads := resolveRenderThreads(planThreadCfg(p), len(p.Tracks))
-	encArgs := []string{"-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", strconv.Itoa(encodeThreads), video}
+	encArgs := []string{"-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-"}
+	if opts.Scale != 1 {
+		encArgs = append(encArgs, "-vf", draftCropFilter())
+	}
+	encArgs = append(encArgs, "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", strconv.Itoa(encodeThreads), video)
 	noteRender(renderNote{EncodeThreads: encodeThreads, EncoderArgs: append([]string(nil), encArgs...)})
 	encoder := command(ctx, "ffmpeg", encArgs...)
 	var stderr bytes.Buffer
@@ -288,7 +314,8 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	}()
 	var decodeH, transferH, drawH, shotH, writeH msHist
 	var decodedPNG, screenshotBytes int64
-	for n := 0; n < p.Frames; n++ {
+	nFrames := opts.End - opts.First
+	for n := opts.First; n < opts.End; n++ {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -297,11 +324,10 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 		decodeAt := time.Now()
 		for _, id := range sortedKeys(p.Tracks) {
 			tr := p.Tracks[id]
-			local := t - tr.Start
-			if local < 0 || (local >= tr.Duration && tr.OnEnd == "hide") {
+			if !trackVisible(tr, n, p.FPS) {
 				continue
 			}
-			index := int(math.Floor(local*float64(p.FPS) + 1e-8))
+			index := trackFrame(tr, n, p.FPS)
 			b, e := decoders[id].get(index)
 			if e != nil {
 				return e
@@ -318,13 +344,17 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 		drawH.add(st.draw)
 		shotH.add(st.screenshot)
 		screenshotBytes += int64(len(shot))
+		if observeFrame != nil {
+			observeFrame(n, t, shot)
+		}
 		writeAt := time.Now()
 		if _, e = pipe.Write(shot); e != nil {
 			return e
 		}
 		writeH.add(time.Since(writeAt))
-		if n%p.FPS == 0 {
-			fmt.Fprintf(progress, ">> render %d/%d frames\n", n, p.Frames)
+		k := n - opts.First
+		if k%p.FPS == 0 {
+			fmt.Fprintf(progress, ">> render %d/%d frames\n", k, nFrames)
 		}
 	}
 	_ = pipe.Close()
@@ -338,7 +368,15 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	if audio != "" {
 		final = filepath.Join(work, "final.mp4")
 		muxAt := time.Now()
-		if err = run(ctx, "ffmpeg", "-v", "error", "-y", "-i", video, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", num(p.Document.Duration), "-movflags", "+faststart", final); err != nil {
+		var muxArgs []string
+		if opts.First == 0 && opts.End == p.Frames {
+			muxArgs = []string{"-v", "error", "-y", "-i", video, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", num(p.Document.Duration), "-movflags", "+faststart", final}
+		} else {
+			ss, es := audioSamples(opts.First, opts.End, p.FPS)
+			muxArgs = []string{"-v", "error", "-y", "-i", video, "-i", audio, "-filter_complex", "[1:a]" + muxAudioFilter(ss, es) + "[a]", "-map", "0:v:0", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", num(intervalDuration(opts.First, opts.End, p.FPS)), "-movflags", "+faststart", final}
+		}
+		noteRender(renderNote{MuxArgs: append([]string(nil), muxArgs...)})
+		if err = run(ctx, "ffmpeg", muxArgs...); err != nil {
 			return err
 		}
 		sec := roundSec(time.Since(muxAt))
@@ -357,7 +395,7 @@ func Render(ctx context.Context, p *Plan, out string, progress io.Writer) (err e
 	if err = r.metadata(work, &timings, started); err != nil {
 		return err
 	}
-	fmt.Fprint(progress, timings.progressLine(p.Frames))
+	fmt.Fprint(progress, timings.progressLine(nFrames))
 	if err = os.Rename(final, out); err != nil {
 		return err
 	}

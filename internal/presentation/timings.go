@@ -35,6 +35,7 @@ type namedBytes struct {
 // renderTimings is the presentation sidecar object. It is not facts.Timings.
 type renderTimings struct {
 	RendererStartSeconds float64            `json:"renderer-start-seconds"`
+	DecoderStartSeconds  float64            `json:"decoder-start-seconds"`
 	PrepareTrackSeconds  map[string]float64 `json:"prepare-track-seconds,omitempty"`
 	AudioSeconds         *float64           `json:"audio-seconds,omitempty"`
 	AudioPartSeconds     []namedSeconds     `json:"audio-part-seconds,omitempty"`
@@ -167,8 +168,8 @@ func (t renderTimings) progressLine(frames int) string {
 	for _, s := range t.PrepareTrackSeconds {
 		prep += s
 	}
-	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f prepare=%.3f audio=%.3f encode=%.3f mux=%.3f frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f cache-hits=%d cache-misses=%d\n",
-		t.TotalSeconds, t.RendererStartSeconds, prep, audio, t.EncodeSeconds, mux, frames,
+	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f mux=%.3f frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f cache-hits=%d cache-misses=%d\n",
+		t.TotalSeconds, t.RendererStartSeconds, t.DecoderStartSeconds, prep, audio, t.EncodeSeconds, mux, frames,
 		t.Decode.P95Seconds, t.Transfer.P95Seconds, t.Draw.P95Seconds, t.Screenshot.P95Seconds, t.EncodeWrite.P95Seconds,
 		t.CacheHits.Tracks+t.CacheHits.Audio, t.CacheMisses.Tracks+t.CacheMisses.Audio)
 }

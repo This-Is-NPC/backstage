@@ -17,6 +17,7 @@ var (
 	ffv1GOP            = 1
 	screenshotObserver func(optimize bool)
 	observeRender      func(renderNote)
+	observeFrame       func(n int, t float64, png []byte)
 	observeMu          sync.Mutex
 	prepareOne         = prepareTrack
 )
@@ -25,6 +26,7 @@ type renderNote struct {
 	PrepareArgs   []string
 	PreparedPaths map[string]string
 	EncoderArgs   []string
+	MuxArgs       []string
 	EncodeThreads int
 }
 

@@ -41,7 +41,8 @@ func renderCmd() *cobra.Command {
 	return c
 }
 func previewCmd() *cobra.Command {
-	return &cobra.Command{Use: "preview PRESENTATION", Short: "Render and preview a presentation with playback controls", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+	var from, to, scale float64
+	c := &cobra.Command{Use: "preview PRESENTATION", Short: "Render and preview a presentation with playback controls", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
 		p, err := loadProjectFrom(projectFlag)
 		if err != nil {
 			return err
@@ -51,8 +52,16 @@ func previewCmd() *cobra.Command {
 			return err
 		}
 		defer plan.Close()
-		return presentation.Preview(c.Context(), plan, c.OutOrStdout())
+		opts := presentation.PreviewOpts{From: from, To: to, Scale: scale}
+		if !c.Flags().Changed("to") {
+			opts.To = plan.Document.Duration
+		}
+		return presentation.Preview(c.Context(), plan, c.OutOrStdout(), opts)
 	}}
+	c.Flags().Float64Var(&from, "from", 0, "Start of the preview interval in presentation seconds")
+	c.Flags().Float64Var(&to, "to", 0, "End of the preview interval in presentation seconds")
+	c.Flags().Float64Var(&scale, "scale", 1, "Draft screenshot scale in (0, 1]")
+	return c
 }
 func templateCmd() *cobra.Command {
 	c := &cobra.Command{Use: "template", Short: "Create editable presentation templates"}

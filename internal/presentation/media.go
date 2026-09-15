@@ -411,14 +411,25 @@ type decoder struct {
 	cmd    *exec.Cmd
 	reader io.ReadCloser
 	stderr bytes.Buffer
+	args   []string
 	frame  int
+	start  int
 	last   []byte
 	done   bool
 }
 
-func newDecoder(ctx context.Context, path string) (*decoder, error) {
-	d := &decoder{frame: -1}
-	d.cmd = command(ctx, "ffmpeg", "-v", "error", "-threads", "1", "-i", path, "-an", "-threads", "1", "-f", "image2pipe", "-c:v", "png", "-")
+func newDecoder(ctx context.Context, path string, start, fps int) (*decoder, error) {
+	if start < 0 {
+		start = 0
+	}
+	d := &decoder{frame: start - 1, start: start}
+	args := []string{"-v", "error", "-threads", "1"}
+	if start > 0 {
+		args = append(args, "-ss", decoderSeekTime(start, fps))
+	}
+	args = append(args, "-i", path, "-an", "-threads", "1", "-f", "image2pipe", "-c:v", "png", "-")
+	d.args = append([]string(nil), args...)
+	d.cmd = command(ctx, "ffmpeg", args...)
 	d.cmd.Stderr = &d.stderr
 	var err error
 	d.reader, err = d.cmd.StdoutPipe()
@@ -430,6 +441,54 @@ func newDecoder(ctx context.Context, path string) (*decoder, error) {
 	}
 	return d, nil
 }
+
+func openTrackDecoder(ctx context.Context, path string, start, fps int) (*decoder, error) {
+	d, err := newDecoder(ctx, path, start, fps)
+	if err != nil {
+		return nil, err
+	}
+	if start <= 0 {
+		return d, nil
+	}
+	b, err := readPNG(d.reader)
+	if err == nil {
+		d.frame = start
+		d.last = b
+		return d, nil
+	}
+	if errors.Is(err, io.EOF) {
+		waitErr := d.cmd.Wait()
+		d.done = true
+		_ = d.reader.Close()
+		if waitErr != nil {
+			return nil, suffixStderr(fmt.Errorf("decode: %w", waitErr), d.stderr.String())
+		}
+		count, e := countPackets(ctx, path)
+		if e != nil {
+			return nil, e
+		}
+		if count > start {
+			return nil, suffixStderr(fmt.Errorf("decoder returned no frames (packets=%d start=%d)", count, start), d.stderr.String())
+		}
+		return newDecoder(ctx, path, count-1, fps)
+	}
+	_ = d.reader.Close()
+	if d.cmd.Process != nil {
+		_ = syscall.Kill(-d.cmd.Process.Pid, syscall.SIGKILL)
+	}
+	_ = d.cmd.Wait()
+	d.done = true
+	return nil, suffixStderr(err, d.stderr.String())
+}
+
+func suffixStderr(err error, stderr string) error {
+	s := strings.TrimSpace(stderr)
+	if s == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, s)
+}
+
 func readPNG(r io.Reader) ([]byte, error) {
 	var b bytes.Buffer
 	head := make([]byte, 8)

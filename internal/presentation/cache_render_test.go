@@ -166,7 +166,7 @@ func composedShots(ctx context.Context, p *Plan) ([]shotPair, error) {
 		}
 	}()
 	for _, id := range sortedKeys(p.Tracks) {
-		d, e := newDecoder(ctx, paths[id])
+		d, e := newDecoder(ctx, paths[id], 0, p.FPS)
 		if e != nil {
 			return nil, e
 		}
