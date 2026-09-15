@@ -336,13 +336,23 @@ not replace an existing MP4. Ctrl-C cancels work and removes intermediates.
 ## preview
 
 ```bash
-backstage preview NAME [--project DIR]
+backstage preview NAME [--project DIR] [--from SECONDS] [--to SECONDS] [--scale S]
 ```
 
 Renders a temporary MP4 first, then serves that exact video locally with play,
 pause, seek and frame-step controls. The command prints the URL and opens it
 with `xdg-open` when available. It waits for Ctrl-C to close the server and
 remove temporary files. This is not an incremental editor.
+
+`--from` defaults to 0. `--to` defaults to the presentation duration when the
+flag is omitted; an explicit `--to 0` with `--from 0` is refused. `--scale`
+defaults to 1 (full resolution). The player clock is absolute presentation
+time: the first frame of the interval is at `first/fps`, so the display is
+`first/fps + currentTime` (a `--from 0.22` preview at 10 fps starts at 0.3 s).
+Non-finite values (NaN, ±Inf), `from < 0`,
+`to` past the duration, `from >= to`, `scale` outside `(0, 1]`, and an
+interval that contains no frames are errors. `render` does not accept
+`--from`, `--to`, or `--scale`.
 
 ## template init
 

@@ -173,7 +173,7 @@ inside custom code; these abort the export. The final MP4 is replaced only when
 rendering and encoding succeed. A companion `.facts.json` records configuration,
 resolved dimensions, source/resource hashes and tool versions. A successful
 export also writes a `timings` object beside `render`: phase seconds
-(`renderer-start-seconds`, `prepare-track-seconds`, `audio-seconds`,
+(`renderer-start-seconds`, `decoder-start-seconds`, `prepare-track-seconds`, `audio-seconds`,
 `audio-part-seconds`, `encode-seconds`, `mux-seconds`, `metadata-seconds`,
 `total-seconds`), per-frame stages (`decode`, `transfer`, `draw`, `screenshot`,
 `encode-write`) with total, mean, max, p95 and frame count, and intermediate
@@ -181,7 +181,9 @@ byte sizes (`track-bytes`, `audio-part-bytes`, `mix-wav-bytes`,
 `video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`)
 and cache counters (`cache-hits`, `cache-misses`, each `{tracks, audio}`).
 Absent phases and missing files are omitted. Progress ends with
-`>> render timings: ...`. Source and template input hashes stay the same;
+`>> render timings: ...` including `decoder-start=`. `decoder-start-seconds`
+covers opening the decoders; when a preview starts after frame 0 it also
+includes the first-frame peek and any packet count plus reopen. Source and template input hashes stay the same;
 `builtin:runtime.html` changes only because the runtime adds `drawTimed`.
 Measured draw includes what `draw` itself waits for — image load and the final
 `requestAnimationFrame` — not pure canvas cost. `encode-seconds` is the
@@ -204,7 +206,14 @@ Project `render.threads` sets FFmpeg counts for that prepare and for
 libx264; the encoder runs at the same time as the Chromium frame loop, not
 after it. A faster encode is accepted when every decoded H.264 frame keeps
 PSNR-Y ≥ 40 dB against the previous thread count (mean ≥ 45 dB), and when
-frame count, timestamps, duration and audio stay aligned. The renderer uses
+frame count, timestamps, duration and audio stay aligned. The same PSNR-Y
+limits apply when a preview interval is compared to the matching frames of
+the full export (`select='between(n,first,end-1)'`, never `-ss` on H.264).
+`preview --from/--to/--scale` renders `[first, end)` at absolute `t = n/fps`
+and may screenshot at a clip scale; `render` stays the full film at scale 1.
+Interval audio is a sample-accurate `atrim` of the cached 48 kHz mix
+(`end_sample` exclusive). The player clock is `first/fps + currentTime`.
+The renderer uses
 bounded frame buffers and lossless intermediate video on disk rather than
 storing a whole take as PNGs. Disk use can still be significant for
 long/high-resolution sources. Ctrl-C cancels work and removes intermediates.

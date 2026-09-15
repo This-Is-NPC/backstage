@@ -177,7 +177,8 @@ overlaps that loop and is not the bottleneck. Screenshot and draw are the
 loop cost. A second render reuses cached tracks and the mix when the
 footage and the compiled plan match (`backstage cache prune` reclaims
 that cache, default 10G). Preview renders first, then opens the exact MP4 with playback,
-seek and frame-step controls. Ctrl-C closes it and removes its temporary files.
+seek and frame-step controls (`preview --from --to --scale`; the player clock
+is absolute presentation time). Ctrl-C closes it and removes its temporary files.
 It is not a live editor. Check the final animation state and that audio/captions
 follow the intended clock before exporting.
 

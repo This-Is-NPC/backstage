@@ -30,6 +30,43 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 and `preview.go` owns preview and template initialization. The browser
 runtime and default HTML are embedded under `web/`.
 
+## Preview intervals and draft scale
+
+`preview --from/--to/--scale` validates options and calls an internal render
+of `[first, end)` at absolute `t = n/fps`. `render` stays the full film at
+scale 1 and uses today's mux (`-t` duration, no `atrim`).
+
+Each needed track decoder starts with input `-ss` at `(S − 0.5)/fps`
+(accurate seek, omitted when `S == 0`), using the local index with no
+packet-count estimate. A first read that is not a clean `io.EOF` closes
+the pipe, kills the process group and returns the read error plus
+decoder stderr, without `ffprobe`. A clean EOF waits for ffmpeg: a
+non-zero exit is `decode: …` with stderr and no packet count; exit 0
+runs one `ffprobe -count_packets`. When the count is at most `S`, the
+decoder reopens at the last packet so later `get` calls freeze there
+(same as a full render). When the count is greater than `S`, the
+no-frames error includes the count and decoder stderr. A corrupted tail
+therefore aborts a preview that seeks past the last decodable frame,
+while a full render freezes on that last frame. `S == 0` does not peek.
+
+`decoder-start-seconds` (and `decoder-start=` on `>> render timings:`)
+covers opening the decoders, the first-frame peek when `S > 0`, and
+packet count plus reopen when those run.
+
+Draft scale clips the full viewport `{0, 0, W, H, scale}`; odd PNG sizes are
+cropped even by the encoder (`crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0`).
+Interval mux cuts the cached 48 kHz mix with
+`atrim=start_sample:end_sample` (exclusive end). The player clock is
+`first/fps + currentTime`.
+
+Interval video against the matching full-export frames
+(`select='between(n,first,end-1)'`, never `-ss` on H.264) must keep PSNR-Y
+min ≥ 40 dB and mean ≥ 45 dB. Interval audio against the mix slice must keep
+normalized cross-correlation ≥ 0.95 with `|lag| ≤ 5 ms` (same control on the
+full export). Tests paint a binary frame index on the source with `geq` /
+`bitand(N, 2^k)` and mix a deterministic chirp (`aevalsrc`) so a one-frame
+or 4800-sample shift cannot hide behind a periodic tone.
+
 Cache keys are SHA-256 of a `v1` JSON object (source content hash, compiled
 plan, fps, FFmpeg version, encode args that change bytes). A memo maps
 resolved path + size + mtime-ns + inode to the content hash. Entries are
@@ -72,8 +109,10 @@ BACKSTAGE_RENDER_TEST=1 go test -race -count=1 ./internal/presentation
 ```
 
 The tests cover cuts and repeated spans, cue clocks, independent/following audio,
-bounded music loops, template lookup, seek equivalence, cancellation and pixels
-at the end of the example arrow animation. The generator uses tones and numbered
+bounded music loops, template lookup, seek equivalence, cancellation, pixels
+at the end of the example arrow animation, preview intervals (exact pixels,
+frame-index codes, PSNR-Y, audio xcorr ≥ 0.95 / 5 ms against a chirp mix),
+and draft scale. The generator uses tones and numbered
 frames, so no VM, speech provider or externally recorded footage is required.
 
 The quality gate builds govulncheck with Go 1.26.8 because Go 1.25's `go/types`
