@@ -7,28 +7,39 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 
 1. Load the project, strict version 1 presentation JSON and referenced scenes.
 2. Probe sources and compile track spans, cue placement and selected audio.
-3. Prepare cuts and rates as lossless FFV1 tracks (`-g 1`, in parallel up to
-   the CPU count) and mix stereo 48 kHz audio. Hits come from
+3. Shared prepare: lossless FFV1 tracks (`-g 1`, in parallel up to the CPU
+   count) and the stereo 48 kHz mix. Hits come from
    `${UserCacheDir}/backstage/render` (hardlink into the work dir, copy on
    `EXDEV`). Work files that came from the cache are read-only (0444); the
-   render must never open `track-N.mkv` or `mix.wav` for writing. The H.264
-   encoder is started before the frame loop and runs while Chromium draws
-   and captures.
-4. Read PNG frames sequentially through FFmpeg pipes with bounded frame buffers.
-5. Pass the selected frames and time to the embedded Chromium HTML runtime.
-   Render calls `drawTimed`; Check and initialize keep using `draw`. Measured
-   draw includes image load and the final `requestAnimationFrame`.
-6. Capture the composed frames and encode H.264/yuv420p; mux AAC when selected.
-7. Publish the MP4 and companion facts containing configuration, input hashes
-   and render `timings` (phase seconds, per-frame p95, intermediate bytes).
-   `encode-seconds` is encoder Start to Wait and overlaps the frame loop; it
-   does not mean encode is the bottleneck. Screenshot and draw dominate the
-   loop (about 4.3 s and 3.7 s of a ~10 s `complete` render).
+   render must never open `track-N.mkv` or `mix.wav` for writing.
+4. `N` chunk goroutines in this process (one Chromium, one set of track
+   decoders, one libx264 encoder writing an MP4). `N=1` is still that path:
+   the single chunk writes `video.mp4`. Each encoder passes
+   `-video_track_timescale <fps>` so timestamps stay exact 1/fps ticks.
+   Chromium is started with `--disable-partial-raster` so screenshots stay
+   pixel-stable when several browsers share the GPU under load.
+   Progress is `>> chunk-N running|ok|failed|interrupted` and
+   `>> render k/n frames` summing frames written across chunks.
+5. Concat demuxer `-c copy` when `N>1`, then one AAC mux, facts, and rename.
+   First error or Ctrl-C cancels every chunk (all-or-nothing). The failing
+   chunk prints `failed` and the error is `chunk N: …`; cancelled chunks
+   print `interrupted` and a parent cancel returns `ctx.Err()`. Produce jobs
+   let running takes finish; render chunks do not.
+6. Render calls `drawTimed`; Check and initialize keep using `draw`. Measured
+   draw includes image load, host fonts, and waiting for a compositor paint.
+7. Companion facts include configuration, input hashes and render `timings`.
+   Histogram p95 is from the merged per-chunk counts. `renderer-start-seconds`
+   and `decoder-start-seconds` are sums; `encode-seconds` is the max chunk
+   encoder Start to Wait (it overlaps that chunk's frame loop). Screenshot
+   and draw dominate the loop (about 4.3 s and 3.7 s of a ~10 s `complete`
+   render).
 
 `model.go` owns validation and timing, `media.go` owns FFmpeg preparation,
-`cache.go` owns the track/audio cache, `render.go` owns Chromium and export,
-and `preview.go` owns preview and template initialization. The browser
-runtime and default HTML are embedded under `web/`.
+`cache.go` owns the track/audio cache, `render.go` owns Chromium, `chunks.go`
+and `workers.go` own export, and `preview.go` owns preview and template
+initialization. The browser runtime and default HTML are embedded under `web/`.
+`internal/budget` owns MemAvailable, NumCPU and the 2 GiB host reserve used by
+both presentation workers and produce jobs.
 
 ## Preview intervals and draft scale
 
@@ -112,7 +123,11 @@ The tests cover cuts and repeated spans, cue clocks, independent/following audio
 bounded music loops, template lookup, seek equivalence, cancellation, pixels
 at the end of the example arrow animation, preview intervals (exact pixels,
 frame-index codes, PSNR-Y, audio xcorr ≥ 0.95 / 5 ms against a chirp mix),
-and draft scale. The generator uses tones and numbered
+draft scale, parallel chunks (composed pixels at fade/caption/freeze
+boundaries, coded exports, concat timestamps, PSNR/xcorr against one worker,
+fail/cancel leftovers, automatic worker counts), and one-worker ffmpeg args
+(mix in shared prepare, `-video_track_timescale fps` on the chunk encoder).
+The generator uses tones and numbered
 frames, so no VM, speech provider or externally recorded footage is required.
 
 The quality gate builds govulncheck with Go 1.26.8 because Go 1.25's `go/types`

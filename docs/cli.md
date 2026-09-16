@@ -331,7 +331,11 @@ scenes, runs hooks or starts VMs. Missing input files are errors.
 Output defaults to the presentation's `out`, then `exports/NAME.mp4`. A companion
 `.facts.json` records configuration, resource hashes and tool versions. Custom
 HTML can still fail at a later frame after `--check` succeeds. Failed exports do
-not replace an existing MP4. Ctrl-C cancels work and removes intermediates.
+not replace an existing MP4. Project `render.workers` is the number of timeline
+chunks (one Chromium each); `0` picks a default from CPU, memory and film
+length. Ctrl-C cancels every chunk, removes intermediates, and leaves an
+existing MP4 in place. Progress is human lines only (`>> chunk-N …` and
+`>> render k/n frames`).
 
 ## preview
 

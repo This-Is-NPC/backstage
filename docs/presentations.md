@@ -174,21 +174,25 @@ rendering and encoding succeed. A companion `.facts.json` records configuration,
 resolved dimensions, source/resource hashes and tool versions. A successful
 export also writes a `timings` object beside `render`: phase seconds
 (`renderer-start-seconds`, `decoder-start-seconds`, `prepare-track-seconds`, `audio-seconds`,
-`audio-part-seconds`, `encode-seconds`, `mux-seconds`, `metadata-seconds`,
-`total-seconds`), per-frame stages (`decode`, `transfer`, `draw`, `screenshot`,
+`audio-part-seconds`, `encode-seconds`, `concat-seconds`, `mux-seconds`, `metadata-seconds`,
+`total-seconds`), `workers`, per-chunk wall times (`chunk-seconds`), per-frame
+stages (`decode`, `transfer`, `draw`, `screenshot`,
 `encode-write`) with total, mean, max, p95 and frame count, and intermediate
 byte sizes (`track-bytes`, `audio-part-bytes`, `mix-wav-bytes`,
 `video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`)
 and cache counters (`cache-hits`, `cache-misses`, each `{tracks, audio}`).
-Absent phases and missing files are omitted. Progress ends with
-`>> render timings: ...` including `decoder-start=`. `decoder-start-seconds`
+Absent phases and missing files are omitted. `renderer-start-seconds` and
+`decoder-start-seconds` are the sums across chunks; `encode-seconds` is the
+longest chunk encoder Start to Wait. `concat-seconds` is omitted when there is
+only one chunk. Progress ends with
+`>> render timings: ...` including `decoder-start=`, `workers=` and `concat=`.
+`decoder-start-seconds`
 covers opening the decoders; when a preview starts after frame 0 it also
 includes the first-frame peek and any packet count plus reopen. Source and template input hashes stay the same;
 `builtin:runtime.html` changes only because the runtime adds `drawTimed`.
-Measured draw includes what `draw` itself waits for — image load and the final
-`requestAnimationFrame` — not pure canvas cost. `encode-seconds` is the
-encoder process from Start to Wait and overlaps the whole Chromium frame
-loop; it does not mean the encoder is the bottleneck. On a typical
+Measured draw includes what `draw` itself waits for — image load, host fonts,
+and a compositor paint — not pure canvas cost. `encode-seconds` overlaps that
+chunk's Chromium frame loop; it does not mean the encoder is the bottleneck. On a typical
 `complete` render the loop itself spends about 4.3 s in screenshot and
 3.7 s in draw of about 10 s total.
 
@@ -203,12 +207,22 @@ match. Thread counts are not part of the key. Warm and cold renders keep
 the same `inputs` hashes and the same composed frames before H.264.
 `backstage cache prune` drops least-recently-used entries (default 10G).
 Project `render.threads` sets FFmpeg counts for that prepare and for
-libx264; the encoder runs at the same time as the Chromium frame loop, not
-after it. A faster encode is accepted when every decoded H.264 frame keeps
-PSNR-Y ≥ 40 dB against the previous thread count (mean ≥ 45 dB), and when
-frame count, timestamps, duration and audio stay aligned. The same PSNR-Y
-limits apply when a preview interval is compared to the matching frames of
-the full export (`select='between(n,first,end-1)'`, never `-ss` on H.264).
+libx264; each chunk encoder uses `max(1, encode/workers)` threads and runs at
+the same time as that chunk's Chromium frame loop, not after it.
+`render.workers` is the number of timeline chunks (one Chromium each). `0`,
+`null` or an omitted key picks `max(1, min(NumCPU/2, memoryBudget/2GiB,
+nFrames/minChunk))` where `minChunk` is `max(16, 2*fps)` and `memoryBudget` is
+MemAvailable minus a 2 GiB host reserve. An explicit `N` uses `N` chunks,
+capped at `nFrames`. Chunks share prepared tracks and the mix, encode H.264
+with `-video_track_timescale <fps>`, and join with the concat demuxer `-c copy`
+when there is more than one file. Joined output keeps PSNR-Y ≥ 40 dB (mean ≥ 45 dB)
+against a single-worker export, frame codes and 1/fps timestamps, and audio
+cross-correlation ≥ 0.95 with `|lag| ≤ 5 ms`. A faster encode is accepted when
+every decoded H.264 frame keeps PSNR-Y ≥ 40 dB against the previous thread
+count (mean ≥ 45 dB), and when frame count, timestamps, duration and audio stay
+aligned. The same PSNR-Y limits apply when a preview interval is compared to
+the matching frames of the full export (`select='between(n,first,end-1)'`,
+never `-ss` on H.264).
 `preview --from/--to/--scale` renders `[first, end)` at absolute `t = n/fps`
 and may screenshot at a clip scale; `render` stays the full film at scale 1.
 Interval audio is a sample-accurate `atrim` of the cached 48 kHz mix
@@ -216,6 +230,9 @@ Interval audio is a sample-accurate `atrim` of the cached 48 kHz mix
 The renderer uses
 bounded frame buffers and lossless intermediate video on disk rather than
 storing a whole take as PNGs. Disk use can still be significant for
-long/high-resolution sources. Ctrl-C cancels work and removes intermediates.
+long/high-resolution sources. Ctrl-C cancels every chunk, removes
+intermediates, and leaves an existing MP4 in place. The chunk that returns
+the error prints `failed`; chunks cancelled because of it or because of
+Ctrl-C print `interrupted`.
 
 See [Templates](templates.md) for visual slots and animation timing.

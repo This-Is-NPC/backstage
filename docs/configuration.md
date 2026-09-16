@@ -246,20 +246,22 @@ The target geometry every clip is normalized to before concatenation.
 |-----|---------|---------|
 | `render.w` / `render.h` | output size | `0` = the first scene clip's size (monitor native) |
 | `render.fps` | output frame rate | falls back to `record.fps` |
+| `render.workers` | parallel presentation render chunks (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, nFrames/minChunk))` with `minChunk = max(16, 2*fps)` |
 | `render.threads.prepare` | FFmpeg/FFV1 threads while preparing each presentation track | `max(1, n/w)` (`n` = CPUs, `w` = parallel tracks) |
 | `render.threads.filter` | `-filter_complex_threads` for that prepare | `1` |
-| `render.threads.encode` | libx264 threads for the presentation encoder | `n` |
+| `render.threads.encode` | libx264 threads for each presentation chunk encoder | `n`, then `max(1, encode/workers)` per chunk |
 
-`render.threads` is read only by presentation `render` / `preview`. `produce`
-does not use these keys. `0`, `null` or an omitted field means the default.
-A negative value is a configuration error. A very large value is accepted as
-written and passed to FFmpeg.
+`render.workers` and `render.threads` are read only by presentation `render` /
+`preview`. `produce` does not use these keys. `0`, `null` or an omitted field
+means the default. A negative value is a configuration error. A very large
+value is accepted as written (`workers` still capped at the frame count).
 
-The encoder starts before the frame loop and codes while Chromium draws and
-captures screenshots, so `encode` threads share the CPUs with the browser.
-`encode-seconds` is that process from Start to Wait and overlaps the loop;
-it is not a bottleneck reading. Screenshot and draw are the loop cost. The
-default encode count is still `n`; measure screenshot/draw/transfer p95 and
+Each chunk encoder starts before that chunk's frame loop and codes while its
+Chromium draws and captures screenshots, so `encode` threads share the CPUs
+with the browsers. `encode-seconds` is the longest of those processes from
+Start to Wait and overlaps that loop; it is not a bottleneck reading.
+Screenshot and draw are the loop cost. The default encode count is still `n`
+before dividing across workers; measure screenshot/draw/transfer p95 and
 the frame-loop total before raising it.
 
 ### transitions

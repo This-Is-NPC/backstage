@@ -171,22 +171,24 @@ backstage render demo
 
 `--check` validates resources, timing and slots but does not execute every
 animation frame. Project `render.threads` (`prepare`, `filter`, `encode`)
-applies only to presentation render; `0` uses the CPU defaults. The encoder
-shares the machine with Chromium during the frame loop; `encode-seconds`
-overlaps that loop and is not the bottleneck. Screenshot and draw are the
-loop cost. A second render reuses cached tracks and the mix when the
-footage and the compiled plan match (`backstage cache prune` reclaims
-that cache, default 10G). Preview renders first, then opens the exact MP4 with playback,
-seek and frame-step controls (`preview --from --to --scale`; the player clock
-is absolute presentation time). Ctrl-C closes it and removes its temporary files.
-It is not a live editor. Check the final animation state and that audio/captions
-follow the intended clock before exporting.
+applies only to presentation render; `0` uses the CPU defaults. Automatic
+`render.workers` (`0`) runs one Chromium per timeline chunk from CPU,
+memory and film length. The encoder shares the machine with Chromium during
+the frame loop; `encode-seconds` overlaps that loop and is not the
+bottleneck. Screenshot and draw are the loop cost. A second render reuses
+cached tracks and the mix when the footage and the compiled plan match
+(`backstage cache prune` reclaims that cache, default 10G). Preview renders
+first, then opens the exact MP4 with playback, seek and frame-step controls
+(`preview --from --to --scale`; the player clock is absolute presentation
+time). Ctrl-C closes it and removes its temporary files. It is not a live
+editor. Check the final animation state and that audio/captions follow the
+intended clock before exporting.
 
 Output defaults to `exports/NAME.mp4`; `--out` overrides the project-relative
 path. Companion facts record inputs, tool versions and a `timings` object
 beside `render` (phase seconds, per-frame total/mean/max/p95, intermediate
 bytes). Progress ends with `>> render timings: ...`. Source input hashes stay
 the same; `builtin:runtime.html` changes only because the runtime adds
-`drawTimed`. Measured draw includes image load and the final
-`requestAnimationFrame`, not pure canvas cost. Source recordings remain
+`drawTimed`. Measured draw includes image load, host fonts, and a compositor
+paint, not pure canvas cost. Source recordings remain
 unchanged; failed exports do not replace an existing MP4.
