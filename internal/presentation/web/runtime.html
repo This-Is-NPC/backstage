@@ -2,21 +2,148 @@
 let config, frames=[], images=new Map();
 const waitImage=im=>im.decode();
 async function createFrame(url){const f=document.createElement('iframe'); f.src=url; document.body.append(f);await new Promise((resolve,reject)=>{f.onload=resolve;f.onerror=()=>reject(Error('template load failed'))});await f.contentDocument.fonts.ready;await Promise.all([...f.contentDocument.images].map(waitImage));const hide=f.contentDocument.createElement('style');hide.textContent='[data-slot]{visibility:hidden!important}';f.contentDocument.head.append(hide);return f;}
-window.initialize=async function(c){config=c;c.text=c.text||[];for(let i=0;i<c.events.length;i++){const f=await createFrame(c.events[i].url);frames.push(f);f.style.opacity='0'; const w=f.contentWindow,m=w.backstageTemplate;if(!m||m.version!==1||typeof w.render!=='function')throw Error('template requires backstageTemplate version 1 and render(context)');const e=c.events[i];if(e.layout && (!m.layouts||!Array.isArray(m.layouts[e.layout])))throw Error('unknown layout '+e.layout);for(const slot of Object.keys(e.slots||{}))if(!m.layouts[e.layout].includes(slot))throw Error('unknown slot '+slot);await update(i,e.at);for(const slot of Object.keys(e.slots||{}))if(!find(f,'data-slot',slot))throw Error('missing data-slot '+slot);}
+window.initialize=async function(c){config=c;c.text=c.text||[];for(let i=0;i<c.events.length;i++){const f=await createFrame(c.events[i].url);frames.push(f);f.style.opacity='0'; const w=f.contentWindow,m=w.backstageTemplate;if(!m||m.version!==1||typeof w.render!=='function')throw Error('template requires backstageTemplate version 1 and render(context)');const e=c.events[i];if(e.layout && (!m.layouts||!Array.isArray(m.layouts[e.layout])))throw Error('unknown layout '+e.layout);for(const slot of Object.keys(e.slots||{}))if(!m.layouts[e.layout].includes(slot))throw Error('unknown slot '+slot);await update(i,e.at);for(const slot of Object.keys(e.slots||{})){const el=find(f,'data-slot',slot);if(!el)throw Error('missing data-slot '+slot);const fit=el.dataset.fit||'contain';if(fit!=='contain'&&fit!=='cover'&&fit!=='fill')throw Error('slot '+slot+' data-fit '+fit);}}
  for(const caption of c.text){for(let i=0;i<c.events.length;i++){const e=c.events[i],end=c.events[i+1]?.at??c.duration;if(caption.at<end&&caption.end>e.at&&!find(frames[i],'data-caption-slot',caption.slot))throw Error('unknown caption slot '+caption.slot)}}
 };
 function find(f,attr,value){return [...f.contentDocument.querySelectorAll('['+attr+']')].find(e=>e.getAttribute(attr)===value)}
+function slotNames(i){const e=config.events[i], m=frames[i].contentWindow.backstageTemplate; if(e.layout&&m.layouts&&m.layouts[e.layout]) return m.layouts[e.layout]; return Object.keys(e.slots||{});}
+function orderedTrackIDs(i,prev){const ids=[]; const add=j=>{if(j<0)return; for(const slot of slotNames(j)){const id=config.events[j].slots&&config.events[j].slots[slot]; if(id&&!ids.includes(id)) ids.push(id);}}; add(i); add(prev); return ids;}
 async function update(i,t){const f=frames[i],w=f.contentWindow,e=config.events[i];const ctx={time:t,localTime:Math.max(0,t-e.at),layout:e.layout,parameters:config.parameters,narration:e.narration||{}};await w.render(ctx);for(const a of f.contentDocument.getAnimations()){a.pause();a.currentTime=ctx.localTime*1000;}for(const svg of f.contentDocument.querySelectorAll('svg')){if(svg.pauseAnimations){svg.pauseAnimations();svg.setCurrentTime(ctx.localTime);}}await f.contentDocument.fonts.ready;await Promise.all([...f.contentDocument.images].map(waitImage));}
-function geometry(i,track){const e=config.events[i];const pair=Object.entries(e.slots||{}).find(([,id])=>id===track);if(!pair)return null;const el=find(frames[i],'data-slot',pair[0]);if(!el)throw Error('missing slot '+pair[0]);const r=el.getBoundingClientRect(),s=frames[i].contentWindow.getComputedStyle(el);const bl=parseFloat(s.borderLeftWidth),bt=parseFloat(s.borderTopWidth),br=parseFloat(s.borderRightWidth),bb=parseFloat(s.borderBottomWidth);return {x:r.x,y:r.y,w:r.width,h:r.height,radius:parseFloat(s.borderTopLeftRadius)||0,fit:el.dataset.fit||'contain',border:s.border,background:s.background,shadow:s.boxShadow};}
+function snapDim(x,span){const x0=Math.round(x),x1=Math.round(x+span);return [x0,x1-x0];}
+function snapGeo(g){if(!g)return g;const [x,w]=snapDim(g.x,g.w),[y,h]=snapDim(g.y,g.h);return Object.assign({},g,{x,y,w,h});}
+function screenBox(box,opacity){
+  const s={left:box.x+'px',top:box.y+'px',width:box.w+'px',height:box.h+'px',borderRadius:(box.rtl||0)+'px',overflow:'hidden',borderLeft:box.borderLeft||'',borderRight:box.borderRight||'',borderTop:box.borderTop||'',borderBottom:box.borderBottom||'',background:box.background,boxShadow:box.shadow};
+  if(opacity!=null)s.opacity=String(opacity);
+  return s;
+}
+function containPad(srcW,srcH,cw,ch){
+  if(srcW<1||srcH<1||cw<1||ch<1) return [cw,ch,0,0];
+  const s=Math.min(cw/srcW,ch/srcH), nw=srcW*s, nh=srcH*s;
+  let w=Math.min(cw, Math.ceil(nw-1e-9)), h=Math.min(ch, Math.ceil(nh-1e-9));
+  let x=Math.round((cw-nw)/2), y=Math.round((ch-nh)/2);
+  x=Math.max(0, Math.min(x, cw-w)); y=Math.max(0, Math.min(y, ch-h));
+  return [w,h,x,y];
+}
+function coverPad(srcW,srcH,cw,ch){
+  if(srcW<1||srcH<1||cw<1||ch<1) return [cw,ch,0,0];
+  const s=Math.max(cw/srcW,ch/srcH);
+  let w=Math.round(srcW*s), h=Math.round(srcH*s);
+  if(w<cw) w=cw; if(h<ch) h=ch;
+  return [w,h,(w-cw)/2|0,(h-ch)/2|0];
+}
+function contentSnap(g){
+  const [cx,cw]=snapDim(g.x+(g.bl||0), g.w-(g.bl||0)-(g.br||0));
+  const [cy,ch]=snapDim(g.y+(g.bt||0), g.h-(g.bt||0)-(g.bb||0));
+  return {cx,cy,cw,ch};
+}
+function fitPicture(picture,srcW,srcH,raw,box){
+  const cc=contentSnap(raw), ox=cc.cx-(box.x+(raw.bl||0)), oy=cc.cy-(box.y+(raw.bt||0));
+  const fit=raw.fit||'contain';
+  let x=ox, y=oy, w=cc.cw, h=cc.ch;
+  if(fit==='cover'){
+    const [tw,th,cx,cy]=coverPad(srcW,srcH,cc.cw,cc.ch);
+    x=ox-cx; y=oy-cy; w=tw; h=th;
+  }else if(fit!=='fill'){
+    const [iw,ih,ix,iy]=containPad(srcW,srcH,cc.cw,cc.ch);
+    x=ox+ix; y=oy+iy; w=iw; h=ih;
+  }
+  x=Math.round(x); y=Math.round(y); w=Math.round(w); h=Math.round(h);
+  Object.assign(picture.style,{position:'absolute',left:x+'px',top:y+'px',width:w+'px',height:h+'px',objectFit:'fill',display:'block'});
+}
+function cssPx(v){const s=String(v).trim().toLowerCase();return s==='0'||/^-?\d+(\.\d+)?px$/.test(s)}
+function geometry(i,track){const e=config.events[i];const pair=Object.entries(e.slots||{}).find(([,id])=>id===track);if(!pair)return null;const el=find(frames[i],'data-slot',pair[0]);if(!el)throw Error('missing slot '+pair[0]);const r=el.getBoundingClientRect(),s=frames[i].contentWindow.getComputedStyle(el);const bl=parseFloat(s.borderLeftWidth)||0,bt=parseFloat(s.borderTopWidth)||0,br=parseFloat(s.borderRightWidth)||0,bb=parseFloat(s.borderBottomWidth)||0;const rtl=parseFloat(s.borderTopLeftRadius)||0,rtr=parseFloat(s.borderTopRightRadius)||0,rbr=parseFloat(s.borderBottomRightRadius)||0,rbl=parseFloat(s.borderBottomLeftRadius)||0;const radiusPx=cssPx(s.borderTopLeftRadius)&&cssPx(s.borderTopRightRadius)&&cssPx(s.borderBottomRightRadius)&&cssPx(s.borderBottomLeftRadius);return {x:r.x,y:r.y,w:r.width,h:r.height,rtl,rtr,rbr,rbl,radiusPx,fit:el.dataset.fit||'contain',borderLeft:s.borderLeft,borderRight:s.borderRight,borderTop:s.borderTop,borderBottom:s.borderBottom,background:s.background,shadow:s.boxShadow,bl,bt,br,bb};}
+function dynamicURL(u){const s=String(u).toLowerCase(); return s.includes('.gif')||s.includes('.apng')||s.includes('.webp');}
+window.probe=async function(state){
+  const t=state.time; let i=0; while(i+1<config.events.length&&config.events[i+1].at<=t)i++;
+  const e=config.events[i], f=frames[i], doc=f.contentDocument;
+  await update(i,t);
+  const boxes=[];
+  for(const slot of slotNames(i)){const id=e.slots&&e.slots[slot]; if(!id) continue; const got=geometry(i,id); if(!got) continue; boxes.push(Object.assign({},got,{slot,track:id}));}
+  const dyn=[];
+  const extra=[];
+  const pushURL=u=>{if(dynamicURL(u)) dyn.push(String(u));};
+  for(const im of doc.images) pushURL(im.currentSrc||im.src);
+  for(const el of doc.querySelectorAll('*')){
+    const bg=el.ownerDocument.defaultView.getComputedStyle(el).backgroundImage; if(bg&&bg!=='none') pushURL(bg);
+    const row=[el.scrollTop,el.scrollLeft];
+    const W=doc.defaultView;
+    if(W && (el instanceof W.HTMLInputElement||el instanceof W.HTMLTextAreaElement||el instanceof W.HTMLSelectElement)){
+      row.push(el.value);
+      if(el instanceof W.HTMLInputElement) row.push(el.checked, el.indeterminate);
+      if(el instanceof W.HTMLSelectElement) row.push([...el.selectedOptions].map(o=>o.index));
+    }
+    extra.push(row);
+  }
+  const ae=doc.activeElement;
+  const focus=[];
+  if(ae&&ae!==doc.body&&ae!==doc.documentElement){
+    for(let n=ae;n&&n!==doc.documentElement;n=n.parentElement){
+      const i=n.parentElement?[...n.parentElement.children].indexOf(n):0;
+      focus.push(n.tagName+':'+i);
+    }
+    focus.reverse();
+  }
+  extra.push(['focus',focus]);
+  let animationsActive=false;
+  for(const a of doc.getAnimations()){
+    const timing=a.effect&&a.effect.getComputedTiming?a.effect.getComputedTiming():null;
+    const end=timing?timing.endTime:Infinity;
+    if(end===Infinity || (a.currentTime!==null && a.currentTime<end)){animationsActive=true; break;}
+  }
+  const smil=!!doc.querySelector('animate, animateTransform, animateMotion, set');
+  const canvas=!!doc.querySelector('canvas');
+  const video=!!doc.querySelector('video');
+  const html=doc.documentElement.outerHTML;
+  const buf=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(html+'\0'+JSON.stringify(extra)));
+  const hash=[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+  const captions=config.text.filter(c=>t>=c.at&&t<c.end).map(c=>({at:c.at,end:c.end,slot:c.slot,text:c.text}));
+  return {event:i,geometry:boxes,animationsActive,dynamicElements:dyn,smil,canvas,video,domHash:hash,captions};
+};
 window.draw=async function(state){const t=state.time;let i=0;while(i+1<config.events.length&&config.events[i+1].at<=t)i++;const e=config.events[i],duration=e.transition?.duration||0;const blend=i>0&&duration>0&&t<e.at+duration;const progress=blend?(t-e.at)/duration:1;
  await update(i,t);if(blend)await update(i-1,t);
  frames.forEach((f,k)=>f.style.opacity=k===i?String(progress):(blend&&k===i-1?String(1-progress):'0'));
  document.querySelectorAll('.screen,.caption').forEach(e=>e.remove());
- for(const [id,data] of Object.entries(state.images)){let im=images.get(id);if(!im){im=new Image();images.set(id,im)}im.src='data:image/png;base64,'+data;await im.decode();const now=geometry(i,id),old=blend?geometry(i-1,id):null;const put=(g,opacity)=>{if(!g||opacity<=0)return;const out=document.createElement('div');out.className='screen';Object.assign(out.style,{left:g.x+'px',top:g.y+'px',width:g.w+'px',height:g.h+'px',borderRadius:g.radius+'px',overflow:'hidden',border:g.border,background:g.background,boxShadow:g.shadow,opacity:String(opacity)});const picture=im.cloneNode();Object.assign(picture.style,{width:'100%',height:'100%',objectFit:g.fit,display:'block'});out.append(picture);document.body.append(out)};
- if(blend&&e.transition.effect==='morph'){const a=old||now,b=now||old;if(a&&b){const g={fit:b.fit,border:b.border,background:b.background,shadow:b.shadow};for(const k of ['x','y','w','h','radius'])g[k]=a[k]+(b[k]-a[k])*progress;put(g,old&&now?1:now?progress:1-progress)}}else if(blend){put(old,1-progress);put(now,progress)}else put(now,1);
+ for(const id of orderedTrackIDs(i, blend?i-1:-1)){const data=state.images[id]; if(!data) continue; let im=images.get(id);if(!im){im=new Image();images.set(id,im)}im.src='data:image/png;base64,'+data;await im.decode();const now=geometry(i,id),old=blend?geometry(i-1,id):null;const put=(g,opacity)=>{if(!g||opacity<=0)return;const box=blend?g:snapGeo(g);const out=document.createElement('div');out.className='screen';Object.assign(out.style,screenBox(box,opacity));const picture=im.cloneNode();if(!blend)fitPicture(picture,im.naturalWidth,im.naturalHeight,g,box);else Object.assign(picture.style,{width:'100%',height:'100%',objectFit:g.fit,display:'block'});out.append(picture);document.body.append(out)};
+ if(blend&&e.transition.effect==='morph'){const a=old||now,b=now||old;if(a&&b){const g={fit:b.fit,borderLeft:b.borderLeft,borderRight:b.borderRight,borderTop:b.borderTop,borderBottom:b.borderBottom,background:b.background,shadow:b.shadow,rtl:b.rtl};for(const k of ['x','y','w','h','rtl'])g[k]=a[k]+(b[k]-a[k])*progress;put(g,old&&now?1:now?progress:1-progress)}}else if(blend){put(old,1-progress);put(now,progress)}else put(now,1);
  }
  for(const [idx,opacity] of (blend?[[i-1,1-progress],[i,progress]]:[[i,1]])){const groups=new Map();for(const c of config.text)if(t>=c.at&&t<c.end){if(!groups.has(c.slot))groups.set(c.slot,[]);groups.get(c.slot).push(c.text)}for(const [slot,texts] of groups){const el=find(frames[idx],'data-caption-slot',slot);if(!el)continue;const r=el.getBoundingClientRect(),s=frames[idx].contentWindow.getComputedStyle(el),out=document.createElement('div');out.className='caption';out.textContent=texts.join('\n');Object.assign(out.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px',font:s.font,color:s.color,textAlign:s.textAlign,lineHeight:s.lineHeight,background:s.backgroundColor,opacity:String(opacity)});document.body.append(out)}}
  await Promise.all([...document.querySelectorAll('.screen img')].map(waitImage));await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+};
+window.drawLayer=async function(state){
+  const t=state.time, layer=state.layer;
+  let i=0; while(i+1<config.events.length&&config.events[i+1].at<=t)i++;
+  await update(i,t);
+  if(layer==='above'){
+    document.documentElement.style.background='transparent';
+    document.body.style.background='transparent';
+  }else{
+    document.documentElement.style.background='';
+    document.body.style.background='';
+  }
+  frames.forEach((f,k)=>f.style.opacity=(layer==='below'&&k===i)?'1':'0');
+  document.querySelectorAll('.screen,.caption').forEach(n=>n.remove());
+  if(layer==='below'){
+    const e=config.events[i];
+    for(const slot of slotNames(i)){
+      const id=e.slots&&e.slots[slot]; if(!id) continue;
+      const g=snapGeo(geometry(i,id)); if(!g) continue;
+      const out=document.createElement('div'); out.className='screen';
+      Object.assign(out.style,screenBox(g));
+      document.body.append(out);
+    }
+  }else{
+    const groups=new Map();
+    for(const c of config.text) if(t>=c.at&&t<c.end){ if(!groups.has(c.slot)) groups.set(c.slot,[]); groups.get(c.slot).push(c.text); }
+    for(const [slot,texts] of groups){
+      const el=find(frames[i],'data-caption-slot',slot); if(!el) continue;
+      const r=el.getBoundingClientRect(), s=frames[i].contentWindow.getComputedStyle(el), out=document.createElement('div');
+      out.className='caption'; out.textContent=texts.join('\n');
+      Object.assign(out.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px',font:s.font,color:s.color,textAlign:s.textAlign,lineHeight:s.lineHeight,background:s.backgroundColor});
+      document.body.append(out);
+    }
+  }
+  await document.fonts.ready;
+  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 };
 window.drawTimed = async (state) => { const t0 = performance.now(); await window.draw(state); return performance.now() - t0; };
 </script></body></html>
