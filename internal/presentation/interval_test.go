@@ -228,7 +228,7 @@ func TestDecoderTrackCases(t *testing.T) {
 	fps := 10
 	path := writePatternMKV(t, fps, 1)
 	later := CompiledTrack{Track: Track{Start: 0.8, OnEnd: "freeze"}, Duration: 1}
-	s := trackIndexAt(later, 5, fps)
+	s := trackFrame(later, 5, fps)
 	if s != 0 {
 		t.Fatalf("track that starts after from must open at 0, got %d", s)
 	}

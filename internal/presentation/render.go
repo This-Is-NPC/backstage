@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,7 +30,7 @@ type Renderer struct {
 	cancel      context.CancelFunc
 	stopBrowser context.CancelFunc
 	server      *http.Server
-	files       map[string]string
+	files       map[int]map[string]string
 	mu          sync.Mutex
 	url         string
 	scale       float64
@@ -49,8 +50,21 @@ func dependencies() (string, error) {
 	return "", fmt.Errorf("install Chromium to render presentations")
 }
 
+func chromiumFlags() []string {
+	return []string{"--disable-dev-shm-usage", "--force-color-profile=srgb", "--disable-partial-raster"}
+}
+
 func chromiumAllocatorOptions(browser string) []chromedp.ExecAllocatorOption {
-	return append(chromedp.DefaultExecAllocatorOptions[:], chromedp.ExecPath(browser), chromedp.Flag("disable-dev-shm-usage", true), chromedp.Flag("force-color-profile", "srgb"), chromedp.Flag("disable-partial-raster", true))
+	opts := append(chromedp.DefaultExecAllocatorOptions[:], chromedp.ExecPath(browser))
+	for _, flag := range chromiumFlags() {
+		name, value, ok := strings.Cut(strings.TrimPrefix(flag, "--"), "=")
+		if !ok {
+			opts = append(opts, chromedp.Flag(name, true))
+			continue
+		}
+		opts = append(opts, chromedp.Flag(name, value))
+	}
+	return opts
 }
 
 func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
@@ -58,7 +72,12 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &Renderer{plan: p, files: map[string]string{}, scale: 1}
+	observeMu.Lock()
+	if observeCommand != nil {
+		observeCommand(browser, chromiumFlags())
+	}
+	observeMu.Unlock()
+	r := &Renderer{plan: p, files: map[int]map[string]string{}, scale: 1}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -124,12 +143,14 @@ func (r *Renderer) Close() {
 	}
 }
 
-func (r *Renderer) loadedFiles() map[string]string {
+func (r *Renderer) filesForEvents(ids ...int) map[string]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := map[string]string{}
-	for rel, path := range r.files {
-		out[rel] = path
+	for _, id := range ids {
+		for rel, path := range r.files[id] {
+			out[rel] = path
+		}
 	}
 	return out
 }

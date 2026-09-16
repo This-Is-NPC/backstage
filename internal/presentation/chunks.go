@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +42,7 @@ func (f *firstFail) claim(idx int, err error) bool {
 
 type chunkResult struct {
 	index                               int
+	rendered                            bool
 	decode, transfer, draw, shot, write msHist
 	decodedPNG, screenshotBytes         int64
 	rendererStart, decoderStart         float64
@@ -62,7 +62,8 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 		progress = io.Discard
 	}
 	progress = &syncWriter{w: progress}
-	if _, err = dependencies(); err != nil {
+	browser, err := dependencies()
+	if err != nil {
 		return err
 	}
 	if err = os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
@@ -79,6 +80,11 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 		return err
 	}
 	defer cache.Close()
+	browserVer, err := toolVersion(ctx, browser, "--version")
+	if err != nil {
+		return fmt.Errorf("browser version: %w", err)
+	}
+	segs := newSegmentCache(cache, p, browserVer)
 	trackPaths, prepare, err := prepareTracks(ctx, p, work, progress, cache)
 	if err != nil {
 		return err
@@ -100,45 +106,64 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 		}
 	}
 	nFrames := opts.End - opts.First
-	nWorkers, err := resolveWorkers(planWorkers(p), nFrames, p.FPS)
-	if err != nil {
-		return err
-	}
-	chunks := splitChunks(opts.First, opts.End, nWorkers)
+	chunks := planChunks(p, opts.First, opts.End)
 	if len(chunks) == 0 {
 		return fmt.Errorf("interval has no frames")
 	}
-	nWorkers = len(chunks)
-	timings.Workers = nWorkers
+	nChunks := len(chunks)
+	files := map[string]string{}
+	results := make([]chunkResult, nChunks)
+	var miss []chunkJob
+	for _, ch := range chunks {
+		key, err := segs.cacheKey(opts, ch)
+		if err != nil {
+			return err
+		}
+		job := chunkJob{chunkRange: ch, key: key}
+		workPath := chunkVideoPath(work, nChunks, ch.Index)
+		hit, err := cache.getOrFill(ctx, "segments", key, ".mp4", workPath, fmt.Sprintf("chunk-%d", ch.Index), segs.entryValid, nil)
+		if err != nil {
+			return err
+		}
+		if hit {
+			recordSegmentHit(progress, cache, job, segs.manifestAbs(segs.dest(key)), results)
+			continue
+		}
+		miss = append(miss, job)
+	}
 	_, _, encodeAll := resolveRenderThreads(planThreadCfg(p), len(p.Tracks))
+	nWorkers, err := resolveWorkers(planWorkers(p), len(miss))
+	if err != nil {
+		return err
+	}
+	timings.Workers = nWorkers
 	encodeThreads := chunkEncodeThreads(encodeAll, nWorkers)
 	video := filepath.Join(work, "video.mp4")
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	results := make([]chunkResult, nWorkers)
 	var completed atomic.Int64
 	var fail firstFail
 	fail.cancel = cancel
-	var wg sync.WaitGroup
-	for i := range chunks {
-		wg.Add(1)
-		go func(ch chunkRange) {
-			defer wg.Done()
-			res, e := renderChunk(ctx, runCtx, p, work, trackPaths, progress, opts, ch, nWorkers, nFrames, encodeThreads, &completed, &fail)
-			if e != nil {
-				return
-			}
-			results[ch.Index] = res
-		}(chunks[i])
+	if nWorkers > 0 {
+		slices := splitIndexSlices(len(miss), nWorkers)
+		var wg sync.WaitGroup
+		for _, sl := range slices {
+			part := append([]chunkJob(nil), miss[sl[0]:sl[1]]...)
+			wg.Add(1)
+			go func(part []chunkJob) {
+				defer wg.Done()
+				runChunkWorker(ctx, runCtx, p, work, trackPaths, progress, opts, part, nChunks, nFrames, encodeThreads, cache, segs, &completed, &fail, results)
+			}(part)
+		}
+		wg.Wait()
 	}
-	wg.Wait()
 	if err = ctx.Err(); err != nil {
 		return err
 	}
 	if fail.err != nil {
 		return fmt.Errorf("chunk %d: %w", fail.idx, fail.err)
 	}
-	if nWorkers > 1 {
+	if nChunks > 1 {
 		concatAt := time.Now()
 		if err = concatChunks(ctx, work, chunks, video); err != nil {
 			return err
@@ -146,7 +171,11 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 		sec := roundSec(time.Since(concatAt))
 		timings.ConcatSeconds = &sec
 	}
-	files := mergeChunkResults(results, &timings)
+	for rel, path := range mergeChunkResults(results, &timings) {
+		if path != "" {
+			files[rel] = path
+		}
+	}
 	final := video
 	if audio != "" {
 		final = filepath.Join(work, "final.mp4")
@@ -158,11 +187,18 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 		}
 		sec := roundSec(time.Since(muxAt))
 		timings.MuxSeconds = &sec
+	} else if nChunks == 1 {
+		exported := filepath.Join(work, "export.mp4")
+		if err = copyRegular(video, exported, 0o644); err != nil {
+			return err
+		}
+		final = exported
 	}
 	timings.CacheHits = cache.hits
 	timings.CacheMisses = cache.misses
 	collectWorkBytes(&timings, work, p, trackPaths)
-	if err = writeRenderFacts(ctx, p, work, files, &timings, started); err != nil {
+	versions := map[string]string{filepath.Base(browser): browserVer, "ffmpeg": cache.ffmpeg}
+	if err = writeRenderFacts(ctx, p, work, files, &timings, started, versions); err != nil {
 		return err
 	}
 	fmt.Fprint(progress, timings.progressLine(nFrames))
@@ -195,19 +231,17 @@ func concatChunks(ctx context.Context, work string, chunks []chunkRange, video s
 	return run(ctx, "ffmpeg", args...)
 }
 
-func encoderArgs(p *Plan, opts renderOpts, encodeThreads int, out string) []string {
-	args := []string{"-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-"}
-	if opts.Scale != 1 {
-		args = append(args, "-vf", draftCropFilter())
-	}
-	return append(args, "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
-}
-
 func mergeChunkResults(results []chunkResult, timings *renderTimings) map[string]string {
 	files := map[string]string{}
 	var decodeH, transferH, drawH, shotH, writeH msHist
 	encodeMax := 0.0
 	for _, res := range results {
+		for rel, path := range res.files {
+			files[rel] = path
+		}
+		if !res.rendered {
+			continue
+		}
 		decodeH.merge(res.decode)
 		transferH.merge(res.transfer)
 		drawH.merge(res.draw)
@@ -221,9 +255,6 @@ func mergeChunkResults(results []chunkResult, timings *renderTimings) map[string
 			encodeMax = res.encode
 		}
 		timings.ChunkSeconds = append(timings.ChunkSeconds, namedSeconds{ID: fmt.Sprintf("chunk-%d", res.index), Seconds: res.wall})
-		for rel, path := range res.files {
-			files[rel] = path
-		}
 	}
 	timings.EncodeSeconds = encodeMax
 	timings.Decode = decodeH.snapshot()
@@ -234,7 +265,86 @@ func mergeChunkResults(results []chunkResult, timings *renderTimings) map[string
 	return files
 }
 
-func renderChunk(parent, ctx context.Context, p *Plan, work string, trackPaths map[string]string, progress io.Writer, opts renderOpts, ch chunkRange, nChunks, nFrames, encodeThreads int, completed *atomic.Int64, fail *firstFail) (chunkResult, error) {
+func ensureDecoder(ctx context.Context, decoders map[string]*decoder, id, path string, index, fps int) (*decoder, time.Duration, error) {
+	d := decoders[id]
+	if d != nil && (d.done || index == d.frame || index == d.frame+1) {
+		return d, 0, nil
+	}
+	if d != nil {
+		d.close()
+	}
+	started := time.Now()
+	nd, err := openTrackDecoder(ctx, path, index, fps)
+	if err != nil {
+		delete(decoders, id)
+		return nil, 0, err
+	}
+	decoders[id] = nd
+	return nd, time.Since(started), nil
+}
+
+func runChunkWorker(parent, ctx context.Context, p *Plan, work string, trackPaths map[string]string, progress io.Writer, opts renderOpts, miss []chunkJob, nChunks, nFrames, encodeThreads int, cache *renderCache, segs *segmentCache, completed *atomic.Int64, fail *firstFail, results []chunkResult) {
+	if len(miss) == 0 {
+		return
+	}
+	rendererAt := time.Now()
+	r, err := NewRenderer(ctx, p)
+	if err != nil {
+		status := "failed"
+		if parent.Err() != nil {
+			status = "interrupted"
+		} else if !fail.claim(miss[0].Index, err) {
+			status = "interrupted"
+		}
+		fmt.Fprintf(progress, ">> chunk-%d %s\n", miss[0].Index, status)
+		return
+	}
+	r.scale = opts.Scale
+	rendererStart := roundSec(time.Since(rendererAt))
+	defer r.Close()
+	decoders := map[string]*decoder{}
+	defer func() {
+		for _, d := range decoders {
+			d.close()
+		}
+	}()
+	first := true
+	for _, job := range miss {
+		ch := job.chunkRange
+		workPath := chunkVideoPath(work, nChunks, ch.Index)
+		var res chunkResult
+		hit, err := cache.getOrFill(ctx, "segments", job.key, ".mp4", workPath, fmt.Sprintf("chunk-%d", ch.Index), segs.entryValid, func(tmp string) (map[string]string, error) {
+			out, e := renderChunk(parent, ctx, r, p, trackPaths, decoders, progress, opts, ch, nFrames, encodeThreads, completed, fail, tmp)
+			res = out
+			if e != nil {
+				return nil, e
+			}
+			return segs.hashFiles(res.files)
+		})
+		if err != nil {
+			if parent.Err() != nil {
+				return
+			}
+			if fail.claim(ch.Index, err) {
+				fmt.Fprintf(progress, ">> chunk-%d failed\n", ch.Index)
+			}
+			return
+		}
+		if hit {
+			recordSegmentHit(progress, cache, job, segs.manifestAbs(segs.dest(job.key)), results)
+			continue
+		}
+		cache.note(false, "segments")
+		if first {
+			res.rendererStart = rendererStart
+			first = false
+		}
+		results[ch.Index] = res
+		fmt.Fprintf(progress, ">> chunk-%d ok\n", ch.Index)
+	}
+}
+
+func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, trackPaths map[string]string, decoders map[string]*decoder, progress io.Writer, opts renderOpts, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, fail *firstFail, out string) (chunkResult, error) {
 	res := chunkResult{index: ch.Index}
 	fmt.Fprintf(progress, ">> chunk-%d running\n", ch.Index)
 	status := "ok"
@@ -260,35 +370,26 @@ func renderChunk(parent, ctx context.Context, p *Plan, work string, trackPaths m
 		return err
 	}
 	started := time.Now()
-	rendererAt := time.Now()
-	r, err := NewRenderer(ctx, p)
-	if err != nil {
-		return res, setFail(err)
-	}
-	r.scale = opts.Scale
-	res.rendererStart = roundSec(time.Since(rendererAt))
-	defer r.Close()
-	decoders := map[string]*decoder{}
-	defer func() {
-		for _, d := range decoders {
-			d.close()
-		}
-	}()
-	decoderAt := time.Now()
+	var decoderDur time.Duration
 	for _, id := range sortedKeys(p.Tracks) {
 		tr := p.Tracks[id]
 		if !trackNeeded(tr, ch.First, ch.End, p.FPS) {
+			if d := decoders[id]; d != nil {
+				d.close()
+				delete(decoders, id)
+			}
 			continue
 		}
-		index := trackIndexAt(tr, ch.First, p.FPS)
-		d, e := openTrackDecoder(ctx, trackPaths[id], index, p.FPS)
+		index := trackFrame(tr, ch.First, p.FPS)
+		_, extra, e := ensureDecoder(ctx, decoders, id, trackPaths[id], index, p.FPS)
 		if e != nil {
 			return res, setFail(e)
 		}
-		decoders[id] = d
+		decoderDur += extra
 	}
-	res.decoderStart = roundSec(time.Since(decoderAt))
-	out := chunkVideoPath(work, nChunks, ch.Index)
+	if observeChunkDecoders != nil {
+		observeChunkDecoders(ch.Index, sortedKeys(decoders))
+	}
 	encArgs := encoderArgs(p, opts, encodeThreads, out)
 	noteRender(renderNote{EncodeThreads: encodeThreads, EncoderArgs: append([]string(nil), encArgs...)})
 	encoder := command(ctx, "ffmpeg", encArgs...)
@@ -329,7 +430,11 @@ func renderChunk(parent, ctx context.Context, p *Plan, work string, trackPaths m
 				continue
 			}
 			index := trackFrame(tr, n, p.FPS)
-			b, e := decoders[id].get(index)
+			d := decoders[id]
+			if d == nil {
+				return res, setFail(fmt.Errorf("track %s: decoder missing", id))
+			}
+			b, e := d.get(index)
 			if e != nil {
 				return res, setFail(e)
 			}
@@ -368,19 +473,22 @@ func renderChunk(parent, ctx context.Context, p *Plan, work string, trackPaths m
 	}
 	res.encode = roundSec(time.Since(encodeAt))
 	res.wall = roundSec(time.Since(started))
-	res.files = r.loadedFiles()
-	fmt.Fprintf(progress, ">> chunk-%d ok\n", ch.Index)
+	res.decoderStart = roundSec(decoderDur)
+	res.files = r.filesForEvents(chunkEvents(p, ch)...)
+	res.rendered = true
 	return res, nil
 }
 
-func writeRenderFacts(ctx context.Context, p *Plan, dir string, files map[string]string, timings *renderTimings, started time.Time) error {
+func writeRenderFacts(ctx context.Context, p *Plan, dir string, files map[string]string, timings *renderTimings, started time.Time, versions map[string]string) error {
 	metaAt := time.Now()
 	inputs := map[string]string{}
 	for rel, path := range p.Inputs {
 		inputs[rel] = path
 	}
 	for rel, path := range files {
-		inputs[rel] = path
+		if path != "" {
+			inputs[rel] = path
+		}
 	}
 	hashes := map[string]string{}
 	for rel, path := range inputs {
@@ -404,25 +512,20 @@ func writeRenderFacts(ctx context.Context, p *Plan, dir string, files map[string
 		h := sha256.Sum256(b)
 		hashes["builtin:"+name] = hex.EncodeToString(h[:])
 	}
-	versions := map[string]string{}
-	browser, _ := dependencies()
-	for _, name := range []string{browser, "ffmpeg", "ffprobe"} {
-		flag := "-version"
-		if name == browser {
-			flag = "--version"
-		}
-		b, err := command(ctx, name, flag).Output()
-		if err != nil {
-			return err
-		}
-		versions[filepath.Base(name)] = strings.SplitN(string(b), "\n", 2)[0]
+	if versions == nil {
+		versions = map[string]string{}
 	}
-	timings.MetadataSeconds = roundSec(time.Since(metaAt))
-	timings.TotalSeconds = roundSec(time.Since(started))
-	data := map[string]any{"version": 1, "presentation": p.Name, "configuration": p.Document, "render": map[string]int{"w": p.Width, "h": p.Height, "fps": p.FPS, "frames": p.Frames}, "inputs": hashes, "tools": versions, "timings": timings}
-	b, err := json.MarshalIndent(data, "", "  ")
+	b, err := command(ctx, "ffprobe", "-version").Output()
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "facts.json"), b, 0o644)
+	versions["ffprobe"] = strings.SplitN(string(b), "\n", 2)[0]
+	timings.MetadataSeconds = roundSec(time.Since(metaAt))
+	timings.TotalSeconds = roundSec(time.Since(started))
+	data := map[string]any{"version": 1, "presentation": p.Name, "configuration": p.Document, "render": map[string]int{"w": p.Width, "h": p.Height, "fps": p.FPS, "frames": p.Frames}, "inputs": hashes, "tools": versions, "timings": timings}
+	out, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "facts.json"), out, 0o644)
 }

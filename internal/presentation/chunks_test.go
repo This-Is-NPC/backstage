@@ -28,24 +28,28 @@ func TestChunkComposedPixelsMatchSerial(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cases := []struct {
-		name   string
-		plan   *Plan
-		chunks [][2]int
+		name string
+		plan *Plan
 	}{
-		{"fade", multiTrackPlan(t), [][2]int{{0, 3}, {3, 4}}},
-		{"caption", captionSwapPlan(t), [][2]int{{0, 2}, {2, 4}}},
-		{"freeze", freezeTailPlan(t), [][2]int{{0, 4}, {4, 6}}},
+		{"fade", multiTrackPlan(t)},
+		{"caption", twoChunkCaptionPlan(t)},
+		{"visual", longVisualPlan(t)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			resetSeams()
+			useTempCache(t)
+			chunks := planChunks(c.plan, 0, c.plan.Frames)
+			if len(chunks) < 2 {
+				t.Fatalf("need two chunks, got %+v", chunks)
+			}
 			c.plan.Project.Render.Workers = 1
 			serial := collectShots(t, func() error {
 				return Render(ctx, c.plan, filepath.Join(t.TempDir(), "serial.mp4"), io.Discard)
 			})
 			resetSeams()
-			c.plan.Project.Render.Workers = len(c.chunks)
-			testChunks = c.chunks
+			useTempCache(t)
+			c.plan.Project.Render.Workers = len(chunks)
 			part := collectShots(t, func() error {
 				return Render(ctx, c.plan, filepath.Join(t.TempDir(), "part.mp4"), io.Discard)
 			})
@@ -66,7 +70,7 @@ func TestChunkCodedExport(t *testing.T) {
 	useTempCache(t)
 	resetSeams()
 	defer resetSeams()
-	plan := codedFramePlan(t)
+	plan := codedLongPlan(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	serial := filepath.Join(t.TempDir(), "serial.mp4")
@@ -74,18 +78,18 @@ func TestChunkCodedExport(t *testing.T) {
 	if err := Render(ctx, plan, serial, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	minChunkFramesFn = func(int) int { return 1 }
-	maxW, err := resolveWorkers(0, plan.Frames, plan.FPS)
+	starts := chunkStarts(plan)
+	maxW, err := resolveWorkers(0, len(starts))
 	if err != nil {
 		t.Fatal(err)
 	}
-	minChunkFramesFn = minChunkFrames
-	workers := []int{2, 3}
-	if maxW > 3 {
+	workers := []int{1, 2}
+	if maxW > 2 {
 		workers = append(workers, maxW)
 	}
 	for _, w := range workers {
 		t.Run(fmt.Sprintf("workers-%d", w), func(t *testing.T) {
+			useTempCache(t)
 			resetSeams()
 			plan.Project.Render.Workers = w
 			out := filepath.Join(t.TempDir(), "join.mp4")
@@ -93,6 +97,7 @@ func TestChunkCodedExport(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertCodedExport(t, out, plan)
+			assertChunkKeyframes(t, out, starts, plan.FPS)
 			if w != 2 {
 				return
 			}
@@ -109,17 +114,6 @@ func TestChunkCodedExport(t *testing.T) {
 			}
 		})
 	}
-	t.Run("boundary", func(t *testing.T) {
-		resetSeams()
-		plan.Project.Render.Workers = 2
-		testChunks = [][2]int{{0, 5}, {5, plan.Frames}}
-		out := filepath.Join(t.TempDir(), "bound.mp4")
-		if err := Render(ctx, plan, out, io.Discard); err != nil {
-			t.Fatal(err)
-		}
-		assertCodedExport(t, out, plan)
-		assertChunkKeyframes(t, out, []int{0, 5}, plan.FPS)
-	})
 }
 
 func TestOneWorkerFFmpegArgs(t *testing.T) {
@@ -171,7 +165,7 @@ func TestOneWorkerFFmpegArgs(t *testing.T) {
 	if !stringSliceEqual(got, want) {
 		t.Fatalf("encoder args:\n got %v\nwant %v <out>", got, want)
 	}
-	if !strings.HasSuffix(encoder[len(encoder)-1], "video.mp4") {
+	if !strings.HasSuffix(encoder[len(encoder)-1], ".mp4") {
 		t.Fatalf("encoder out %s", encoder[len(encoder)-1])
 	}
 	for _, n := range notes {
@@ -186,7 +180,7 @@ func TestChunkEncoderArgsMatch(t *testing.T) {
 	useTempCache(t)
 	resetSeams()
 	defer resetSeams()
-	plan := timedPlan(t)
+	plan := longVisualPlan(t)
 	plan.Project.Render.Workers = 2
 	var encoders [][]string
 	observeRender = func(n renderNote) {
@@ -221,6 +215,7 @@ func TestChunkEncoderArgsMatch(t *testing.T) {
 
 func TestMergeChunkResults(t *testing.T) {
 	var a, b chunkResult
+	a.rendered, b.rendered = true, true
 	a.index, b.index = 0, 1
 	a.rendererStart, b.rendererStart = 0.1, 0.25
 	a.decoderStart, b.decoderStart = 0.25, 0.25
@@ -241,8 +236,9 @@ func TestMergeChunkResults(t *testing.T) {
 	b.write.add(9 * time.Millisecond)
 	a.files = map[string]string{"x": "/x"}
 	b.files = map[string]string{"y": "/y"}
+	hit := chunkResult{index: 2, files: map[string]string{"z": "/z"}}
 	var timings renderTimings
-	files := mergeChunkResults([]chunkResult{a, b}, &timings)
+	files := mergeChunkResults([]chunkResult{a, b, hit}, &timings)
 	if timings.EncodeSeconds != 3.4 {
 		t.Fatalf("encode=%v want max 3.4", timings.EncodeSeconds)
 	}
@@ -273,7 +269,7 @@ func TestMergeChunkResults(t *testing.T) {
 	if timings.DecodedPNGBytes != 30 || timings.ScreenshotBytes != 7 {
 		t.Fatalf("bytes png=%d shot=%d", timings.DecodedPNGBytes, timings.ScreenshotBytes)
 	}
-	if files["x"] != "/x" || files["y"] != "/y" {
+	if files["x"] != "/x" || files["y"] != "/y" || files["z"] != "/z" {
 		t.Fatal(files)
 	}
 }
@@ -465,7 +461,7 @@ func TestPreviewIntervalUsesChunks(t *testing.T) {
 	useTempCache(t)
 	resetSeams()
 	defer resetSeams()
-	plan := freezeTailPlan(t)
+	plan := longVisualPlan(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	plan.Project.Render.Workers = 1
@@ -473,6 +469,7 @@ func TestPreviewIntervalUsesChunks(t *testing.T) {
 		return Render(ctx, plan, filepath.Join(t.TempDir(), "full.mp4"), io.Discard)
 	})
 	resetSeams()
+	useTempCache(t)
 	plan.Project.Render.Workers = 2
 	var log bytes.Buffer
 	part := collectShots(t, func() error {
@@ -495,7 +492,7 @@ func longVisualPlan(t *testing.T) *Plan {
 	t.Helper()
 	p := writeFixture(t, Document{
 		Version:  1,
-		Duration: 2,
+		Duration: 4,
 		Render:   scene.RenderCfg{W: 160, H: 90, FPS: 12},
 		Timeline: []Event{{Scene: "explain"}},
 	})
@@ -505,6 +502,69 @@ func longVisualPlan(t *testing.T) *Plan {
 		t.Fatal(err)
 	}
 	return plan
+}
+
+func twoChunkCaptionPlan(t *testing.T) *Plan {
+	t.Helper()
+	p := writeFixture(t, Document{
+		Version:  1,
+		Duration: 4,
+		Render:   scene.RenderCfg{W: 160, H: 90, FPS: 10},
+		Timeline: []Event{{At: 0, Scene: "explain"}},
+		Captions: []Caption{
+			{Scene: "explain", Cue: "one", Clock: "presentation", At: 0, Duration: 2, Slot: "subtitle"},
+			{Scene: "explain", Cue: "two", Clock: "presentation", At: 2, Duration: 2, Slot: "subtitle"},
+		},
+	})
+	if err := os.WriteFile(filepath.Join(p.Dir, "scenes", "explain.json"), []byte(`{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"one","start":0,"end":1,"text":"ONE"},{"id":"two","start":1,"end":2,"text":"TWO"}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeVisual(t, p.Dir)
+	plan, err := Load(p, "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
+func codedLongPlan(t *testing.T) *Plan {
+	t.Helper()
+	p := writeFixture(t, Document{
+		Version:  1,
+		Duration: 6,
+		Render:   scene.RenderCfg{W: 320, H: 180, FPS: 12},
+		Sources:  map[string]Source{"cam": {File: "coded.mp4"}},
+		Tracks:   map[string]Track{"cam": {Source: "cam"}},
+		Timeline: []Event{{At: 0, Layout: "single", Slots: map[string]string{"center": "cam"}}},
+		Audio:    []Audio{{ID: "noise", File: "noise.wav", From: 0, To: 6}},
+	})
+	writeCodedMP4(t, filepath.Join(p.Dir, "coded.mp4"), 320, 180, 12, 6)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=sin(2*PI*(200+1800*t)*t):s=48000:d=6", "-ac", "2", "-c:a", "pcm_s16le", filepath.Join(p.Dir, "noise.wav")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.Dir, "full.html"), []byte(fullBleedTemplate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.Templates = map[string]scene.TemplateRef{"full": {Entry: "full.html"}}
+	ref := p.Presentations["show"]
+	ref.Template = "full"
+	p.Presentations["show"] = ref
+	plan, err := Load(p, "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
+func chunkStarts(p *Plan) []int {
+	chunks := planChunks(p, 0, p.Frames)
+	out := make([]int, len(chunks))
+	for i, ch := range chunks {
+		out[i] = ch.First
+	}
+	return out
 }
 
 func assertCodedExport(t *testing.T, path string, plan *Plan) {

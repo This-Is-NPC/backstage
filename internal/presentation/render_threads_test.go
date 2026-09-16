@@ -28,14 +28,15 @@ func resetSeams() {
 	observeRender = nil
 	observeFrame = nil
 	observeCommand = nil
+	observeChunkDecoders = nil
 	failAtFrame = nil
-	testChunks = nil
 	prepareOne = prepareTrack
+	publishCacheFile = publishCacheFileAtomic
+	linkCacheFile = linkOrCopy
 	workerNumCPU = budget.NumCPU
 	workerMemAvail = budget.ReadMemAvailable
 	workerRSSBytes = uint64(workerRSS)
 	workerCost = workerCPUCost
-	minChunkFramesFn = minChunkFrames
 }
 
 func TestResolveRenderThreadsDefaults(t *testing.T) {

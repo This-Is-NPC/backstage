@@ -112,18 +112,6 @@ func trackNeeded(tr CompiledTrack, first, end, fps int) bool {
 	return false
 }
 
-func trackIndexAt(tr CompiledTrack, first, fps int) int {
-	local := float64(first)/float64(fps) - tr.Start
-	if local < 0 {
-		return 0
-	}
-	index := int(math.Floor(local*float64(fps) + 1e-8))
-	if index < 0 {
-		return 0
-	}
-	return index
-}
-
 func atrimFilter(ss, es int64) string {
 	return fmt.Sprintf("atrim=start_sample=%d:end_sample=%d", ss, es)
 }

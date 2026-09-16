@@ -87,10 +87,13 @@ func TestWarmRenderDoesNotMutateCacheEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := map[string]string{}
-	for _, kind := range []string{"tracks", "audio"} {
+	for _, kind := range []string{"tracks", "audio", "segments"} {
 		ext := ".mkv"
 		if kind == "audio" {
 			ext = ".wav"
+		}
+		if kind == "segments" {
+			ext = ".mp4"
 		}
 		for _, name := range listExt(t, filepath.Join(root, kind), ext) {
 			before[filepath.Join(kind, name)] = fileSHA(t, filepath.Join(root, kind, name))

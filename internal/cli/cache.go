@@ -24,7 +24,7 @@ func cachePruneCmd() *cobra.Command {
 	var dryRun, asJSON bool
 	c := &cobra.Command{
 		Use:   "prune",
-		Short: "Remove unused presentation track and audio cache entries",
+		Short: "Remove unused presentation track, audio and segment cache entries",
 		RunE: func(c *cobra.Command, _ []string) error {
 			root, err := presentation.DefaultRenderCacheRoot()
 			if err != nil {

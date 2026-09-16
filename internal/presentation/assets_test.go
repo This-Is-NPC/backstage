@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/This-Is-NPC/backstage/internal/scene"
@@ -14,18 +15,23 @@ import (
 
 func TestAssetRelFromRequestRefusesOutsideRoute(t *testing.T) {
 	prefix := "/token/"
-	if rel, ok := assetRelFromRequest(prefix, "/token/asset/templates/a.css"); !ok || rel != "templates/a.css" {
-		t.Fatalf("ok path: %q %v", rel, ok)
+	if event, rel, ok := eventAssetRel(prefix, "/token/event-0/asset/templates/a.css"); !ok || event != 0 || rel != "templates/a.css" {
+		t.Fatalf("ok path: %d %q %v", event, rel, ok)
+	}
+	if event, rel, ok := eventAssetRel(prefix, "/token/event-2/asset/logo.png"); !ok || event != 2 || rel != "logo.png" {
+		t.Fatalf("event path: %d %q %v", event, rel, ok)
 	}
 	for _, url := range []string{
 		"/token/builtin/runtime.html",
+		"/token/asset/templates/a.css",
 		"/token/other/file.css",
-		"/token/asset/../secret.css",
-		"/token/asset/foo/../../secret.css",
-		"/token/foo/../asset/a.css",
+		"/token/event-0/asset/../secret.css",
+		"/token/event-0/asset/foo/../../secret.css",
+		"/token/event-0/foo/../asset/a.css",
+		"/token/event-x/asset/a.css",
 	} {
-		if rel, ok := assetRelFromRequest(prefix, url); ok {
-			t.Fatalf("%s remapped to %q", url, rel)
+		if _, _, ok := eventAssetRel(prefix, url); ok {
+			t.Fatalf("%s remapped", url)
 		}
 	}
 }
@@ -83,7 +89,7 @@ func TestInheritedTemplateAssetsOverHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u, _ := events[0]["url"].(string); u != "http://127.0.0.1/token/asset/templates/shared/index.html" {
+	if u, _ := events[0]["url"].(string); u != "http://127.0.0.1/token/event-0/asset/templates/shared/index.html" {
 		t.Fatalf("inherited template url: %s", u)
 	}
 
@@ -95,7 +101,7 @@ func TestInheritedTemplateAssetsOverHTTP(t *testing.T) {
 	base := srv.URL + prefix
 
 	for _, name := range []string{"templates/shared/index.html", "templates/shared/style.css", "templates/shared/logo.png"} {
-		resp, err := http.Get(base + "asset/" + name)
+		resp, err := http.Get(base + "event-0/asset/" + name)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -109,7 +115,7 @@ func TestInheritedTemplateAssetsOverHTTP(t *testing.T) {
 		}
 	}
 
-	resp, err := http.Get(base + "asset/../backstage.json")
+	resp, err := http.Get(base + "event-0/asset/../backstage.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +131,7 @@ func TestInheritedTemplateAssetsOverHTTP(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(ws, "linked")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	resp, err = http.Get(base + "asset/linked/secret.css")
+	resp, err = http.Get(base + "event-0/asset/linked/secret.css")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +186,61 @@ func TestPresentationInputsStayLeafRelativeWithoutExtends(t *testing.T) {
 		t.Fatalf("events: %d", len(events))
 	}
 	u, _ := events[0]["url"].(string)
-	if !strings.Contains(u, "asset/visual.html") {
+	if !strings.Contains(u, "event-0/asset/visual.html") {
 		t.Fatalf("visual url: %s", u)
+	}
+}
+
+func TestMissingAllowedAssetRecordedEmpty(t *testing.T) {
+	dir := t.TempDir()
+	p := &scene.Project{Dir: dir}
+	files := map[int]map[string]string{}
+	var mu sync.Mutex
+	h := servePresentation(p, "/t/", files, &mu)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/t/event-0/asset/later.css", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("css status %d", rec.Code)
+	}
+	path, ok := files[0]["later.css"]
+	if !ok || path != "" {
+		t.Fatalf("missing css: ok=%v path=%q files=%v", ok, path, files)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/t/event-0/asset/secret.bin", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("bin status %d", rec.Code)
+	}
+	if _, ok := files[0]["secret.bin"]; ok {
+		t.Fatal("disallowed extension entered the manifest")
+	}
+}
+
+func TestUnreadableAssetRecordedEmpty(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode 0 files")
+	}
+	dir := t.TempDir()
+	p := &scene.Project{Dir: dir}
+	path := filepath.Join(dir, "later.css")
+	if err := os.WriteFile(path, []byte("body{}"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if f, err := os.Open(path); err == nil {
+		_ = f.Close()
+		t.Skip("open succeeded despite mode 0")
+	}
+	files := map[int]map[string]string{}
+	var mu sync.Mutex
+	h := servePresentation(p, "/t/", files, &mu)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/t/event-0/asset/later.css", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status %d", rec.Code)
+	}
+	got, ok := files[0]["later.css"]
+	if !ok || got != "" {
+		t.Fatalf("unreadable css: ok=%v path=%q files=%v", ok, got, files)
 	}
 }

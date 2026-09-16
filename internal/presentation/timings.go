@@ -187,5 +187,5 @@ func (t renderTimings) progressLine(frames int) string {
 	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f concat=%.3f mux=%.3f workers=%d frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f cache-hits=%d cache-misses=%d\n",
 		t.TotalSeconds, t.RendererStartSeconds, t.DecoderStartSeconds, prep, audio, t.EncodeSeconds, concat, mux, t.Workers, frames,
 		t.Decode.P95Seconds, t.Transfer.P95Seconds, t.Draw.P95Seconds, t.Screenshot.P95Seconds, t.EncodeWrite.P95Seconds,
-		t.CacheHits.Tracks+t.CacheHits.Audio, t.CacheMisses.Tracks+t.CacheMisses.Audio)
+		t.CacheHits.Tracks+t.CacheHits.Audio+t.CacheHits.Segments, t.CacheMisses.Tracks+t.CacheMisses.Audio+t.CacheMisses.Segments)
 }

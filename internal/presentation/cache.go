@@ -40,8 +40,19 @@ var linkCacheFile = linkOrCopy
 var cacheFillExclusive bool
 
 type cacheCounts struct {
-	Tracks int `json:"tracks"`
-	Audio  int `json:"audio"`
+	Tracks   int `json:"tracks"`
+	Audio    int `json:"audio"`
+	Segments int `json:"segments"`
+}
+
+type cacheKind struct {
+	name, ext string
+}
+
+var cacheKinds = []cacheKind{
+	{"tracks", ".mkv"},
+	{"audio", ".wav"},
+	{"segments", ".mp4"},
 }
 
 type renderCache struct {
@@ -99,8 +110,9 @@ type memoFile struct {
 }
 
 type entryMeta struct {
-	LastUsed int64 `json:"last-used"`
-	Size     int64 `json:"size"`
+	LastUsed int64              `json:"last-used"`
+	Size     int64              `json:"size"`
+	Files    *map[string]string `json:"files,omitempty"`
 }
 
 func DefaultRenderCacheRoot() (string, error) {
@@ -119,14 +131,18 @@ func openRenderCache(ctx context.Context, progress io.Writer) (*renderCache, err
 	if err != nil {
 		return nil, err
 	}
-	for _, dir := range []string{root, filepath.Join(root, "tracks"), filepath.Join(root, "audio")} {
+	dirs := []string{root}
+	for _, k := range cacheKinds {
+		dirs = append(dirs, filepath.Join(root, k.name))
+	}
+	for _, dir := range dirs {
 		if err = os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 	}
-	ver, err := ffmpegVersion(ctx)
+	ver, err := toolVersion(ctx, "ffmpeg", "-version")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ffmpeg version: %w", err)
 	}
 	if progress == nil {
 		progress = io.Discard
@@ -148,10 +164,10 @@ func (c *renderCache) Close() error {
 	return err
 }
 
-func ffmpegVersion(ctx context.Context) (string, error) {
-	b, err := command(ctx, "ffmpeg", "-version").Output()
+func toolVersion(ctx context.Context, name, flag string) (string, error) {
+	b, err := command(ctx, name, flag).Output()
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg version: %w", err)
+		return "", err
 	}
 	return strings.SplitN(string(b), "\n", 2)[0], nil
 }
@@ -332,20 +348,31 @@ func entryMetaPath(dest string) string {
 	return strings.TrimSuffix(dest, filepath.Ext(dest)) + ".meta.json"
 }
 
-func cacheEntryValid(dest string) bool {
+func readEntryMeta(dest string) (m entryMeta, size int64, ok bool) {
 	fi, err := os.Stat(dest)
 	if err != nil || fi.Size() == 0 {
-		return false
+		return entryMeta{}, 0, false
 	}
+	size = fi.Size()
 	b, err := os.ReadFile(entryMetaPath(dest))
 	if err != nil {
+		return entryMeta{}, size, false
+	}
+	if json.Unmarshal(b, &m) != nil {
+		return entryMeta{}, size, false
+	}
+	return m, size, true
+}
+
+func cacheEntryValid(dest string) bool {
+	m, size, ok := readEntryMeta(dest)
+	if size == 0 {
+		return false
+	}
+	if !ok || m.Size <= 0 {
 		return true
 	}
-	var m entryMeta
-	if json.Unmarshal(b, &m) != nil || m.Size <= 0 {
-		return true
-	}
-	return m.Size == fi.Size()
+	return m.Size == size
 }
 
 func lockShared(path string) (*os.File, error) {
@@ -363,7 +390,10 @@ func lockShared(path string) (*os.File, error) {
 	return f, nil
 }
 
-func lockForFill(ctx context.Context, lockPath, dest string) (*os.File, bool, error) {
+func lockForFill(ctx context.Context, lockPath, dest string, valid func(string) bool) (*os.File, bool, error) {
+	if valid == nil {
+		valid = cacheEntryValid
+	}
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
 		return nil, false, err
 	}
@@ -372,7 +402,7 @@ func lockForFill(ctx context.Context, lockPath, dest string) (*os.File, bool, er
 		return nil, false, err
 	}
 	for {
-		if !cacheFillExclusive && cacheEntryValid(dest) {
+		if !cacheFillExclusive && valid(dest) {
 			if err = syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err == nil {
 				return f, true, nil
 			}
@@ -491,17 +521,36 @@ func linkOrCopy(src, dest string) error {
 	return closeErr
 }
 
-func writeMeta(dir, key string, size int64) error {
+func writeMeta(dir, key string, size int64, files *map[string]string) error {
 	path := filepath.Join(dir, key+".meta.json")
-	tmp := path + ".tmp"
-	b, err := json.Marshal(entryMeta{LastUsed: time.Now().UnixNano(), Size: size})
+	m := entryMeta{LastUsed: time.Now().UnixNano(), Size: size}
+	if files != nil {
+		cp := map[string]string{}
+		if *files != nil {
+			for rel, sum := range *files {
+				cp[rel] = sum
+			}
+		}
+		m.Files = &cp
+	} else if b, err := os.ReadFile(path); err == nil {
+		var old entryMeta
+		if json.Unmarshal(b, &old) == nil {
+			m.Files = old.Files
+		}
+	}
+	tmp := filepath.Join(dir, ".tmp-"+key+"-"+randomHex(8)+".meta.json")
+	b, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
 	if err = os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err = os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func (c *renderCache) note(hit bool, kind string) {
@@ -515,6 +564,10 @@ func (c *renderCache) note(hit bool, kind string) {
 		counts.Audio++
 		return
 	}
+	if kind == "segments" {
+		counts.Segments++
+		return
+	}
 	counts.Tracks++
 }
 
@@ -526,22 +579,38 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func (c *renderCache) computeWithoutCache(label, workPath string, cause error, fill func(string) error) error {
+func (c *renderCache) computeWithoutCache(label, workPath, src string, cause error, fill func(string) (map[string]string, error)) error {
 	c.warn(label + ": " + cause.Error() + "; recomputing without cache")
-	return fill(workPath)
+	if src != "" {
+		if fi, err := os.Stat(src); err == nil && fi.Size() > 0 {
+			_ = os.Remove(workPath)
+			if err := linkOrCopy(src, workPath); err != nil {
+				return err
+			}
+			if src != workPath && strings.HasPrefix(filepath.Base(src), ".tmp-") {
+				_ = os.Remove(src)
+			}
+			return nil
+		}
+	}
+	_, err := fill(workPath)
+	return err
 }
 
-func (c *renderCache) getOrFill(ctx context.Context, kind, key, destExt, workPath, label string, fill func(tmp string) error) (hit bool, err error) {
+func (c *renderCache) getOrFill(ctx context.Context, kind, key, destExt, workPath, label string, valid func(string) bool, fill func(tmp string) (map[string]string, error)) (hit bool, err error) {
+	if valid == nil {
+		valid = cacheEntryValid
+	}
 	dir := filepath.Join(c.root, kind)
 	dest := filepath.Join(dir, key+destExt)
 	lockPath := filepath.Join(dir, key+".lock")
-	use := func(lock *os.File, alreadyShared bool) error {
+	use := func(lock *os.File, alreadyShared bool, files *map[string]string) error {
 		_ = os.Remove(workPath)
 		if err := linkCacheFile(dest, workPath); err != nil {
 			return err
 		}
 		if fi, err := os.Stat(dest); err == nil {
-			_ = writeMeta(dir, key, fi.Size())
+			_ = writeMeta(dir, key, fi.Size(), files)
 		}
 		if alreadyShared {
 			c.mu.Lock()
@@ -551,11 +620,11 @@ func (c *renderCache) getOrFill(ctx context.Context, kind, key, destExt, workPat
 		}
 		return c.holdShared(lock)
 	}
-	if cacheEntryValid(dest) {
+	if valid(dest) {
 		lock, lockErr := lockShared(lockPath)
 		if lockErr == nil {
-			if cacheEntryValid(dest) {
-				if useErr := use(lock, true); useErr == nil {
+			if valid(dest) {
+				if useErr := use(lock, true, nil); useErr == nil {
 					return true, nil
 				} else {
 					lockErr = useErr
@@ -565,12 +634,21 @@ func (c *renderCache) getOrFill(ctx context.Context, kind, key, destExt, workPat
 			}
 			_ = lock.Close()
 		}
+		if fill == nil {
+			return false, nil
+		}
 		c.warn(label + ": " + lockErr.Error() + "; recomputing")
 	}
+	if fill == nil {
+		return false, nil
+	}
 	c.releaseLock(lockPath)
-	lock, shared, err := lockForFill(ctx, lockPath, dest)
+	lock, shared, err := lockForFill(ctx, lockPath, dest, valid)
 	if err != nil {
-		return false, c.computeWithoutCache(label, workPath, err, fill)
+		if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			return false, err
+		}
+		return false, c.computeWithoutCache(label, workPath, "", err, fill)
 	}
 	held := false
 	defer func() {
@@ -578,30 +656,34 @@ func (c *renderCache) getOrFill(ctx context.Context, kind, key, destExt, workPat
 			_ = lock.Close()
 		}
 	}()
-	if cacheEntryValid(dest) {
-		if err = use(lock, shared); err == nil {
+	if valid(dest) {
+		if err = use(lock, shared, nil); err == nil {
 			held = true
 			return true, nil
 		}
-		return false, c.computeWithoutCache(label, workPath, err, fill)
+		return false, c.computeWithoutCache(label, workPath, dest, err, fill)
 	}
 	if shared {
-		return false, c.computeWithoutCache(label, workPath, errors.New("cache entry invalid"), fill)
+		return false, c.computeWithoutCache(label, workPath, "", errors.New("cache entry invalid"), fill)
 	}
 	if _, statErr := os.Stat(dest); statErr == nil {
 		_ = os.Remove(dest)
 	}
 	tmp := filepath.Join(dir, ".tmp-"+key+"-"+randomHex(8)+destExt)
-	if err = fill(tmp); err != nil {
+	files, err := fill(tmp)
+	if err != nil {
 		_ = os.Remove(tmp)
 		return false, err
 	}
-	if err = publishCacheFile(tmp, dest); err != nil {
-		_ = os.Remove(tmp)
-		return false, c.computeWithoutCache(label, workPath, err, fill)
+	var metaFiles *map[string]string
+	if files != nil {
+		metaFiles = &files
 	}
-	if err = use(lock, false); err != nil {
-		return false, c.computeWithoutCache(label, workPath, err, fill)
+	if err = publishCacheFile(tmp, dest); err != nil {
+		return false, c.computeWithoutCache(label, workPath, tmp, err, fill)
+	}
+	if err = use(lock, false, metaFiles); err != nil {
+		return false, c.computeWithoutCache(label, workPath, dest, err, fill)
 	}
 	held = true
 	return false, nil
@@ -614,9 +696,9 @@ func (c *renderCache) prepareTrack(ctx context.Context, t CompiledTrack, work, i
 	}
 	key := trackCacheKey(src, t.Segments, fps, gop, c.ffmpeg)
 	workPath := filepath.Join(work, id+".mkv")
-	hit, err := c.getOrFill(ctx, "tracks", key, ".mkv", workPath, id, func(tmp string) error {
+	hit, err := c.getOrFill(ctx, "tracks", key, ".mkv", workPath, id, nil, func(tmp string) (map[string]string, error) {
 		_, _, err := prepareOne(ctx, t, filepath.Dir(tmp), strings.TrimSuffix(filepath.Base(tmp), ".mkv"), fps, threads, filterThreads, gop)
-		return err
+		return nil, err
 	})
 	if err != nil {
 		return "", nil, err
@@ -645,19 +727,19 @@ func (c *renderCache) mix(ctx context.Context, p *Plan, dir string) (string, []n
 	key := audioCacheKey(parts, num(p.Document.Duration), c.ffmpeg)
 	workPath := filepath.Join(dir, "mix.wav")
 	var partSecs []namedSeconds
-	hit, err := c.getOrFill(ctx, "audio", key, ".wav", workPath, "mix", func(tmp string) error {
+	hit, err := c.getOrFill(ctx, "audio", key, ".wav", workPath, "mix", nil, func(tmp string) (map[string]string, error) {
 		path, secs, err := p.mixDirect(ctx, dir)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		partSecs = secs
 		if filepath.Clean(path) == filepath.Clean(tmp) {
-			return nil
+			return nil, nil
 		}
 		if err = copyRegular(path, tmp, 0o600); err != nil {
-			return err
+			return nil, err
 		}
-		return os.Remove(path)
+		return nil, os.Remove(path)
 	})
 	if err != nil {
 		return "", nil, err

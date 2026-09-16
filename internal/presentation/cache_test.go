@@ -393,6 +393,65 @@ func TestPruneRemovesOrphansAndMemoStale(t *testing.T) {
 	}
 }
 
+func TestPruneRemovesWriteMetaTmp(t *testing.T) {
+	c := openTestCache(t)
+	dir := filepath.Join(c.root, "segments")
+	key := strings.Repeat("ab", 32)
+	tmp := filepath.Join(dir, ".tmp-"+key+"-deadbeef.meta.json")
+	if err := os.WriteFile(tmp, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, key+".lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	rep, err := PruneRenderCache(context.Background(), c.root, CachePruneOptions{MaxSize: DefaultCacheMaxSize})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join("segments", filepath.Base(tmp))
+	found := false
+	for _, o := range rep.Orphans {
+		if o == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("orphans %+v want %s", rep.Orphans, want)
+	}
+	if _, err = os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatal("meta tmp remains")
+	}
+}
+
+func TestLockForFillCanceledDoesNotRecompute(t *testing.T) {
+	c := openTestCache(t)
+	var log bytes.Buffer
+	c.progress = &log
+	key := strings.Repeat("11", 32)
+	lk, err := tryLockExclusive(filepath.Join(c.root, "tracks", key+".lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lk.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	filled := 0
+	_, err = c.getOrFill(ctx, "tracks", key, ".mkv", filepath.Join(t.TempDir(), "w.mkv"), "chunk-0", nil, func(string) (map[string]string, error) {
+		filled++
+		return nil, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+	if filled != 0 {
+		t.Fatal("fill ran")
+	}
+	if bytes.Contains(log.Bytes(), []byte("recomputing without cache")) {
+		t.Fatalf("log=%s", log.String())
+	}
+}
+
 func TestNewTakeGenerationChangesKey(t *testing.T) {
 	stubMedia(t)
 	p := recordingProject(t)

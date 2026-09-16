@@ -58,11 +58,11 @@ func PruneRenderCache(ctx context.Context, root string, opts CachePruneOptions) 
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return rep, err
 	}
-	for _, kind := range []string{"tracks", "audio"} {
-		if err := os.MkdirAll(filepath.Join(root, kind), 0o700); err != nil {
+	for _, kind := range cacheKinds {
+		if err := os.MkdirAll(filepath.Join(root, kind.name), 0o700); err != nil {
 			return rep, err
 		}
-		orphans, err := pruneOrphans(root, kind, opts.DryRun)
+		orphans, err := pruneOrphans(root, kind.name, opts.DryRun)
 		if err != nil {
 			return rep, err
 		}
@@ -176,27 +176,24 @@ func tmpNameKey(name string) (string, bool) {
 func listCacheEntries(root string) ([]pruneItem, int64, error) {
 	var items []pruneItem
 	var total int64
-	for _, kind := range []string{"tracks", "audio"} {
-		dir := filepath.Join(root, kind)
+	for _, kind := range cacheKinds {
+		dir := filepath.Join(root, kind.name)
 		ents, err := os.ReadDir(dir)
 		if err != nil {
 			return nil, 0, err
 		}
-		ext := ".mkv"
-		if kind == "audio" {
-			ext = ".wav"
-		}
+		ext := kind.ext
 		for _, e := range ents {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ext) || strings.HasPrefix(e.Name(), ".tmp-") {
 				continue
 			}
 			key := strings.TrimSuffix(e.Name(), ext)
 			it := pruneItem{
-				kind: kind, key: key,
+				kind: kind.name, key: key,
 				data: filepath.Join(dir, e.Name()),
 				meta: filepath.Join(dir, key+".meta.json"),
 				lock: filepath.Join(dir, key+".lock"),
-				rel:  filepath.Join(kind, e.Name()),
+				rel:  filepath.Join(kind.name, e.Name()),
 			}
 			fi, err := os.Stat(it.data)
 			if err != nil {
