@@ -158,7 +158,22 @@ wall-clock timers or network resources.
 
 Slots are axis-aligned rectangles. Borders, rounded corners, backgrounds and
 shadows move with screens. `data-fit="cover"` crops; default `contain` preserves
-the screen. Arbitrary video-slot masks and 3D transforms are unsupported.
+the screen; `fill` stretches. On both the screenshot path and the overlay
+path the track image is placed in an integer-pixel rectangle inside the
+slot (`contain`/`cover`/`fill`; blend and morph still use `object-fit`). A still chunk with constant slot geometry (including CSS `%`),
+equal borders and radii whose computed values are a single `px` token,
+and no CSS/SMIL/`canvas` animation can encode from
+two layer stills plus the prepared tracks (`>> chunk-N layered`). Percent
+radii, elliptical two-value radii, and changing `scrollTop`/`scrollLeft` or form
+`.value` stay on the screenshot path. The probe
+must see the same DOM hash at every frame of the chunk (the hash includes
+scroll offsets and form values). Templates that change pixels through shadow
+DOM, nested iframes, CSSOM/`adoptedStyleSheets`, JS timers, their own
+`requestAnimationFrame`, WebGL, `object`/`embed`, `background-image` on
+`::before`/`::after`, or `mask-image`/`border-image` are unsupported on that
+path. Arbitrary video-slot masks and 3D transforms are
+unsupported. `.gif`, `.apng` and `.webp` in the template keep the screenshot
+path.
 JSON paths are project-relative; HTML/CSS resources are relative to their files.
 Files a template fetches through the event prefix enter that chunk's cache
 manifest; changing those bytes re-renders the events that loaded them.
@@ -177,7 +192,8 @@ applies only to presentation render; `0` uses the CPU defaults. Automatic
 `render.workers` (`0`) runs one Chromium per worker from CPU, memory and the
 number of segment-cache misses. The encoder shares the machine with Chromium during
 the frame loop; `encode-seconds` overlaps that loop and is not the
-bottleneck. Screenshot and draw are the loop cost. A second render reuses
+bottleneck. Screenshot and draw are the loop cost unless a chunk is
+`layered`. A second render reuses
 cached tracks, mix and encoded chunks when the footage and the compiled plan
 match (`>> chunk-N cached`; `backstage cache prune` reclaims that cache,
 default 10G). Preview renders

@@ -41,11 +41,31 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    decoder when `index == d.frame` (already on that frame),
    `index == d.frame+1` (the next frame after the last `get`), or `d.done`
    (hold after EOF). Otherwise it closes and reopens at `index` with input
-   `-ss`. The frame loop only calls `decoders[id].get`. Each miss still runs
-   one libx264 encoder with
-   `-video_track_timescale <fps>`. Chromium uses `--disable-partial-raster`.
-   Progress is `>> chunk-N running|ok|failed|interrupted` and
+   `-ss`. The frame loop only calls `decoders[id].get`. The frames seam skips
+   the geometry probe. A chunk that is not a transition, is at scale 1, keeps
+   constant slot geometry (each of x,y,w,h equal across the chunk within
+   1e-3; fractional `%` layouts are eligible), equal borders and equal corner
+   radii whose computed values are a single `px` token (percent and two-value
+   elliptical radii stay on the screenshot path), no active CSS/Web Animation, SMIL,
+   `canvas`, `video`, or `.gif`/`.apng`/`.webp`, the same DOM hash at every
+   probed frame, and the same caption set, is
+   encoded as `layered`: probe every frame, capture a below still on the opaque
+   host and an above still with a transparent host once, and run one FFmpeg
+   graph (input `-ss` at `(S-0.5)/fps` plus relative `trim=start_frame=0`,
+   scale `flags=area`, rounded-rect∩image mask, overlay `eof_action=repeat`,
+   libx264 tail, `-frames:v`). The track image is an integer-pixel rectangle
+   inside the snapped slot on both paths. Track width/height and packet count are
+   measured once per track path per render and shared across workers. Other misses
+   stay on the screenshot loop. The DOM hash includes `scrollTop`/`scrollLeft`,
+   form-control `.value`, checkbox `checked`/`indeterminate` and `select`
+   `selectedOptions` indices for every `querySelectorAll('*')` node, plus the
+   `activeElement` path. `getSelection()` and caret offset stay unseen.
+   `data-fit` is `contain`, `cover` or `fill`; any other value is an initialize
+   error that names the slot and the value. Progress is
+   `>> chunk-N running|layered|ok|failed|interrupted` and
    `>> render k/n frames` summing frames written across misses.
+   Layered misses do not open PNG track decoders. Layer stills live under the
+   render work dir (`.backstage-render-*`).
 6. Concat demuxer `-c copy` when there is more than one chunk, then one AAC
    mux, facts, and rename. First error or Ctrl-C cancels every worker
    (all-or-nothing). The failing chunk prints `failed` and the error is
@@ -57,17 +77,23 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 8. Companion facts include configuration, input hashes and render `timings`.
    Histogram p95 is from the merged missed-chunk counts. `renderer-start-seconds`
    sums worker `NewRenderer` times; `decoder-start-seconds` sums decoder opens
-   on misses; `encode-seconds` is the max missed-chunk encoder Start to Wait.
-   `chunk-seconds` lists misses only. Screenshot and draw dominate the loop
-   (about 4.3 s and 3.7 s of a ~10 s `complete` render). Facts `inputs` are
-   the union of plan entries, files loaded while rendering misses, and
-   manifests of hits for events in this interval.
+   on misses; `encode-seconds` is the max frames-path encoder Start to Wait
+   (image2pipe chunks only). `composite-seconds` sums layered overlay encodes
+   and is not copied into `encode-seconds`. A layered miss adds two screenshot
+   histogram samples (below and above). `chunk-seconds` lists misses only.
+   Screenshot and draw dominate the screenshot loop; `probe` is the Go
+   round-trip of `evalValue("probe")` (same histogram as decode/draw, not the
+   JS `performance.now` inside the page); `layered-chunks` counts misses that
+   took the overlay path.
+   Facts `inputs` are the union of plan entries, files loaded while rendering
+   misses, and manifests of hits for events in this interval.
 
 `model.go` owns validation and timing, `media.go` owns FFmpeg preparation,
 `cache.go` owns the track and audio cache (`getOrFill` takes a validity
 func and stores the fill's hashed `files` map as-is), `segments.go` owns
 segment keys, manifest hashing and validity, `render.go` owns Chromium,
-`chunks.go` and `workers.go` own export, and `preview.go` owns preview and
+`layers.go` owns probe eligibility and the overlay graph, `chunks.go` and
+`workers.go` own export, and `preview.go` owns preview and
 template initialization. The asset server serves the host runtime at
 `/TOKEN/builtin/runtime.html` and each event at `/TOKEN/event-<i>/builtin/`
 and `/TOKEN/event-<i>/asset/`. `ConfinedPath`, the extension allowlist and CSP

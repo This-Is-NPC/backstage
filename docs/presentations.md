@@ -177,16 +177,27 @@ export also writes a `timings` object beside `render`: phase seconds
 `audio-part-seconds`, `encode-seconds`, `concat-seconds`, `mux-seconds`, `metadata-seconds`,
 `total-seconds`), `workers`, per-chunk wall times (`chunk-seconds`), per-frame
 stages (`decode`, `transfer`, `draw`, `screenshot`,
-`encode-write`) with total, mean, max, p95 and frame count, and intermediate
+`encode-write`, `probe`) with total, mean, max, p95 and frame count
+(`probe` is the Go round-trip of the geometry check, like decode),
+`layered-chunks`, `composite-seconds`, and intermediate
 byte sizes (`track-bytes`, `audio-part-bytes`, `mix-wav-bytes`,
 `video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`)
 and cache counters (`cache-hits`, `cache-misses`, each `{tracks, audio, segments}`).
 Absent phases and missing files are omitted. `renderer-start-seconds` is the
 sum of Chromium startups across the worker pool (one browser per worker);
 `decoder-start-seconds` sums decoder opens on cache misses; `encode-seconds` is
-the longest missed-chunk encoder Start to Wait. `concat-seconds` is omitted when there is
+the longest frames-path encoder Start to Wait (image2pipe chunks). Layered
+overlay time is `composite-seconds` only. `concat-seconds` is omitted when there is
 only one chunk. Progress ends with
-`>> render timings: ...` including `decoder-start=`, `workers=` and `concat=`.
+`>> render timings: ...` including `decoder-start=`, `workers=`, `concat=`,
+`probe-p95=`, `composite=` and `layered=`.
+A still chunk may print `>> chunk-N layered` after `running` and encode from
+two layer stills plus the prepared tracks instead of a screenshot per frame.
+Layered eligibility needs constant slot geometry (integer or fractional)
+and radii whose computed value is a single `px` token; percent radii, scroll that changes per frame, and blend/transition
+chunks stay on the screenshot path. On both paths the track image sits in an
+integer-pixel rectangle inside the slot (`contain`/`cover`/`fill`; blend and
+morph still use `object-fit`).
 `decoder-start-seconds`
 covers opening the decoders; when a preview starts after frame 0 it also
 includes the first-frame peek and any packet count plus reopen. Facts `inputs`
@@ -199,12 +210,14 @@ transition chunk of the next event. A global parameter change invalidates every
 chunk. Preview uses the same cache: `first`, `end` and `scale` are part of the
 key, so a scale-1 preview that covers whole chunks of a prior full export is a
 hit. Source and template input hashes stay the same;
-`builtin:runtime.html` changes only because the runtime adds `drawTimed`.
+`builtin:runtime.html` changes when the host runtime changes.
 Measured draw includes what `draw` itself waits for — image load, host fonts,
 and a compositor paint — not pure canvas cost. `encode-seconds` overlaps that
 chunk's Chromium frame loop; it does not mean the encoder is the bottleneck. On a typical
 `complete` render the loop itself spends about 4.3 s in screenshot and
-3.7 s in draw of about 10 s total.
+3.7 s in draw of about 10 s total. Layered chunks skip that per-frame loop after
+a geometry probe; `composite-seconds` is the FFmpeg overlay encode and is not
+included in `encode-seconds`. A layered chunk records two screenshot samples.
 
 Visual reproducibility assumes fixed inputs, browser, fonts and tool versions;
 MP4 byte identity across environments is not promised. Prepared FFV1 tracks use
