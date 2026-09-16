@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/budget"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
 
@@ -25,7 +26,16 @@ func resetSeams() {
 	ffv1GOP = 1
 	screenshotObserver = nil
 	observeRender = nil
+	observeFrame = nil
+	observeCommand = nil
+	failAtFrame = nil
+	testChunks = nil
 	prepareOne = prepareTrack
+	workerNumCPU = budget.NumCPU
+	workerMemAvail = budget.ReadMemAvailable
+	workerRSSBytes = uint64(workerRSS)
+	workerCost = workerCPUCost
+	minChunkFramesFn = minChunkFrames
 }
 
 func TestResolveRenderThreadsDefaults(t *testing.T) {
@@ -506,7 +516,15 @@ func samePixels(a, b []byte) error {
 	for y := ia.Bounds().Min.Y; y < ia.Bounds().Max.Y; y++ {
 		for x := ia.Bounds().Min.X; x < ia.Bounds().Max.X; x++ {
 			if ia.At(x, y) != ib.At(x, y) {
-				return fmt.Errorf("pixel %d,%d", x, y)
+				n := 0
+				for y2 := ia.Bounds().Min.Y; y2 < ia.Bounds().Max.Y; y2++ {
+					for x2 := ia.Bounds().Min.X; x2 < ia.Bounds().Max.X; x2++ {
+						if ia.At(x2, y2) != ib.At(x2, y2) {
+							n++
+						}
+					}
+				}
+				return fmt.Errorf("pixel %d,%d (%d differ)", x, y, n)
 			}
 		}
 	}

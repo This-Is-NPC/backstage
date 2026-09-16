@@ -56,6 +56,9 @@ func (p *Project) ValidateConfig() error {
 	if p.Render.Threads.Prepare < 0 || p.Render.Threads.Filter < 0 || p.Render.Threads.Encode < 0 {
 		return fmt.Errorf("render.threads values must not be negative")
 	}
+	if p.Render.Workers < 0 {
+		return fmt.Errorf("render.workers must not be negative")
+	}
 	return p.validateStateGroups()
 }
 

@@ -1,23 +1,16 @@
 package presentation
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +48,11 @@ func dependencies() (string, error) {
 	}
 	return "", fmt.Errorf("install Chromium to render presentations")
 }
+
+func chromiumAllocatorOptions(browser string) []chromedp.ExecAllocatorOption {
+	return append(chromedp.DefaultExecAllocatorOptions[:], chromedp.ExecPath(browser), chromedp.Flag("disable-dev-shm-usage", true), chromedp.Flag("force-color-profile", "srgb"), chromedp.Flag("disable-partial-raster", true))
+}
+
 func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 	browser, err := dependencies()
 	if err != nil {
@@ -81,7 +79,7 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 	if err != nil {
 		return fail(err)
 	}
-	alloc, stop := chromedp.NewExecAllocator(ctx, append(chromedp.DefaultExecAllocatorOptions[:], chromedp.ExecPath(browser), chromedp.Flag("disable-dev-shm-usage", true), chromedp.Flag("force-color-profile", "srgb"))...)
+	alloc, stop := chromedp.NewExecAllocator(ctx, chromiumAllocatorOptions(browser)...)
 	r.stopBrowser = stop
 	r.ctx, r.cancel = chromedp.NewContext(alloc)
 	if err = chromedp.Run(r.ctx, emulation.SetDeviceMetricsOverride(int64(p.Width), int64(p.Height), 1, false), chromedp.Navigate(r.url+"builtin/runtime.html")); err != nil {
@@ -126,6 +124,16 @@ func (r *Renderer) Close() {
 	}
 }
 
+func (r *Renderer) loadedFiles() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]string{}
+	for rel, path := range r.files {
+		out[rel] = path
+	}
+	return out
+}
+
 type frameTimes struct {
 	transfer, draw, screenshot time.Duration
 }
@@ -139,10 +147,13 @@ func encodeImages(frames map[string][]byte) map[string]string {
 }
 
 func (r *Renderer) captureScreenshot() ([]byte, error) {
+	observeMu.Lock()
 	optimize := screenshotOptimize
-	if screenshotObserver != nil {
-		screenshotObserver(optimize)
+	obs := screenshotObserver
+	if obs != nil {
+		obs(optimize)
 	}
+	observeMu.Unlock()
 	var shot []byte
 	err := chromedp.Run(r.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		params := page.CaptureScreenshot().WithFromSurface(true).WithFormat(page.CaptureScreenshotFormatPng).WithOptimizeForSpeed(optimize)
@@ -163,7 +174,7 @@ func (r *Renderer) frame(t float64, frames map[string][]byte) ([]byte, error) {
 	return r.captureScreenshot()
 }
 
-// frameTimed calls drawTimed. Measured draw includes image load and the final requestAnimationFrame.
+// frameTimed calls drawTimed. Measured draw includes image load, host fonts, and a compositor paint.
 func (r *Renderer) frameTimed(t float64, frames map[string][]byte) ([]byte, frameTimes, error) {
 	var st frameTimes
 	t0 := time.Now()
@@ -200,259 +211,4 @@ func Check(ctx context.Context, p *Plan) error {
 		}
 	}
 	return nil
-}
-
-func Render(ctx context.Context, p *Plan, out string, progress io.Writer) error {
-	return renderRange(ctx, p, out, progress, fullRenderOpts(p))
-}
-
-func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, opts renderOpts) (err error) {
-	if opts.Scale == 0 {
-		opts.Scale = 1
-	}
-	if opts.End <= opts.First {
-		return fmt.Errorf("interval has no frames")
-	}
-	started := time.Now()
-	if progress == nil {
-		progress = io.Discard
-	}
-	progress = &syncWriter{w: progress}
-	if _, err = dependencies(); err != nil {
-		return err
-	}
-	if err = os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		return err
-	}
-	work, err := os.MkdirTemp(filepath.Dir(out), ".backstage-render-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(work)
-	var timings renderTimings
-	fmt.Fprintln(progress, ">> validate HTML templates")
-	rendererAt := time.Now()
-	r, err := NewRenderer(ctx, p)
-	if err != nil {
-		return err
-	}
-	r.scale = opts.Scale
-	timings.RendererStartSeconds = roundSec(time.Since(rendererAt))
-	defer r.Close()
-	decoders := map[string]*decoder{}
-	defer func() {
-		for _, d := range decoders {
-			d.close()
-		}
-	}()
-	cache, err := openRenderCache(ctx, progress)
-	if err != nil {
-		return err
-	}
-	defer cache.Close()
-	trackPaths, prepare, err := prepareTracks(ctx, p, work, progress, cache)
-	if err != nil {
-		return err
-	}
-	if len(prepare) > 0 {
-		timings.PrepareTrackSeconds = prepare
-	}
-	decoderAt := time.Now()
-	for _, id := range sortedKeys(p.Tracks) {
-		tr := p.Tracks[id]
-		if !trackNeeded(tr, opts.First, opts.End, p.FPS) {
-			continue
-		}
-		index := trackIndexAt(tr, opts.First, p.FPS)
-		d, e := openTrackDecoder(ctx, trackPaths[id], index, p.FPS)
-		if e != nil {
-			return e
-		}
-		decoders[id] = d
-	}
-	timings.DecoderStartSeconds = roundSec(time.Since(decoderAt))
-	fmt.Fprintln(progress, ">> prepare audio")
-	mixAt := time.Now()
-	audio, parts, err := p.mix(ctx, work, cache)
-	if err != nil {
-		return err
-	}
-	if audio != "" {
-		sec := roundSec(time.Since(mixAt))
-		timings.AudioSeconds = &sec
-		if len(parts) > 0 {
-			timings.AudioPartSeconds = parts
-		}
-	}
-	video := filepath.Join(work, "video.mp4")
-	_, _, encodeThreads := resolveRenderThreads(planThreadCfg(p), len(p.Tracks))
-	encArgs := []string{"-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-"}
-	if opts.Scale != 1 {
-		encArgs = append(encArgs, "-vf", draftCropFilter())
-	}
-	encArgs = append(encArgs, "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", strconv.Itoa(encodeThreads), video)
-	noteRender(renderNote{EncodeThreads: encodeThreads, EncoderArgs: append([]string(nil), encArgs...)})
-	encoder := command(ctx, "ffmpeg", encArgs...)
-	var stderr bytes.Buffer
-	encoder.Stderr = &stderr
-	pipe, err := encoder.StdinPipe()
-	if err != nil {
-		return err
-	}
-	// encode-seconds is Start to Wait and overlaps the Chromium frame loop.
-	encodeAt := time.Now()
-	if err = encoder.Start(); err != nil {
-		return err
-	}
-	done := false
-	defer func() {
-		_ = pipe.Close()
-		if !done {
-			_ = encoder.Process.Kill()
-			_ = encoder.Wait()
-		}
-	}()
-	var decodeH, transferH, drawH, shotH, writeH msHist
-	var decodedPNG, screenshotBytes int64
-	nFrames := opts.End - opts.First
-	for n := opts.First; n < opts.End; n++ {
-		if err = ctx.Err(); err != nil {
-			return err
-		}
-		t := float64(n) / float64(p.FPS)
-		frames := map[string][]byte{}
-		decodeAt := time.Now()
-		for _, id := range sortedKeys(p.Tracks) {
-			tr := p.Tracks[id]
-			if !trackVisible(tr, n, p.FPS) {
-				continue
-			}
-			index := trackFrame(tr, n, p.FPS)
-			b, e := decoders[id].get(index)
-			if e != nil {
-				return e
-			}
-			frames[id] = b
-			decodedPNG += int64(len(b))
-		}
-		decodeH.add(time.Since(decodeAt))
-		shot, st, e := r.frameTimed(t, frames)
-		if e != nil {
-			return fmt.Errorf("frame %d: %w", n, e)
-		}
-		transferH.add(st.transfer)
-		drawH.add(st.draw)
-		shotH.add(st.screenshot)
-		screenshotBytes += int64(len(shot))
-		if observeFrame != nil {
-			observeFrame(n, t, shot)
-		}
-		writeAt := time.Now()
-		if _, e = pipe.Write(shot); e != nil {
-			return e
-		}
-		writeH.add(time.Since(writeAt))
-		k := n - opts.First
-		if k%p.FPS == 0 {
-			fmt.Fprintf(progress, ">> render %d/%d frames\n", k, nFrames)
-		}
-	}
-	_ = pipe.Close()
-	err = encoder.Wait()
-	done = true
-	if err != nil {
-		return fmt.Errorf("encode: %w: %s", err, stderr.String())
-	}
-	timings.EncodeSeconds = roundSec(time.Since(encodeAt))
-	final := video
-	if audio != "" {
-		final = filepath.Join(work, "final.mp4")
-		muxAt := time.Now()
-		var muxArgs []string
-		if opts.First == 0 && opts.End == p.Frames {
-			muxArgs = []string{"-v", "error", "-y", "-i", video, "-i", audio, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", num(p.Document.Duration), "-movflags", "+faststart", final}
-		} else {
-			ss, es := audioSamples(opts.First, opts.End, p.FPS)
-			muxArgs = []string{"-v", "error", "-y", "-i", video, "-i", audio, "-filter_complex", "[1:a]" + muxAudioFilter(ss, es) + "[a]", "-map", "0:v:0", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-t", num(intervalDuration(opts.First, opts.End, p.FPS)), "-movflags", "+faststart", final}
-		}
-		noteRender(renderNote{MuxArgs: append([]string(nil), muxArgs...)})
-		if err = run(ctx, "ffmpeg", muxArgs...); err != nil {
-			return err
-		}
-		sec := roundSec(time.Since(muxAt))
-		timings.MuxSeconds = &sec
-	}
-	timings.Decode = decodeH.snapshot()
-	timings.Transfer = transferH.snapshot()
-	timings.Draw = drawH.snapshot()
-	timings.Screenshot = shotH.snapshot()
-	timings.EncodeWrite = writeH.snapshot()
-	timings.DecodedPNGBytes = decodedPNG
-	timings.ScreenshotBytes = screenshotBytes
-	timings.CacheHits = cache.hits
-	timings.CacheMisses = cache.misses
-	collectWorkBytes(&timings, work, p, trackPaths)
-	if err = r.metadata(work, &timings, started); err != nil {
-		return err
-	}
-	fmt.Fprint(progress, timings.progressLine(nFrames))
-	if err = os.Rename(final, out); err != nil {
-		return err
-	}
-	return os.Rename(filepath.Join(work, "facts.json"), strings.TrimSuffix(out, filepath.Ext(out))+".facts.json")
-}
-func (r *Renderer) metadata(dir string, timings *renderTimings, started time.Time) error {
-	metaAt := time.Now()
-	inputs := map[string]string{}
-	for rel, path := range r.plan.Inputs {
-		inputs[rel] = path
-	}
-	r.mu.Lock()
-	for rel, path := range r.files {
-		inputs[rel] = path
-	}
-	r.mu.Unlock()
-	hashes := map[string]string{}
-	for rel, path := range inputs {
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		h := sha256.New()
-		_, err = io.Copy(h, f)
-		_ = f.Close()
-		if err != nil {
-			return err
-		}
-		hashes[rel] = hex.EncodeToString(h.Sum(nil))
-	}
-	for _, name := range []string{"runtime.html", "template.html", "visual.html"} {
-		b, err := web.ReadFile("web/" + name)
-		if err != nil {
-			return err
-		}
-		h := sha256.Sum256(b)
-		hashes["builtin:"+name] = hex.EncodeToString(h[:])
-	}
-	versions := map[string]string{}
-	browser, _ := dependencies()
-	for _, name := range []string{browser, "ffmpeg", "ffprobe"} {
-		flag := "-version"
-		if name == browser {
-			flag = "--version"
-		}
-		b, err := command(r.ctx, name, flag).Output()
-		if err != nil {
-			return err
-		}
-		versions[filepath.Base(name)] = strings.SplitN(string(b), "\n", 2)[0]
-	}
-	timings.MetadataSeconds = roundSec(time.Since(metaAt))
-	timings.TotalSeconds = roundSec(time.Since(started))
-	data := map[string]any{"version": 1, "presentation": r.plan.Name, "configuration": r.plan.Document, "render": map[string]int{"w": r.plan.Width, "h": r.plan.Height, "fps": r.plan.FPS, "frames": r.plan.Frames}, "inputs": hashes, "tools": versions, "timings": timings}
-	b, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "facts.json"), b, 0o644)
 }

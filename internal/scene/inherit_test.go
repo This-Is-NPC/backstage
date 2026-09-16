@@ -511,6 +511,48 @@ func TestHighRenderThreadsAccepted(t *testing.T) {
 	}
 }
 
+func TestNegativeRenderWorkersRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t"}]}},
+		"render": {"workers": -1}
+	}`)
+	if _, err := LoadProject(filepath.Join(dir, "backstage.json")); err == nil {
+		t.Fatal("negative render.workers should fail")
+	}
+}
+
+func TestRenderWorkersMergeFieldByField(t *testing.T) {
+	ws := t.TempDir()
+	leaf := filepath.Join(ws, "leaf")
+	writeFile(t, filepath.Join(ws, "backstage.json"), `{
+		"layouts": {"solo": {"panes": [{"name": "t"}]}},
+		"render": {"workers": 4, "threads": {"encode": 8}}
+	}`)
+	writeFile(t, filepath.Join(leaf, "backstage.json"), `{
+		"extends": "../backstage.json",
+		"render": {"workers": 2}
+	}`)
+	p, err := LoadProject(filepath.Join(leaf, "backstage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Render.Workers != 2 || p.Render.Threads.Encode != 8 {
+		t.Fatalf("workers merge replaced threads: %+v", p.Render)
+	}
+	writeFile(t, filepath.Join(leaf, "backstage.json"), `{
+		"extends": "../backstage.json",
+		"render": {"workers": 0}
+	}`)
+	p, err = LoadProject(filepath.Join(leaf, "backstage.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Render.Workers != 0 || p.Render.Threads.Encode != 8 {
+		t.Fatalf("workers 0 should clear and keep encode: %+v", p.Render)
+	}
+}
+
 func TestNegativeRenderThreadsRejected(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "backstage.json"), `{

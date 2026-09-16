@@ -183,10 +183,13 @@ type RenderThreads struct {
 
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the
 // monitor's native resolution; zero fps falls back to record.fps.
+// Workers is parallel presentation render chunks; zero or omitted means the
+// renderer picks a default. produce ignores Workers and Threads.
 type RenderCfg struct {
 	W       int           `json:"w,omitempty"`
 	H       int           `json:"h,omitempty"`
 	FPS     int           `json:"fps,omitempty"`
+	Workers int           `json:"workers,omitempty"`
 	Threads RenderThreads `json:"threads,omitempty"`
 }
 

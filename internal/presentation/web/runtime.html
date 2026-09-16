@@ -16,7 +16,7 @@ window.draw=async function(state){const t=state.time;let i=0;while(i+1<config.ev
  if(blend&&e.transition.effect==='morph'){const a=old||now,b=now||old;if(a&&b){const g={fit:b.fit,border:b.border,background:b.background,shadow:b.shadow};for(const k of ['x','y','w','h','radius'])g[k]=a[k]+(b[k]-a[k])*progress;put(g,old&&now?1:now?progress:1-progress)}}else if(blend){put(old,1-progress);put(now,progress)}else put(now,1);
  }
  for(const [idx,opacity] of (blend?[[i-1,1-progress],[i,progress]]:[[i,1]])){const groups=new Map();for(const c of config.text)if(t>=c.at&&t<c.end){if(!groups.has(c.slot))groups.set(c.slot,[]);groups.get(c.slot).push(c.text)}for(const [slot,texts] of groups){const el=find(frames[idx],'data-caption-slot',slot);if(!el)continue;const r=el.getBoundingClientRect(),s=frames[idx].contentWindow.getComputedStyle(el),out=document.createElement('div');out.className='caption';out.textContent=texts.join('\n');Object.assign(out.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px',font:s.font,color:s.color,textAlign:s.textAlign,lineHeight:s.lineHeight,background:s.backgroundColor,opacity:String(opacity)});document.body.append(out)}}
- await Promise.all([...document.querySelectorAll('.screen img')].map(waitImage));await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+ await Promise.all([...document.querySelectorAll('.screen img')].map(waitImage));await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 };
 window.drawTimed = async (state) => { const t0 = performance.now(); await window.draw(state); return performance.now() - t0; };
 </script></body></html>

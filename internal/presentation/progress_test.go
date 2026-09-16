@@ -15,6 +15,7 @@ func TestRenderProgressIsRaceFree(t *testing.T) {
 	if len(plan.Tracks) < 2 {
 		t.Fatal("need two tracks")
 	}
+	plan.Project.Render.Workers = 2
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var buf bytes.Buffer

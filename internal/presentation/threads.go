@@ -7,10 +7,7 @@ import (
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
 
-// Test-only seams. Production never exposes a config or flag for the old path.
-// prepareSerial, screenshotOptimize and ffv1GOP are read-only from workers.
-// observeRender is nil in production; tests set it. noteRender calls it under
-// observeMu from the render goroutine after workers finish.
+// Test-only seams. observeRender is nil in production; noteRender calls it under observeMu.
 var (
 	prepareSerial      = false
 	screenshotOptimize = true
@@ -27,6 +24,7 @@ type renderNote struct {
 	PreparedPaths map[string]string
 	EncoderArgs   []string
 	MuxArgs       []string
+	ConcatArgs    []string
 	EncodeThreads int
 }
 

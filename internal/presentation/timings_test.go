@@ -46,6 +46,24 @@ func TestHistogramMeanAndP95(t *testing.T) {
 	}
 }
 
+func TestHistogramMergeSumsCounts(t *testing.T) {
+	var a, b msHist
+	a.add(5 * time.Millisecond)
+	a.add(5 * time.Millisecond)
+	b.add(10 * time.Millisecond)
+	a.merge(b)
+	got := a.snapshot()
+	if got.Frames != 3 {
+		t.Fatalf("frames=%d", got.Frames)
+	}
+	if got.MaxSeconds != 0.01 {
+		t.Fatalf("max=%v", got.MaxSeconds)
+	}
+	if got.Seconds != 0.02 {
+		t.Fatalf("seconds=%v", got.Seconds)
+	}
+}
+
 func TestHistogramOverflowReportsMax(t *testing.T) {
 	var h msHist
 	h.add(1500 * time.Millisecond)
@@ -154,13 +172,20 @@ func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 	for _, key := range []string{
 		"renderer-start-seconds", "decoder-start-seconds", "prepare-track-seconds", "audio-seconds", "audio-part-seconds",
 		"decode", "transfer", "draw", "screenshot", "encode-write",
-		"encode-seconds", "mux-seconds", "metadata-seconds", "total-seconds",
+		"encode-seconds", "mux-seconds", "metadata-seconds", "total-seconds", "workers",
 		"track-bytes", "audio-part-bytes", "mix-wav-bytes", "video-mp4-bytes", "final-mp4-bytes",
 		"decoded-png-bytes", "screenshot-bytes", "cache-hits", "cache-misses",
 	} {
 		if _, ok := timings[key]; !ok {
 			t.Fatalf("timings missing %s", key)
 		}
+	}
+	if int(asFloat(t, timings["workers"], "workers")) < 1 {
+		t.Fatal("workers")
+	}
+	chunks, ok := timings["chunk-seconds"].([]any)
+	if !ok || len(chunks) < 1 {
+		t.Fatalf("chunk-seconds: %T %v", timings["chunk-seconds"], timings["chunk-seconds"])
 	}
 	if asFloat(t, timings["final-mp4-bytes"], "final-mp4-bytes") <= 0 {
 		t.Fatal("final-mp4-bytes")

@@ -44,12 +44,14 @@ type renderTimings struct {
 	Draw                 framePhase         `json:"draw"`
 	Screenshot           framePhase         `json:"screenshot"`
 	EncodeWrite          framePhase         `json:"encode-write"`
-	// EncodeSeconds is encoder Start to Wait. It overlaps the whole frame
-	// loop and is not a bottleneck reading. Screenshot and draw are the loop cost.
+	// EncodeSeconds is the longest chunk encoder Start to Wait. It overlaps that chunk's frame loop.
 	EncodeSeconds   float64          `json:"encode-seconds"`
 	MuxSeconds      *float64         `json:"mux-seconds,omitempty"`
+	ConcatSeconds   *float64         `json:"concat-seconds,omitempty"`
 	MetadataSeconds float64          `json:"metadata-seconds"`
 	TotalSeconds    float64          `json:"total-seconds"`
+	Workers         int              `json:"workers"`
+	ChunkSeconds    []namedSeconds   `json:"chunk-seconds,omitempty"`
 	TrackBytes      map[string]int64 `json:"track-bytes,omitempty"`
 	AudioPartBytes  []namedBytes     `json:"audio-part-bytes,omitempty"`
 	MixWAVBytes     *int64           `json:"mix-wav-bytes,omitempty"`
@@ -88,6 +90,17 @@ func (h *msHist) add(d time.Duration) {
 		return
 	}
 	h.counts[ms]++
+}
+
+func (h *msHist) merge(o msHist) {
+	for i := range h.counts {
+		h.counts[i] += o.counts[i]
+	}
+	h.sum += o.sum
+	h.n += o.n
+	if o.max > h.max {
+		h.max = o.max
+	}
 }
 
 func (h *msHist) p95() time.Duration {
@@ -158,18 +171,21 @@ func collectWorkBytes(timings *renderTimings, work string, p *Plan, trackPaths m
 }
 
 func (t renderTimings) progressLine(frames int) string {
-	audio, mux, prep := 0.0, 0.0, 0.0
+	audio, mux, prep, concat := 0.0, 0.0, 0.0, 0.0
 	if t.AudioSeconds != nil {
 		audio = *t.AudioSeconds
 	}
 	if t.MuxSeconds != nil {
 		mux = *t.MuxSeconds
 	}
+	if t.ConcatSeconds != nil {
+		concat = *t.ConcatSeconds
+	}
 	for _, s := range t.PrepareTrackSeconds {
 		prep += s
 	}
-	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f mux=%.3f frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f cache-hits=%d cache-misses=%d\n",
-		t.TotalSeconds, t.RendererStartSeconds, t.DecoderStartSeconds, prep, audio, t.EncodeSeconds, mux, frames,
+	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f concat=%.3f mux=%.3f workers=%d frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f cache-hits=%d cache-misses=%d\n",
+		t.TotalSeconds, t.RendererStartSeconds, t.DecoderStartSeconds, prep, audio, t.EncodeSeconds, concat, mux, t.Workers, frames,
 		t.Decode.P95Seconds, t.Transfer.P95Seconds, t.Draw.P95Seconds, t.Screenshot.P95Seconds, t.EncodeWrite.P95Seconds,
 		t.CacheHits.Tracks+t.CacheHits.Audio, t.CacheMisses.Tracks+t.CacheMisses.Audio)
 }

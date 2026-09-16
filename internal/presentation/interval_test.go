@@ -130,8 +130,11 @@ func TestAudioSamplesExclusiveIntegerMath(t *testing.T) {
 }
 
 func TestProgressLineIncludesDecoderStart(t *testing.T) {
-	line := renderTimings{DecoderStartSeconds: 0.044, TotalSeconds: 1}.progressLine(24)
+	line := renderTimings{DecoderStartSeconds: 0.044, TotalSeconds: 1, Workers: 2}.progressLine(24)
 	if !strings.Contains(line, ">> render timings:") || !strings.Contains(line, "decoder-start=0.044") || !strings.Contains(line, "frames=24") {
+		t.Fatal(line)
+	}
+	if !strings.Contains(line, "workers=2") || !strings.Contains(line, "concat=0.000") {
 		t.Fatal(line)
 	}
 	if strings.Contains(line, ">> decoder-start") {

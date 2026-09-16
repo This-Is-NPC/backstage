@@ -22,6 +22,11 @@ import (
 )
 
 func command(ctx context.Context, name string, args ...string) *exec.Cmd {
+	observeMu.Lock()
+	if observeCommand != nil {
+		observeCommand(name, append([]string(nil), args...))
+	}
+	observeMu.Unlock()
 	c := exec.CommandContext(ctx, name, args...)
 	scene.SetProcessGroup(c)
 	c.Cancel = func() error {

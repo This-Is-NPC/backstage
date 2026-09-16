@@ -35,6 +35,7 @@ func WriteConfigShow(w io.Writer, p *Project) error {
 	writeShowValue(w, p, "render.w", p.Render.W)
 	writeShowValue(w, p, "render.h", p.Render.H)
 	writeShowValue(w, p, "render.fps", p.Render.FPS)
+	writeShowValue(w, p, "render.workers", p.Render.Workers)
 	writeShowValue(w, p, "render.threads.prepare", p.Render.Threads.Prepare)
 	writeShowValue(w, p, "render.threads.filter", p.Render.Threads.Filter)
 	writeShowValue(w, p, "render.threads.encode", p.Render.Threads.Encode)
