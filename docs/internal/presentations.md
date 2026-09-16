@@ -12,32 +12,66 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    `${UserCacheDir}/backstage/render` (hardlink into the work dir, copy on
    `EXDEV`). Work files that came from the cache are read-only (0444); the
    render must never open `track-N.mkv` or `mix.wav` for writing.
-4. `N` chunk goroutines in this process (one Chromium, one set of track
-   decoders, one libx264 encoder writing an MP4). `N=1` is still that path:
-   the single chunk writes `video.mp4`. Each encoder passes
-   `-video_track_timescale <fps>` so timestamps stay exact 1/fps ticks.
-   Chromium is started with `--disable-partial-raster` so screenshots stay
-   pixel-stable when several browsers share the GPU under load.
+4. Deterministic chunks: cut at every event boundary (`intervalFrames(e.At)`),
+   then into pieces of at most `minChunkFrames = max(16, 2*fps)` measured from
+   the event start, then clip to `[first, end)`. A piece that contains frames
+   of event *i*'s incoming transition also hashes event *i−1*. Each chunk key
+   (kind `segments`, `.mp4`) is SHA-256 of a v1 JSON object: size, fps, scale,
+   `[first,end)`, encoder args without `-threads` or the output path, FFmpeg
+   and browser versions (browser once per render), SHA-256 of the three
+   embedded `web/` files, the event block (Event JSON, parameters, narration,
+   intersecting captions, entry content hash, slotted tracks with
+   `trackCacheKey`, `[from,to]`, `on-end`, `duration`), and for a
+   transition chunk the previous event block plus overlap effect/duration/
+   progress. Track `start` is not in the key: `to` is `floor(end-1 - start*fps)`,
+   so a boundary frame that becomes invisible already changes `to`. Audio stays
+   in the mix cache. Meta stores `{rel → sha256}` for files that event
+   requested; a well-formed allowlisted asset that did not resolve is
+   `rel → ""`, and the entry stays valid only while that path still does not
+   resolve. Disallowed extensions never enter the manifest. A missing `files`
+   field is invalid. Hits print
+   `>> chunk-N cached`. A full hit skips Chromium and track decoders: concat,
+   mux, facts. A single-chunk render with no audio copies the cache entry to a
+   new 0644 file before rename, so the export is never a hardlink of the cache.
+5. Misses are partitioned into `N` contiguous slices (`N` from
+   `resolveWorkers`: CPU/2, memory/2 GiB, number of misses). Each worker
+   starts one Chromium for its life and keeps track decoders open across
+   consecutive chunks. At the start of each miss, a decoder for a track that
+   is no longer needed (`!trackNeeded`) is closed. `ensureDecoder` reuses the
+   decoder when `index == d.frame` (already on that frame),
+   `index == d.frame+1` (the next frame after the last `get`), or `d.done`
+   (hold after EOF). Otherwise it closes and reopens at `index` with input
+   `-ss`. The frame loop only calls `decoders[id].get`. Each miss still runs
+   one libx264 encoder with
+   `-video_track_timescale <fps>`. Chromium uses `--disable-partial-raster`.
    Progress is `>> chunk-N running|ok|failed|interrupted` and
-   `>> render k/n frames` summing frames written across chunks.
-5. Concat demuxer `-c copy` when `N>1`, then one AAC mux, facts, and rename.
-   First error or Ctrl-C cancels every chunk (all-or-nothing). The failing
-   chunk prints `failed` and the error is `chunk N: …`; cancelled chunks
-   print `interrupted` and a parent cancel returns `ctx.Err()`. Produce jobs
-   let running takes finish; render chunks do not.
-6. Render calls `drawTimed`; Check and initialize keep using `draw`. Measured
+   `>> render k/n frames` summing frames written across misses.
+6. Concat demuxer `-c copy` when there is more than one chunk, then one AAC
+   mux, facts, and rename. First error or Ctrl-C cancels every worker
+   (all-or-nothing). The failing chunk prints `failed` and the error is
+   `chunk N: …`; cancelled chunks print `interrupted` and a parent cancel
+   returns `ctx.Err()`. Produce jobs let running takes finish; render chunks
+   do not.
+7. Render calls `drawTimed`; Check and initialize keep using `draw`. Measured
    draw includes image load, host fonts, and waiting for a compositor paint.
-7. Companion facts include configuration, input hashes and render `timings`.
-   Histogram p95 is from the merged per-chunk counts. `renderer-start-seconds`
-   and `decoder-start-seconds` are sums; `encode-seconds` is the max chunk
-   encoder Start to Wait (it overlaps that chunk's frame loop). Screenshot
-   and draw dominate the loop (about 4.3 s and 3.7 s of a ~10 s `complete`
-   render).
+8. Companion facts include configuration, input hashes and render `timings`.
+   Histogram p95 is from the merged missed-chunk counts. `renderer-start-seconds`
+   sums worker `NewRenderer` times; `decoder-start-seconds` sums decoder opens
+   on misses; `encode-seconds` is the max missed-chunk encoder Start to Wait.
+   `chunk-seconds` lists misses only. Screenshot and draw dominate the loop
+   (about 4.3 s and 3.7 s of a ~10 s `complete` render). Facts `inputs` are
+   the union of plan entries, files loaded while rendering misses, and
+   manifests of hits for events in this interval.
 
 `model.go` owns validation and timing, `media.go` owns FFmpeg preparation,
-`cache.go` owns the track/audio cache, `render.go` owns Chromium, `chunks.go`
-and `workers.go` own export, and `preview.go` owns preview and template
-initialization. The browser runtime and default HTML are embedded under `web/`.
+`cache.go` owns the track and audio cache (`getOrFill` takes a validity
+func and stores the fill's hashed `files` map as-is), `segments.go` owns
+segment keys, manifest hashing and validity, `render.go` owns Chromium,
+`chunks.go` and `workers.go` own export, and `preview.go` owns preview and
+template initialization. The asset server serves the host runtime at
+`/TOKEN/builtin/runtime.html` and each event at `/TOKEN/event-<i>/builtin/`
+and `/TOKEN/event-<i>/asset/`. `ConfinedPath`, the extension allowlist and CSP
+are unchanged. The browser runtime and default HTML are embedded under `web/`.
 `internal/budget` owns MemAvailable, NumCPU and the 2 GiB host reserve used by
 both presentation workers and produce jobs.
 
@@ -79,12 +113,15 @@ full export). Tests paint a binary frame index on the source with `geq` /
 or 4800-sample shift cannot hide behind a periodic tone.
 
 Cache keys are SHA-256 of a `v1` JSON object (source content hash, compiled
-plan, fps, FFmpeg version, encode args that change bytes). A memo maps
+plan, fps, FFmpeg version, encode args that change bytes). Segment keys also
+cover browser version, embedded runtime hashes, the event (and previous event
+on a transition), track `duration`/`on-end`, and a manifest of files the event
+requested (including `rel → ""` for a missing allowlisted asset). A memo maps
 resolved path + size + mtime-ns + inode to the content hash. Entries are
 written to a `.tmp-*` name, `fsync`'d, chmod 0444, then renamed. Each key
 has a lock file that prune never deletes. A live render holds `LOCK_SH` on
 that lock until it finishes. `encode-seconds` is still Start→Wait. Timings
-record `cache-hits` and `cache-misses` by type.
+record `cache-hits` and `cache-misses` by type (`tracks`, `audio`, `segments`).
 
 ## Preview and isolation
 
@@ -95,7 +132,8 @@ state when asked to render an arbitrary instant.
 
 Use a temporary browser profile with its sandbox enabled. Serve resources only
 on loopback, resolve configuration and scene files through `InputPath`, then
-serve them from workspace-relative `/asset/` URLs. The handler uses the same
+serve them from workspace-relative `/event-<i>/asset/` URLs (host runtime stays
+at `/builtin/runtime.html`). The handler uses the same
 confinement helper with the workspace as base and boundary. Normalized requests
 outside that route are refused. A template or visual entry that cannot be
 resolved inside the workspace is an error from `NewRenderer`, not a silent
@@ -123,9 +161,10 @@ The tests cover cuts and repeated spans, cue clocks, independent/following audio
 bounded music loops, template lookup, seek equivalence, cancellation, pixels
 at the end of the example arrow animation, preview intervals (exact pixels,
 frame-index codes, PSNR-Y, audio xcorr ≥ 0.95 / 5 ms against a chirp mix),
-draft scale, parallel chunks (composed pixels at fade/caption/freeze
+draft scale, deterministic chunks (composed pixels at fade/caption/visual
 boundaries, coded exports, concat timestamps, PSNR/xcorr against one worker,
-fail/cancel leftovers, automatic worker counts), and one-worker ffmpeg args
+fail/cancel leftovers, automatic worker counts, segment cache cold/warm and
+invalidation), and one-worker ffmpeg args
 (mix in shared prepare, `-video_track_timescale fps` on the chunk encoder).
 The generator uses tones and numbered
 frames, so no VM, speech provider or externally recorded footage is required.

@@ -180,15 +180,25 @@ stages (`decode`, `transfer`, `draw`, `screenshot`,
 `encode-write`) with total, mean, max, p95 and frame count, and intermediate
 byte sizes (`track-bytes`, `audio-part-bytes`, `mix-wav-bytes`,
 `video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`)
-and cache counters (`cache-hits`, `cache-misses`, each `{tracks, audio}`).
-Absent phases and missing files are omitted. `renderer-start-seconds` and
-`decoder-start-seconds` are the sums across chunks; `encode-seconds` is the
-longest chunk encoder Start to Wait. `concat-seconds` is omitted when there is
+and cache counters (`cache-hits`, `cache-misses`, each `{tracks, audio, segments}`).
+Absent phases and missing files are omitted. `renderer-start-seconds` is the
+sum of Chromium startups across the worker pool (one browser per worker);
+`decoder-start-seconds` sums decoder opens on cache misses; `encode-seconds` is
+the longest missed-chunk encoder Start to Wait. `concat-seconds` is omitted when there is
 only one chunk. Progress ends with
 `>> render timings: ...` including `decoder-start=`, `workers=` and `concat=`.
 `decoder-start-seconds`
 covers opening the decoders; when a preview starts after frame 0 it also
-includes the first-frame peek and any packet count plus reopen. Source and template input hashes stay the same;
+includes the first-frame peek and any packet count plus reopen. Facts `inputs`
+list plan entries plus files loaded by events that fall inside the rendered
+interval (template-fetched assets included). A second render of the same
+interval reuses encoded chunks; progress prints `>> chunk-N cached` on a hit.
+Changing an event's template file, layout, slots, narration, slotted tracks,
+or a file that event loaded invalidates that event's chunks and the incoming
+transition chunk of the next event. A global parameter change invalidates every
+chunk. Preview uses the same cache: `first`, `end` and `scale` are part of the
+key, so a scale-1 preview that covers whole chunks of a prior full export is a
+hit. Source and template input hashes stay the same;
 `builtin:runtime.html` changes only because the runtime adds `drawTimed`.
 Measured draw includes what `draw` itself waits for — image load, host fonts,
 and a compositor paint — not pure canvas cost. `encode-seconds` overlaps that
@@ -200,22 +210,29 @@ Visual reproducibility assumes fixed inputs, browser, fonts and tool versions;
 MP4 byte identity across environments is not promised. Prepared FFV1 tracks use
 `-g 1` so every frame is a seek point. Screenshots stay lossless PNG with
 `optimizeForSpeed`. Track prepare runs in parallel (at most one worker per
-CPU). Prepared tracks and the mixed soundtrack are cached under the user
-cache directory (`backstage/render`). A warm render reuses those files when
-the source bytes, compiled cuts, fps, FFmpeg version and encode recipe
-match. Thread counts are not part of the key. Warm and cold renders keep
-the same `inputs` hashes and the same composed frames before H.264.
-`backstage cache prune` drops least-recently-used entries (default 10G).
+CPU). Prepared tracks, the mixed soundtrack, and encoded timeline chunks are cached
+under the user cache directory (`backstage/render`). A warm render reuses those
+files when the source bytes, compiled cuts, fps, FFmpeg version, encode recipe,
+browser version and embedded runtime match. Thread counts are not part of the
+key. Warm and cold renders keep the same `inputs` hashes and the same composed
+frames; a full segment-cache hit copies the stored H.264 without Chromium.
+`backstage cache prune` drops least-recently-used track, audio and segment
+entries (default 10G).
 Project `render.threads` sets FFmpeg counts for that prepare and for
 libx264; each chunk encoder uses `max(1, encode/workers)` threads and runs at
 the same time as that chunk's Chromium frame loop, not after it.
-`render.workers` is the number of timeline chunks (one Chromium each). `0`,
+`render.workers` is Chromium concurrency (one browser per worker). `0`,
 `null` or an omitted key picks `max(1, min(NumCPU/2, memoryBudget/2GiB,
-nFrames/minChunk))` where `minChunk` is `max(16, 2*fps)` and `memoryBudget` is
-MemAvailable minus a 2 GiB host reserve. An explicit `N` uses `N` chunks,
-capped at `nFrames`. Chunks share prepared tracks and the mix, encode H.264
-with `-video_track_timescale <fps>`, and join with the concat demuxer `-c copy`
-when there is more than one file. Joined output keeps PSNR-Y ≥ 40 dB (mean ≥ 45 dB)
+nMiss))` where `memoryBudget` is MemAvailable minus a 2 GiB host reserve.
+An explicit `N` runs `N` workers, capped at the number of chunks that miss
+the segment cache. Chunks are cut at event boundaries and then into pieces of
+at most `max(16, 2*fps)` frames, measured from the event start and then clipped
+to the render interval, so a preview that covers whole interior pieces shares
+those cache keys with a full export. Chunks share prepared tracks and the mix,
+encode H.264 with `-video_track_timescale <fps>`, and join with the concat
+demuxer `-c copy` when there is more than one file. A worker keeps its browser
+and track decoders across consecutive misses; each miss still starts its own
+encoder. Joined output keeps PSNR-Y ≥ 40 dB (mean ≥ 45 dB)
 against a single-worker export, frame codes and 1/fps timestamps, and audio
 cross-correlation ≥ 0.95 with `|lag| ≤ 5 ms`. A faster encode is accepted when
 every decoded H.264 frame keeps PSNR-Y ≥ 40 dB against the previous thread

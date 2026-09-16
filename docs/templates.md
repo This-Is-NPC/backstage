@@ -46,7 +46,10 @@ The runtime waits for images and fonts, pauses CSS/Web Animations and evaluates
 their current time, and sets SVG animation time explicitly. Custom JavaScript
 must derive state from `context`; wall-clock timers, random values and external
 network data cannot produce repeatable frames. Load assets locally. Fonts,
-images, CSS and scripts may be separate files.
+images, CSS and scripts may be separate files. Each timeline event is served
+under `/event-<i>/`, so relative URLs resolve inside that event. Every file
+fetched through that prefix is recorded in the chunk's cache manifest; changing
+the bytes of such a file re-renders the events that loaded it.
 
 ## Leave time for the animation to finish
 

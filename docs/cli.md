@@ -287,7 +287,7 @@ durations and a day count (`7d`). Size accepts `K`, `M`, or `G` (1024).
 backstage cache prune [--max-size SIZE] [--dry-run] [--json]
 ```
 
-Removes least-recently-used prepared tracks and mixed audio under
+Removes least-recently-used prepared tracks, mixed audio and encoded chunks under
 `${XDG_CACHE_HOME:-~/.cache}/backstage/render` until the store is below
 `--max-size` (default `10G`, same `K`/`M`/`G` grammar as `takes prune`).
 Orphans from an interrupted render are deleted. A lock file for a key is
@@ -331,11 +331,12 @@ scenes, runs hooks or starts VMs. Missing input files are errors.
 Output defaults to the presentation's `out`, then `exports/NAME.mp4`. A companion
 `.facts.json` records configuration, resource hashes and tool versions. Custom
 HTML can still fail at a later frame after `--check` succeeds. Failed exports do
-not replace an existing MP4. Project `render.workers` is the number of timeline
-chunks (one Chromium each); `0` picks a default from CPU, memory and film
-length. Ctrl-C cancels every chunk, removes intermediates, and leaves an
-existing MP4 in place. Progress is human lines only (`>> chunk-N …` and
-`>> render k/n frames`).
+not replace an existing MP4. Project `render.workers` is Chromium concurrency
+(one browser per worker); chunks are cut deterministically at event boundaries
+and then into pieces of at most `max(16, 2*fps)` frames. `0` picks a default
+from CPU, memory and the number of segment-cache misses. Ctrl-C cancels every
+chunk, removes intermediates, and leaves an existing MP4 in place. Progress is
+human lines only (`>> chunk-N …` and `>> render k/n frames`).
 
 ## preview
 

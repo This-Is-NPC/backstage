@@ -246,7 +246,7 @@ The target geometry every clip is normalized to before concatenation.
 |-----|---------|---------|
 | `render.w` / `render.h` | output size | `0` = the first scene clip's size (monitor native) |
 | `render.fps` | output frame rate | falls back to `record.fps` |
-| `render.workers` | parallel presentation render chunks (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, nFrames/minChunk))` with `minChunk = max(16, 2*fps)` |
+| `render.workers` | parallel presentation render workers (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, nMiss))` |
 | `render.threads.prepare` | FFmpeg/FFV1 threads while preparing each presentation track | `max(1, n/w)` (`n` = CPUs, `w` = parallel tracks) |
 | `render.threads.filter` | `-filter_complex_threads` for that prepare | `1` |
 | `render.threads.encode` | libx264 threads for each presentation chunk encoder | `n`, then `max(1, encode/workers)` per chunk |
@@ -254,7 +254,7 @@ The target geometry every clip is normalized to before concatenation.
 `render.workers` and `render.threads` are read only by presentation `render` /
 `preview`. `produce` does not use these keys. `0`, `null` or an omitted field
 means the default. A negative value is a configuration error. A very large
-value is accepted as written (`workers` still capped at the frame count).
+value is accepted as written (`workers` still capped at the number of missed chunks).
 
 Each chunk encoder starts before that chunk's frame loop and codes while its
 Chromium draws and captures screenshots, so `encode` threads share the CPUs

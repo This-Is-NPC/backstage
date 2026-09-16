@@ -160,6 +160,8 @@ Slots are axis-aligned rectangles. Borders, rounded corners, backgrounds and
 shadows move with screens. `data-fit="cover"` crops; default `contain` preserves
 the screen. Arbitrary video-slot masks and 3D transforms are unsupported.
 JSON paths are project-relative; HTML/CSS resources are relative to their files.
+Files a template fetches through the event prefix enter that chunk's cache
+manifest; changing those bytes re-renders the events that loaded them.
 
 ## Validate And Review
 
@@ -172,12 +174,13 @@ backstage render demo
 `--check` validates resources, timing and slots but does not execute every
 animation frame. Project `render.threads` (`prepare`, `filter`, `encode`)
 applies only to presentation render; `0` uses the CPU defaults. Automatic
-`render.workers` (`0`) runs one Chromium per timeline chunk from CPU,
-memory and film length. The encoder shares the machine with Chromium during
+`render.workers` (`0`) runs one Chromium per worker from CPU, memory and the
+number of segment-cache misses. The encoder shares the machine with Chromium during
 the frame loop; `encode-seconds` overlaps that loop and is not the
 bottleneck. Screenshot and draw are the loop cost. A second render reuses
-cached tracks and the mix when the footage and the compiled plan match
-(`backstage cache prune` reclaims that cache, default 10G). Preview renders
+cached tracks, mix and encoded chunks when the footage and the compiled plan
+match (`>> chunk-N cached`; `backstage cache prune` reclaims that cache,
+default 10G). Preview renders
 first, then opens the exact MP4 with playback, seek and frame-step controls
 (`preview --from --to --scale`; the player clock is absolute presentation
 time). Ctrl-C closes it and removes its temporary files. It is not a live
@@ -187,7 +190,8 @@ intended clock before exporting.
 Output defaults to `exports/NAME.mp4`; `--out` overrides the project-relative
 path. Companion facts record inputs, tool versions and a `timings` object
 beside `render` (phase seconds, per-frame total/mean/max/p95, intermediate
-bytes). Progress ends with `>> render timings: ...`. Source input hashes stay
+bytes). Facts `inputs` list plan entries plus files loaded by events inside
+the rendered interval. Progress ends with `>> render timings: ...`. Source input hashes stay
 the same; `builtin:runtime.html` changes only because the runtime adds
 `drawTimed`. Measured draw includes image load, host fonts, and a compositor
 paint, not pure canvas cost. Source recordings remain
