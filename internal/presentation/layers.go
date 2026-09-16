@@ -166,13 +166,45 @@ func captionKey(cs []probeCaption) string {
 	return string(b)
 }
 
-func chunkEligible(p *Plan, ch chunkRange, probes []probeFrame) layerDecision {
-	if len(probes) != ch.End-ch.First {
-		return layerDecision{Reason: "probe count"}
+func visibleCaptions(text []TextSpan, t float64) []probeCaption {
+	var out []probeCaption
+	for _, c := range text {
+		if t >= c.At && t < c.End {
+			out = append(out, probeCaption{At: c.At, End: c.End, Slot: c.Slot, Text: c.Text})
+		}
 	}
-	if chunkTransition(p, ch) {
-		return layerDecision{Reason: "transition"}
+	return out
+}
+
+func chunkCaptionsStable(p *Plan, ch chunkRange) (string, bool) {
+	key := captionKey(visibleCaptions(p.Text, float64(ch.First)/float64(p.FPS)))
+	for n := ch.First + 1; n < ch.End; n++ {
+		if captionKey(visibleCaptions(p.Text, float64(n)/float64(p.FPS))) != key {
+			return key, false
+		}
 	}
+	return key, true
+}
+
+func cloneGeo(g []probeGeo) []probeGeo {
+	out := make([]probeGeo, len(g))
+	copy(out, g)
+	return out
+}
+
+func geosEqual(a, b []probeGeo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !geoEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func tracksVisibleAll(p *Plan, ch chunkRange) layerDecision {
 	ev := p.Document.Timeline[ch.Event]
 	for n := ch.First; n < ch.End; n++ {
 		for _, id := range ev.Slots {
@@ -185,6 +217,34 @@ func chunkEligible(p *Plan, ch chunkRange, probes []probeFrame) layerDecision {
 			}
 		}
 	}
+	return layerDecision{Layered: true}
+}
+
+func geometryEligible(g probeGeo) layerDecision {
+	if !layeredFit(g.Fit) {
+		return layerDecision{Reason: "fit"}
+	}
+	if !g.RadiusPx {
+		return layerDecision{Reason: "radius"}
+	}
+	if !geoSymmetric(g) {
+		return layerDecision{Reason: "border"}
+	}
+	box := snapSlot(g)
+	if box.CW < 1 || box.CH < 1 || box.W < 1 || box.H < 1 {
+		return layerDecision{Reason: "empty"}
+	}
+	return layerDecision{Layered: true}
+}
+
+func chunkEligible(p *Plan, ch chunkRange, probes []probeFrame) layerDecision {
+	if len(probes) != ch.End-ch.First {
+		return layerDecision{Reason: "probe count"}
+	}
+	if d := tracksVisibleAll(p, ch); !d.Layered {
+		return d
+	}
+	ev := p.Document.Timeline[ch.Event]
 	first := probes[0]
 	if first.DOMHash == "" {
 		return layerDecision{Reason: "dom hash"}
@@ -222,18 +282,8 @@ func chunkEligible(p *Plan, ch chunkRange, probes []probeFrame) layerDecision {
 			return layerDecision{Reason: "geometry count"}
 		}
 		for i, g := range pr.Geometry {
-			if !layeredFit(g.Fit) {
-				return layerDecision{Reason: "fit"}
-			}
-			if !g.RadiusPx {
-				return layerDecision{Reason: "radius"}
-			}
-			if !geoSymmetric(g) {
-				return layerDecision{Reason: "border"}
-			}
-			box := snapSlot(g)
-			if box.CW < 1 || box.CH < 1 || box.W < 1 || box.H < 1 {
-				return layerDecision{Reason: "empty"}
+			if d := geometryEligible(g); !d.Layered {
+				return d
 			}
 			if !geoEqual(g, first.Geometry[i]) {
 				return layerDecision{Reason: "geometry"}
@@ -241,6 +291,49 @@ func chunkEligible(p *Plan, ch chunkRange, probes []probeFrame) layerDecision {
 		}
 	}
 	return layerDecision{Layered: true}
+}
+
+func staticChunkEligible(p *Plan, ch chunkRange, first, last probeFrame) (layerDecision, string) {
+	if d := tracksVisibleAll(p, ch); !d.Layered {
+		return d, ""
+	}
+	caps, ok := chunkCaptionsStable(p, ch)
+	if !ok {
+		return layerDecision{Reason: "captions"}, ""
+	}
+	ev := p.Document.Timeline[ch.Event]
+	if first.Event != ch.Event || last.Event != ch.Event {
+		return layerDecision{Reason: "event"}, caps
+	}
+	if len(first.Geometry) != len(ev.Slots) {
+		return layerDecision{Reason: "geometry count"}, caps
+	}
+	for _, g := range first.Geometry {
+		if d := geometryEligible(g); !d.Layered {
+			return d, caps
+		}
+	}
+	return layerDecision{Layered: true}, caps
+}
+
+func staticGuard(first, last probeFrame) (ok bool, reason string) {
+	if first.AnimationsActive || last.AnimationsActive {
+		return false, "css animation"
+	}
+	if first.SMIL || last.SMIL {
+		return false, "smil"
+	}
+	if !geosEqual(first.Geometry, last.Geometry) {
+		return false, "geometry"
+	}
+	return true, ""
+}
+
+func staticSubject(e Event) string {
+	if e.Layout != "" {
+		return "template " + e.Layout
+	}
+	return "scene " + e.Scene
 }
 
 func containPad(srcW, srcH, cw, ch int) (w, h, x, y int) {

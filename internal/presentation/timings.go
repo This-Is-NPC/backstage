@@ -47,6 +47,7 @@ type renderTimings struct {
 	Probe                framePhase         `json:"probe"`
 	LayeredChunks        int                `json:"layered-chunks"`
 	CompositeSeconds     float64            `json:"composite-seconds"`
+	StaticViolations     int                `json:"static-violations,omitempty"`
 	// EncodeSeconds is the longest frames-path chunk encoder Start to Wait.
 	EncodeSeconds   float64          `json:"encode-seconds"`
 	MuxSeconds      *float64         `json:"mux-seconds,omitempty"`
@@ -187,9 +188,13 @@ func (t renderTimings) progressLine(frames int) string {
 	for _, s := range t.PrepareTrackSeconds {
 		prep += s
 	}
-	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f concat=%.3f mux=%.3f workers=%d frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f probe-p95=%.3f composite=%.3f layered=%d cache-hits=%d cache-misses=%d\n",
+	extra := ""
+	if t.StaticViolations > 0 {
+		extra = fmt.Sprintf(" static-violations=%d", t.StaticViolations)
+	}
+	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f concat=%.3f mux=%.3f workers=%d frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f probe-p95=%.3f composite=%.3f layered=%d cache-hits=%d cache-misses=%d%s\n",
 		t.TotalSeconds, t.RendererStartSeconds, t.DecoderStartSeconds, prep, audio, t.EncodeSeconds, concat, mux, t.Workers, frames,
 		t.Decode.P95Seconds, t.Transfer.P95Seconds, t.Draw.P95Seconds, t.Screenshot.P95Seconds, t.EncodeWrite.P95Seconds,
 		t.Probe.P95Seconds, t.CompositeSeconds, t.LayeredChunks,
-		t.CacheHits.Tracks+t.CacheHits.Audio+t.CacheHits.Segments, t.CacheMisses.Tracks+t.CacheMisses.Audio+t.CacheMisses.Segments)
+		t.CacheHits.Tracks+t.CacheHits.Audio+t.CacheHits.Segments, t.CacheMisses.Tracks+t.CacheMisses.Audio+t.CacheMisses.Segments, extra)
 }

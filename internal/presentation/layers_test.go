@@ -163,6 +163,123 @@ func TestChunkEligibleReasons(t *testing.T) {
 	}
 }
 
+func TestVisibleCaptionsHalfOpen(t *testing.T) {
+	text := []TextSpan{{At: 1, End: 2, Slot: "s", Text: "a"}}
+	if got := visibleCaptions(text, 0.999); len(got) != 0 {
+		t.Fatalf("before: %+v", got)
+	}
+	if got := visibleCaptions(text, 1); len(got) != 1 || got[0].Text != "a" {
+		t.Fatalf("at: %+v", got)
+	}
+	if got := visibleCaptions(text, 1.999); len(got) != 1 {
+		t.Fatalf("inside: %+v", got)
+	}
+	if got := visibleCaptions(text, 2); len(got) != 0 {
+		t.Fatalf("end: %+v", got)
+	}
+}
+
+func TestChunkCaptionsStable(t *testing.T) {
+	p := &Plan{
+		FPS:  10,
+		Text: []TextSpan{{At: 0, End: 1.5, Slot: "s", Text: "a"}, {At: 1.5, End: 3, Slot: "s", Text: "b"}},
+	}
+	if key, ok := chunkCaptionsStable(p, chunkRange{First: 0, End: 10}); !ok || key != captionKey(visibleCaptions(p.Text, 0)) {
+		t.Fatalf("stable 0-1s: %q %v", key, ok)
+	}
+	if _, ok := chunkCaptionsStable(p, chunkRange{First: 0, End: 20}); ok {
+		t.Fatal("want unstable across caption change")
+	}
+	if key, ok := chunkCaptionsStable(p, chunkRange{First: 20, End: 30}); !ok || key != captionKey(visibleCaptions(p.Text, 2)) {
+		t.Fatalf("stable 2-3s: %q %v", key, ok)
+	}
+}
+
+func TestStaticChunkEligibleIgnoresCanvas(t *testing.T) {
+	p := &Plan{
+		FPS:      10,
+		Document: Document{Timeline: []Event{{Slots: map[string]string{"center": "cam"}}}},
+		Tracks:   map[string]CompiledTrack{"cam": {Track: Track{}, Duration: 10}},
+	}
+	ch := chunkRange{First: 0, End: 2, Event: 0}
+	g := probeGeo{Track: "cam", Slot: "center", X: 10, Y: 11, W: 128, H: 72, Fit: "fill", RadiusPx: true}
+	pr := probeFrame{Event: 0, Geometry: []probeGeo{g}, Canvas: true, Video: true, DOMHash: "", DynamicElements: []string{"x.gif"}}
+	if d, _ := staticChunkEligible(p, ch, pr, pr); !d.Layered {
+		t.Fatalf("static: %+v", d)
+	}
+	if d := chunkEligible(p, ch, []probeFrame{pr, pr}); d.Layered || d.Reason != "dom hash" {
+		t.Fatalf("b7: %+v", d)
+	}
+	pr.DOMHash = "abc"
+	if d := chunkEligible(p, ch, []probeFrame{pr, pr}); d.Layered || d.Reason != "canvas" {
+		t.Fatalf("b7 canvas: %+v", d)
+	}
+}
+
+func TestStaticChunkEligibleChecksBothEvents(t *testing.T) {
+	p := &Plan{
+		FPS:      10,
+		Document: Document{Timeline: []Event{{Slots: map[string]string{"center": "cam"}}}},
+		Tracks:   map[string]CompiledTrack{"cam": {Track: Track{}, Duration: 10}},
+	}
+	ch := chunkRange{First: 0, End: 2, Event: 0}
+	g := probeGeo{Track: "cam", Slot: "center", X: 10, Y: 11, W: 128, H: 72, Fit: "fill", RadiusPx: true}
+	first := probeFrame{Event: 0, Geometry: []probeGeo{g}}
+	last := first
+	last.Event = 1
+	if d, _ := staticChunkEligible(p, ch, first, last); d.Layered || d.Reason != "event" {
+		t.Fatalf("last: %+v", d)
+	}
+	first.Event = 1
+	last.Event = 0
+	if d, _ := staticChunkEligible(p, ch, first, last); d.Layered || d.Reason != "event" {
+		t.Fatalf("first: %+v", d)
+	}
+}
+
+func TestSkipLayerProbeGatesTransition(t *testing.T) {
+	p := &Plan{
+		FPS: 10,
+		Document: Document{
+			Duration: 4,
+			Timeline: []Event{
+				{At: 0, Slots: map[string]string{"center": "cam"}},
+				{At: 2, Slots: map[string]string{"center": "cam"}, Transition: Transition{Effect: "fade", Duration: 0.5}},
+			},
+		},
+		Tracks: map[string]CompiledTrack{"cam": {Track: Track{}, Duration: 10}},
+	}
+	g := probeGeo{Track: "cam", Slot: "center", X: 10, Y: 11, W: 128, H: 72, Fit: "fill", RadiusPx: true}
+	opts := renderOpts{Scale: 1}
+	trans := 0
+	for _, ch := range planChunks(p, 0, 40) {
+		ct := chunkTransition(p, ch)
+		if skipLayerProbe(p, opts, ch) != ct {
+			t.Fatalf("chunk %+v skip=%v transition=%v", ch, skipLayerProbe(p, opts, ch), ct)
+		}
+		if !ct {
+			continue
+		}
+		trans++
+		probes := make([]probeFrame, ch.End-ch.First)
+		for i := range probes {
+			probes[i] = probeFrame{Event: ch.Event, Geometry: []probeGeo{g}, DOMHash: "abc"}
+		}
+		if d := chunkEligible(p, ch, probes); !d.Layered {
+			t.Fatalf("chunkEligible on transition: %+v", d)
+		}
+		if d, _ := staticChunkEligible(p, ch, probes[0], probes[len(probes)-1]); !d.Layered {
+			t.Fatalf("staticChunkEligible on transition: %+v", d)
+		}
+	}
+	if trans < 1 {
+		t.Fatal("no transition chunk")
+	}
+	if !skipLayerProbe(p, renderOpts{Scale: 0.5}, planChunks(p, 0, 40)[0]) {
+		t.Fatal("scale")
+	}
+}
+
 func TestTrackTrimFreeze(t *testing.T) {
 	start, endEx := clampTrackTrim(4, 5, 2)
 	if start != 1 || endEx != 2 {
@@ -226,6 +343,10 @@ func TestLayerGraphOverlayAtContentOrigin(t *testing.T) {
 }
 
 func layerSlotPlan(t *testing.T, w, h, fps int, duration float64, layout, html string, captions []Caption) *Plan {
+	return layerSlotPlanScene(t, w, h, fps, duration, layout, html, captions, "")
+}
+
+func layerSlotPlanScene(t *testing.T, w, h, fps int, duration float64, layout, html string, captions []Caption, sceneJSON string) *Plan {
 	t.Helper()
 	slots := map[string]string{"center": "cam"}
 	if layout == "two-screens" {
@@ -246,6 +367,11 @@ func layerSlotPlan(t *testing.T, w, h, fps int, duration float64, layout, html s
 		Timeline: []Event{{At: 0, Layout: layout, Slots: slots}},
 		Captions: captions,
 	})
+	if sceneJSON != "" {
+		if err := os.WriteFile(filepath.Join(p.Dir, "scenes", "explain.json"), []byte(sceneJSON), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	writeCodedMP4(t, filepath.Join(p.Dir, "cam.mp4"), w, h, fps, duration+1)
 	if _, ok := sources["aux"]; ok {
 		writeCodedMP4(t, filepath.Join(p.Dir, "aux.mp4"), w, h, fps, duration+1)
@@ -1071,6 +1197,14 @@ func renderWorkDir(arg string) string {
 
 func replaceFit(html, fit string) string {
 	return string(bytes.ReplaceAll([]byte(html), []byte("FIT"), []byte(fit)))
+}
+
+func withStatic(html, value string) string {
+	const needle = "window.backstageTemplate={version:1,"
+	if !strings.Contains(html, needle) {
+		panic("template missing backstageTemplate")
+	}
+	return strings.Replace(html, needle, "window.backstageTemplate={version:1,static:"+value+",", 1)
 }
 
 func d5Check(t *testing.T, name, kind string, refPNG, distPNG []byte, boxes []slotBox, above []byte) {
@@ -1982,5 +2116,665 @@ window.render=async function(c){
 	}
 	if len(layered) < 2 {
 		t.Fatalf("layered neighbors %v trans %v\n%s", layered, trans, body)
+	}
+}
+
+func TestStaticCanvasIsLayeredD5(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := withStatic(layerCanvasHTML, "true")
+	plan := layerSlotPlan(t, 160, 90, 10, 0.4, "single", html, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	layerMode = "frames"
+	frames := collectShots(t, func() error {
+		return Render(ctx, plan, filepath.Join(t.TempDir(), "frames.mp4"), io.Discard)
+	})
+	resetSeams()
+	useTempCache(t)
+	r, err := NewRenderer(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.eventStatic(0) {
+		r.Close()
+		t.Fatal("event 0 should be static")
+	}
+	pr, _, err := r.probeTimed(0)
+	if err != nil {
+		r.Close()
+		t.Fatal(err)
+	}
+	_, above, _, _, err := r.captureLayers(0)
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	boxes := make([]slotBox, len(pr.Geometry))
+	for i, g := range pr.Geometry {
+		boxes[i] = snapSlot(g)
+	}
+	composed := map[int][]byte{}
+	observeComposedFrame = func(n int, _ float64, png []byte) {
+		composed[n] = append([]byte(nil), png...)
+	}
+	out := filepath.Join(t.TempDir(), "static.mp4")
+	var log bytes.Buffer
+	if err = Render(ctx, plan, out, &log); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(log.Bytes(), []byte(">> chunk-0 layered\n")) {
+		t.Fatal(log.String())
+	}
+	timings := asObject(t, readFactsMap(t, out)["timings"], "timings")
+	probe := asObject(t, timings["probe"], "probe")
+	if int(asFloat(t, probe["frames"], "probe.frames")) != 2 {
+		t.Fatalf("probe %+v", probe)
+	}
+	if len(composed) == 0 {
+		t.Fatal("no composed frames")
+	}
+	for n, shot := range composed {
+		ref, ok := frames[n]
+		if !ok {
+			t.Fatalf("missing frames shot %d", n)
+		}
+		d5Check(t, "static-canvas", "synth", ref.png, shot, boxes, above)
+	}
+}
+
+func TestStaticCSSAnimationUsesFrames(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#222}[data-slot]{position:absolute;overflow:hidden}@keyframes spin{to{transform:rotate(360deg)}}#mark{position:absolute;left:4px;top:4px;animation:spin 1s infinite}</style><script>
+window.backstageTemplate={version:1,static:true,layouts:{single:['center']},captionSlots:[]};
+window.render=async function(c){
+  document.body.innerHTML='<div id="mark">x</div><div data-slot="center" data-fit="fill" style="left:10%;top:15%;width:80%;height:65%"></div>';
+};
+</script>`
+	plan := layerSlotPlan(t, 320, 180, 10, 0.4, "single", html, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out := filepath.Join(t.TempDir(), "out.mp4")
+	var log bytes.Buffer
+	if err := Render(ctx, plan, out, &log); err != nil {
+		t.Fatal(err)
+	}
+	body := log.String()
+	if bytes.Contains(log.Bytes(), []byte("layered\n")) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, ">> chunk-0 static template single: css animation; using frames") {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, "static-violations=1") {
+		t.Fatal(body)
+	}
+	timings := asObject(t, readFactsMap(t, out)["timings"], "timings")
+	if int(asFloat(t, timings["static-violations"], "static-violations")) != 1 {
+		t.Fatal(timings["static-violations"])
+	}
+}
+
+func TestStaticGeometryChangeUsesFrames(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#222}[data-slot]{position:absolute;overflow:hidden}</style><script>
+window.backstageTemplate={version:1,static:true,layouts:{single:['center']},captionSlots:[]};
+window.render=async function(c){
+  const left = c.localTime>=2.5 ? '20%' : '10%';
+  document.body.innerHTML='<div data-slot="center" data-fit="fill" style="left:'+left+';top:15%;width:60%;height:65%"></div>';
+};
+</script>`
+	plan := layerSlotPlan(t, 320, 180, 10, 6, "single", html, nil)
+	plan.Project.Render.Workers = 2
+	composed := map[int][]byte{}
+	observeComposedFrame = func(n int, _ float64, png []byte) {
+		composed[n] = append([]byte(nil), png...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	out := filepath.Join(t.TempDir(), "out.mp4")
+	var log bytes.Buffer
+	if err := Render(ctx, plan, out, &log); err != nil {
+		t.Fatal(err)
+	}
+	body := log.String()
+	if !strings.Contains(body, ">> chunk-0 layered\n") {
+		t.Fatal(body)
+	}
+	if strings.Contains(body, ">> chunk-1 layered\n") {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, ">> chunk-1 static template single: geometry; using frames") {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, ">> chunk-2 layered\n") {
+		t.Fatal(body)
+	}
+	timings := asObject(t, readFactsMap(t, out)["timings"], "timings")
+	if int(asFloat(t, timings["static-violations"], "static-violations")) != 1 {
+		t.Fatal(timings["static-violations"])
+	}
+	for n := 20; n < 40; n++ {
+		if _, ok := composed[n]; ok {
+			t.Fatalf("chunk [2,4) frame %d was layered", n)
+		}
+	}
+}
+
+func TestStaticCaptionSwapRecapturesAbove(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := withStatic(replaceFit(layerFillHTML, "fill"), "true")
+	sceneJSON := `{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"one","start":0,"end":1,"text":"ONE"},{"id":"two","start":0,"end":1,"text":"TWO"}]}}`
+	plan := layerSlotPlanScene(t, 320, 180, 10, 6, "single", html, []Caption{
+		{Scene: "explain", Cue: "one", Clock: "presentation", At: 0, Duration: 4, Slot: "subtitle"},
+		{Scene: "explain", Cue: "two", Clock: "presentation", At: 4, Duration: 2, Slot: "subtitle"},
+	}, sceneJSON)
+	plan.Project.Render.Workers = 1
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	layerMode = "frames"
+	frames := collectShots(t, func() error {
+		return Render(ctx, plan, filepath.Join(t.TempDir(), "frames.mp4"), io.Discard)
+	})
+	resetSeams()
+	useTempCache(t)
+	plan.Project.Render.Workers = 1
+	shots := 0
+	screenshotObserver = func(bool) { shots++ }
+	composed := map[int][]byte{}
+	observeComposedFrame = func(n int, _ float64, png []byte) {
+		composed[n] = append([]byte(nil), png...)
+	}
+	out := filepath.Join(t.TempDir(), "static.mp4")
+	var log bytes.Buffer
+	if err := Render(ctx, plan, out, &log); err != nil {
+		t.Fatal(err)
+	}
+	body := log.String()
+	if strings.Count(body, " layered\n") != 3 {
+		t.Fatalf("want 3 layered\n%s", body)
+	}
+	if shots != 3 {
+		t.Fatalf("screenshotObserver=%d want 3\n%s", shots, body)
+	}
+	timings := asObject(t, readFactsMap(t, out)["timings"], "timings")
+	probe := asObject(t, timings["probe"], "probe")
+	if int(asFloat(t, probe["frames"], "probe.frames")) != 6 {
+		t.Fatalf("probe %+v", probe)
+	}
+	shot := asObject(t, timings["screenshot"], "screenshot")
+	if int(asFloat(t, shot["frames"], "screenshot.frames")) != 3 {
+		t.Fatalf("screenshot %+v", shot)
+	}
+	r, err := NewRenderer(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, _, err := r.probeTimed(4)
+	if err != nil {
+		r.Close()
+		t.Fatal(err)
+	}
+	_, above, _, _, err := r.captureLayers(4)
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	boxes := make([]slotBox, len(pr.Geometry))
+	for i, g := range pr.Geometry {
+		boxes[i] = snapSlot(g)
+	}
+	third := 0
+	for n, shotPNG := range composed {
+		if n < 40 {
+			continue
+		}
+		ref, ok := frames[n]
+		if !ok {
+			t.Fatalf("missing frames shot %d", n)
+		}
+		d5Check(t, "caption-swap", "synth", ref.png, shotPNG, boxes, above)
+		third++
+	}
+	if third == 0 {
+		t.Fatal("no third-chunk composed frames")
+	}
+}
+
+func TestStaticTwoEventsFourScreenshots(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := withStatic(replaceFit(layerFillHTML, "fill"), "true")
+	p := writeFixture(t, Document{
+		Version:  1,
+		Duration: 0.8,
+		Render:   scene.RenderCfg{W: 320, H: 180, FPS: 10},
+		Sources:  map[string]Source{"cam": {File: "cam.mp4"}},
+		Tracks:   map[string]Track{"cam": {Source: "cam"}},
+		Timeline: []Event{
+			{At: 0, Layout: "single", Slots: map[string]string{"center": "cam"}},
+			{At: 0.4, Layout: "single", Slots: map[string]string{"center": "cam"}},
+		},
+	})
+	writeCodedMP4(t, filepath.Join(p.Dir, "cam.mp4"), 320, 180, 10, 2)
+	if err := os.WriteFile(filepath.Join(p.Dir, "film.html"), []byte(html), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.Templates = map[string]scene.TemplateRef{"film": {Entry: "film.html"}}
+	ref := p.Presentations["show"]
+	ref.Template = "film"
+	p.Presentations["show"] = ref
+	plan, err := Load(p, "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Project.Render.Workers = 1
+	shots := 0
+	screenshotObserver = func(bool) { shots++ }
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	var log bytes.Buffer
+	if err = Render(ctx, plan, filepath.Join(t.TempDir(), "out.mp4"), &log); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(log.String(), " layered\n") != 2 {
+		t.Fatal(log.String())
+	}
+	if shots != 4 {
+		t.Fatalf("screenshotObserver=%d want 4\n%s", shots, log.String())
+	}
+}
+
+func TestStaticStillRecaptureOnGeometry(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#11111a}[data-slot]{position:absolute;overflow:hidden;border:8px solid #ff00ff;background:#080b12}</style><script>
+window.backstageTemplate={version:1,static:true,layouts:{single:['center']},captionSlots:[]};
+window.render=async function(c){
+  const left = c.localTime>=4 ? '40%' : '10%';
+  document.body.innerHTML='<div data-slot="center" data-fit="fill" style="left:'+left+';top:15%;width:40%;height:65%"></div>';
+};
+</script>`
+	plan := layerSlotPlan(t, 320, 180, 10, 6, "single", html, nil)
+	plan.Project.Render.Workers = 1
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	layerMode = "frames"
+	frames := collectShots(t, func() error {
+		return Render(ctx, plan, filepath.Join(t.TempDir(), "frames.mp4"), io.Discard)
+	})
+	resetSeams()
+	useTempCache(t)
+	plan.Project.Render.Workers = 1
+	shots := 0
+	screenshotObserver = func(bool) { shots++ }
+	composed := map[int][]byte{}
+	observeComposedFrame = func(n int, _ float64, png []byte) {
+		composed[n] = append([]byte(nil), png...)
+	}
+	out := filepath.Join(t.TempDir(), "static.mp4")
+	var log bytes.Buffer
+	if err := Render(ctx, plan, out, &log); err != nil {
+		t.Fatal(err)
+	}
+	body := log.String()
+	if strings.Count(body, " layered\n") != 3 {
+		t.Fatalf("want 3 layered\n%s", body)
+	}
+	if shots != 4 {
+		t.Fatalf("screenshotObserver=%d want 4\n%s", shots, body)
+	}
+	timings := asObject(t, readFactsMap(t, out)["timings"], "timings")
+	probe := asObject(t, timings["probe"], "probe")
+	if int(asFloat(t, probe["frames"], "probe.frames")) != 6 {
+		t.Fatalf("probe %+v", probe)
+	}
+	shot := asObject(t, timings["screenshot"], "screenshot")
+	if int(asFloat(t, shot["frames"], "screenshot.frames")) != 4 {
+		t.Fatalf("screenshot %+v", shot)
+	}
+	r, err := NewRenderer(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, _, err := r.probeTimed(4)
+	if err != nil {
+		r.Close()
+		t.Fatal(err)
+	}
+	_, above, _, _, err := r.captureLayers(4)
+	r.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	boxes := make([]slotBox, len(pr.Geometry))
+	for i, g := range pr.Geometry {
+		boxes[i] = snapSlot(g)
+	}
+	third := 0
+	for n, shotPNG := range composed {
+		if n < 40 {
+			continue
+		}
+		ref, ok := frames[n]
+		if !ok {
+			t.Fatalf("missing frames shot %d", n)
+		}
+		d5Check(t, "still-geo", "synth", ref.png, shotPNG, boxes, above)
+		third++
+	}
+	if third == 0 {
+		t.Fatal("no k+2 composed frames")
+	}
+}
+
+func TestTrackHideMidChunkIsFrames(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := withStatic(replaceFit(layerFillHTML, "fill"), "true")
+	p := writeFixture(t, Document{
+		Version:  1,
+		Duration: 0.4,
+		Render:   scene.RenderCfg{W: 320, H: 180, FPS: 10},
+		Sources:  map[string]Source{"cam": {File: "cam.mp4"}},
+		Tracks:   map[string]Track{"cam": {Source: "cam", OnEnd: "hide", Segments: []Segment{{From: 0, To: 0.2, Rate: 1}}}},
+		Timeline: []Event{{At: 0, Layout: "single", Slots: map[string]string{"center": "cam"}}},
+	})
+	writeCodedMP4(t, filepath.Join(p.Dir, "cam.mp4"), 320, 180, 10, 1)
+	if err := os.WriteFile(filepath.Join(p.Dir, "film.html"), []byte(html), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.Templates = map[string]scene.TemplateRef{"film": {Entry: "film.html"}}
+	ref := p.Presentations["show"]
+	ref.Template = "film"
+	p.Presentations["show"] = ref
+	plan, err := Load(p, "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := plan.Tracks["cam"]
+	if tr.OnEnd != "hide" || tr.Duration != 0.2 {
+		t.Fatalf("track %+v duration=%v", tr.Track, tr.Duration)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	var log bytes.Buffer
+	auto := collectShots(t, func() error {
+		return Render(ctx, plan, filepath.Join(t.TempDir(), "auto.mp4"), &log)
+	})
+	if bytes.Contains(log.Bytes(), []byte("layered\n")) {
+		t.Fatal(log.String())
+	}
+	useTempCache(t)
+	resetSeams()
+	layerMode = "layered"
+	err = Render(ctx, plan, filepath.Join(t.TempDir(), "forced.mp4"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "track not visible") {
+		t.Fatalf("want track not visible, got %v", err)
+	}
+	useTempCache(t)
+	resetSeams()
+	layerMode = "frames"
+	frames := collectShots(t, func() error {
+		return Render(ctx, plan, filepath.Join(t.TempDir(), "frames.mp4"), io.Discard)
+	})
+	hidden := 0
+	for n, shot := range auto {
+		if n < 2 {
+			continue
+		}
+		ref, ok := frames[n]
+		if !ok {
+			t.Fatalf("missing frames shot %d", n)
+		}
+		if err := samePixels(shot.png, ref.png); err != nil {
+			t.Fatalf("n=%d after hide: %v", n, err)
+		}
+		hidden++
+	}
+	if hidden < 1 {
+		t.Fatal("no frames after hide")
+	}
+}
+
+func TestStaticLastProbeCSSAnimationUsesFrames(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#222}[data-slot]{position:absolute;overflow:hidden}@keyframes spin{to{transform:rotate(360deg)}}#mark{position:absolute;left:4px;top:4px;animation:spin 1s infinite}</style><script>
+window.backstageTemplate={version:1,static:true,layouts:{single:['center']},captionSlots:[]};
+window.render=async function(c){
+  let h='<div data-slot="center" data-fit="fill" style="left:10%;top:15%;width:80%;height:65%"></div>';
+  if(c.localTime>=0.25) h='<div id="mark">x</div>'+h;
+  document.body.innerHTML=h;
+};
+</script>`
+	plan := layerSlotPlan(t, 320, 180, 10, 0.4, "single", html, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out := filepath.Join(t.TempDir(), "out.mp4")
+	var log bytes.Buffer
+	if err := Render(ctx, plan, out, &log); err != nil {
+		t.Fatal(err)
+	}
+	body := log.String()
+	if bytes.Contains(log.Bytes(), []byte("layered\n")) {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, ">> chunk-0 static template single: css animation; using frames") {
+		t.Fatal(body)
+	}
+	if !strings.Contains(body, "static-violations=1") {
+		t.Fatal(body)
+	}
+}
+
+func TestStaticListDoesNotMarkVisualScene(t *testing.T) {
+	requireRenderTest(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	t.Run("list", func(t *testing.T) {
+		useTempCache(t)
+		resetSeams()
+		defer resetSeams()
+		plan := visualStaticScenePlan(t, "['single']")
+		r, err := NewRenderer(ctx, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		static := r.eventStatic(0)
+		r.Close()
+		if static {
+			t.Fatal("visual scene matched static list")
+		}
+		out := filepath.Join(t.TempDir(), "list.mp4")
+		if err = Render(ctx, plan, out, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		timings := asObject(t, readFactsMap(t, out)["timings"], "timings")
+		probe := asObject(t, timings["probe"], "probe")
+		if int(asFloat(t, probe["frames"], "probe.frames")) != plan.Frames {
+			t.Fatalf("b7 probe %+v want %d", probe, plan.Frames)
+		}
+	})
+	t.Run("true", func(t *testing.T) {
+		useTempCache(t)
+		resetSeams()
+		defer resetSeams()
+		plan := visualStaticScenePlan(t, "true")
+		r, err := NewRenderer(ctx, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		static := r.eventStatic(0)
+		r.Close()
+		if !static {
+			t.Fatal("static:true should mark the visual scene")
+		}
+		out := filepath.Join(t.TempDir(), "true.mp4")
+		if err = Render(ctx, plan, out, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		timings := asObject(t, readFactsMap(t, out)["timings"], "timings")
+		probe := asObject(t, timings["probe"], "probe")
+		if int(asFloat(t, probe["frames"], "probe.frames")) != 2 {
+			t.Fatalf("static probe %+v", probe)
+		}
+	})
+}
+
+func visualStaticScenePlan(t *testing.T, staticDecl string) *Plan {
+	t.Helper()
+	p := writeFixture(t, Document{
+		Version:  1,
+		Duration: 0.4,
+		Render:   scene.RenderCfg{W: 160, H: 90, FPS: 10},
+		Timeline: []Event{{Scene: "explain"}},
+	})
+	html := `<!doctype html><meta charset="utf-8"><script>
+window.backstageTemplate={version:1,static:` + staticDecl + `,layouts:{single:['center']},captionSlots:[]};
+window.render=async function(c){document.body.innerHTML='<div id="x">hi</div>';};
+</script>`
+	if err := os.WriteFile(filepath.Join(p.Dir, "visual.html"), []byte(html), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Load(p, "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
+func TestStaticUnknownLayoutInitializeError(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := withStatic(replaceFit(layerFillHTML, "fill"), "['nope']")
+	plan := layerSlotPlan(t, 160, 90, 10, 0.4, "single", html, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	r, err := NewRenderer(ctx, plan)
+	if r != nil {
+		r.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("want unknown layout nope, got %v", err)
+	}
+}
+
+func TestStaticWrongTypeInitializeError(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := withStatic(replaceFit(layerFillHTML, "fill"), "false")
+	plan := layerSlotPlan(t, 160, 90, 10, 0.4, "single", html, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	r, err := NewRenderer(ctx, plan)
+	if r != nil {
+		r.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "static must be true or an array of layout names") {
+		t.Fatalf("want type error, got %v", err)
+	}
+}
+
+func TestStaticNonStringListInitializeError(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := withStatic(replaceFit(layerFillHTML, "fill"), "[3]")
+	plan := layerSlotPlan(t, 160, 90, 10, 0.4, "single", html, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	r, err := NewRenderer(ctx, plan)
+	if r != nil {
+		r.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "static must be true or an array of layout names") {
+		t.Fatalf("want type error, got %v", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "unknown layout") {
+		t.Fatalf("non-string must not be unknown layout: %v", err)
+	}
+}
+
+func TestStaticLayeredGuardIsError(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#222}[data-slot]{position:absolute;overflow:hidden}@keyframes spin{to{transform:rotate(360deg)}}#mark{position:absolute;left:4px;top:4px;animation:spin 1s infinite}</style><script>
+window.backstageTemplate={version:1,static:true,layouts:{single:['center']},captionSlots:[]};
+window.render=async function(c){
+  document.body.innerHTML='<div id="mark">x</div><div data-slot="center" data-fit="fill" style="left:10%;top:15%;width:80%;height:65%"></div>';
+};
+</script>`
+	plan := layerSlotPlan(t, 320, 180, 10, 0.4, "single", html, nil)
+	layerMode = "layered"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	err := Render(ctx, plan, filepath.Join(t.TempDir(), "out.mp4"), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "layered: css animation") {
+		t.Fatalf("want layered guard error, got %v", err)
+	}
+}
+
+func TestStaticVisualSceneWarning(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	p := writeFixture(t, Document{
+		Version:  1,
+		Duration: 0.4,
+		Render:   scene.RenderCfg{W: 160, H: 90, FPS: 10},
+		Timeline: []Event{{Scene: "explain"}},
+	})
+	html := `<!doctype html><meta charset="utf-8"><style>@keyframes spin{to{transform:rotate(360deg)}}#mark{position:absolute;animation:spin 1s infinite}</style><script>
+window.backstageTemplate={version:1,static:true,layouts:{},captionSlots:[]};
+window.render=async function(c){document.body.innerHTML='<div id="mark">x</div>';};
+</script>`
+	if err := os.WriteFile(filepath.Join(p.Dir, "visual.html"), []byte(html), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Load(p, "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out := filepath.Join(t.TempDir(), "out.mp4")
+	var log bytes.Buffer
+	if err = Render(ctx, plan, out, &log); err != nil {
+		t.Fatal(err)
+	}
+	body := log.String()
+	if !strings.Contains(body, ">> chunk-0 static scene explain: css animation; using frames") {
+		t.Fatal(body)
+	}
+	if strings.Contains(body, "static template") {
+		t.Fatal(body)
 	}
 }

@@ -25,6 +25,13 @@ import (
 //go:embed web/*
 var web embed.FS
 
+type still struct {
+	event int
+	geo   []probeGeo
+	caps  string
+	png   []byte
+}
+
 type Renderer struct {
 	plan        *Plan
 	ctx         context.Context
@@ -35,6 +42,9 @@ type Renderer struct {
 	mu          sync.Mutex
 	url         string
 	scale       float64
+	staticAt    []bool
+	below       *still
+	above       *still
 }
 
 func dependencies() (string, error) {
@@ -106,11 +116,19 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 		return fail(err)
 	}
 	config := map[string]any{"events": events, "parameters": p.Document.Parameters, "text": p.Text, "duration": p.Document.Duration}
-	if err = r.eval("initialize", config); err != nil {
+	if err = r.evalValue("initialize", config, &r.staticAt); err != nil {
 		return fail(err)
+	}
+	if len(r.staticAt) != len(p.Document.Timeline) {
+		return fail(fmt.Errorf("initialize static flags"))
 	}
 	return r, nil
 }
+
+func (r *Renderer) eventStatic(i int) bool {
+	return i >= 0 && i < len(r.staticAt) && r.staticAt[i]
+}
+
 func (r *Renderer) eval(fn string, value any) error {
 	return r.evalValue(fn, value, nil)
 }
@@ -233,35 +251,59 @@ func (r *Renderer) probeTimed(t float64) (probeFrame, time.Duration, error) {
 	return pr, time.Since(t0), err
 }
 
-func (r *Renderer) captureLayers(t float64) (below, above []byte, shotBelow, shotAbove time.Duration, err error) {
+func (r *Renderer) captureOneLayer(t float64, layer string) (png []byte, shot time.Duration, err error) {
 	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
 	defer cancel()
-	transp := emulation.SetDefaultBackgroundColorOverride().WithColor(&cdp.RGBA{R: 0, G: 0, B: 0, A: 0})
-	clear := emulation.SetDefaultBackgroundColorOverride()
 	restore := func() {
 		_ = r.evalJS("document.documentElement.style.background='';document.body.style.background='';")
-		_ = chromedp.Run(ctx, clear)
+		_ = chromedp.Run(ctx, emulation.SetDefaultBackgroundColorOverride())
 	}
 	defer restore()
-	if err = r.eval("drawLayer", map[string]any{"time": t, "layer": "below"}); err != nil {
-		return nil, nil, 0, 0, err
+	if layer == "above" {
+		transp := emulation.SetDefaultBackgroundColorOverride().WithColor(&cdp.RGBA{R: 0, G: 0, B: 0, A: 0})
+		if err = chromedp.Run(ctx, transp); err != nil {
+			return nil, 0, err
+		}
+	}
+	if err = r.eval("drawLayer", map[string]any{"time": t, "layer": layer}); err != nil {
+		return nil, 0, err
 	}
 	t0 := time.Now()
-	below, err = r.captureScreenshot()
-	shotBelow = time.Since(t0)
+	png, err = r.captureScreenshot()
+	return png, time.Since(t0), err
+}
+
+func (r *Renderer) captureLayers(t float64) (below, above []byte, shotBelow, shotAbove time.Duration, err error) {
+	below, shotBelow, err = r.captureOneLayer(t, "below")
 	if err != nil {
 		return nil, nil, shotBelow, 0, err
 	}
-	if err = chromedp.Run(ctx, transp); err != nil {
-		return nil, nil, shotBelow, 0, err
-	}
-	if err = r.eval("drawLayer", map[string]any{"time": t, "layer": "above"}); err != nil {
-		return nil, nil, shotBelow, 0, err
-	}
-	t1 := time.Now()
-	above, err = r.captureScreenshot()
-	shotAbove = time.Since(t1)
+	above, shotAbove, err = r.captureOneLayer(t, "above")
 	return below, above, shotBelow, shotAbove, err
+}
+
+func (r *Renderer) captureEventLayers(t float64, event int, geo []probeGeo, caps string) (below, above []byte, shotBelow, shotAbove time.Duration, belowHit, aboveHit bool, err error) {
+	if r.below != nil && r.below.event == event && geosEqual(r.below.geo, geo) {
+		below = r.below.png
+		belowHit = true
+	} else {
+		below, shotBelow, err = r.captureOneLayer(t, "below")
+		if err != nil {
+			return nil, nil, shotBelow, 0, false, false, err
+		}
+		r.below = &still{event: event, geo: cloneGeo(geo), png: below}
+	}
+	if r.above != nil && r.above.event == event && geosEqual(r.above.geo, geo) && r.above.caps == caps {
+		above = r.above.png
+		aboveHit = true
+	} else {
+		above, shotAbove, err = r.captureOneLayer(t, "above")
+		if err != nil {
+			return below, nil, shotBelow, shotAbove, belowHit, false, err
+		}
+		r.above = &still{event: event, geo: cloneGeo(geo), caps: caps, png: above}
+	}
+	return below, above, shotBelow, shotAbove, belowHit, aboveHit, nil
 }
 
 // Check exercises template initialization and a frame at every transition boundary.

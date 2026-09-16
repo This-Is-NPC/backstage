@@ -147,6 +147,13 @@ func TestProgressLineIncludesProbeAndLayered(t *testing.T) {
 	if !strings.Contains(line, "probe-p95=0.002") || !strings.Contains(line, "composite=0.400") || !strings.Contains(line, "layered=3") {
 		t.Fatal(line)
 	}
+	if strings.Contains(line, "static-violations") {
+		t.Fatal(line)
+	}
+	warn := renderTimings{StaticViolations: 2}.progressLine(24)
+	if !strings.Contains(warn, "static-violations=2") {
+		t.Fatal(warn)
+	}
 }
 
 func writePatternMKV(t *testing.T, fps int, duration float64) string {

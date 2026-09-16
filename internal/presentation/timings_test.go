@@ -263,6 +263,9 @@ func TestRenderRecordsLayeredTimings(t *testing.T) {
 	if int(asFloat(t, timings["layered-chunks"], "layered-chunks")) != 1 {
 		t.Fatal(timings["layered-chunks"])
 	}
+	if _, ok := timings["static-violations"]; ok {
+		t.Fatal("static-violations")
+	}
 	if asFloat(t, timings["decoded-png-bytes"], "decoded-png-bytes") != 0 {
 		t.Fatal(timings["decoded-png-bytes"])
 	}

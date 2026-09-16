@@ -48,6 +48,7 @@ type chunkResult struct {
 	decodedPNG, screenshotBytes                int64
 	rendererStart, decoderStart                float64
 	encode, wall, composite                    float64
+	staticViolations                           int
 	files                                      map[string]string
 }
 
@@ -260,6 +261,7 @@ func mergeChunkResults(results []chunkResult, timings *renderTimings) map[string
 		} else if res.encode > encodeMax {
 			encodeMax = res.encode
 		}
+		timings.StaticViolations += res.staticViolations
 		timings.ChunkSeconds = append(timings.ChunkSeconds, namedSeconds{ID: fmt.Sprintf("chunk-%d", res.index), Seconds: res.wall})
 	}
 	timings.EncodeSeconds = encodeMax
@@ -388,43 +390,32 @@ func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, work string,
 		}
 	}
 	mode := currentLayerMode()
-	var probes []probeFrame
-	if mode != "frames" && !skipLayerProbe(p, opts, ch) {
-		for n := ch.First; n < ch.End; n++ {
-			if err := ctx.Err(); err != nil {
-				return res, setFail(err)
-			}
-			pr, dur, err := r.probeTimed(float64(n) / float64(p.FPS))
-			if err != nil {
-				return res, setFail(fmt.Errorf("probe %d: %w", n, err))
-			}
-			res.probe.add(dur)
-			probes = append(probes, pr)
-		}
+	path, err := decideChunkPath(ctx, r, p, opts, ch, mode, &res)
+	if err != nil {
+		return res, setFail(err)
 	}
 	useLayered := false
-	if len(probes) > 0 {
-		dec := chunkEligible(p, ch, probes)
-		switch mode {
-		case "layered":
-			if !dec.Layered {
-				return res, setFail(fmt.Errorf("layered: %s", dec.Reason))
-			}
-			useLayered = true
-		case "frames":
-			useLayered = false
-		default:
-			useLayered = dec.Layered
+	switch mode {
+	case "frames":
+	case "layered":
+		if !path.dec.Layered {
+			return res, setFail(fmt.Errorf("layered: %s", path.dec.Reason))
 		}
-	} else if mode == "layered" {
-		return res, setFail(fmt.Errorf("layered: not eligible"))
+		useLayered = true
+	default:
+		if path.dec.Layered {
+			useLayered = true
+		} else if path.violation {
+			fmt.Fprintf(progress, ">> chunk-%d static %s: %s; using frames\n", ch.Index, staticSubject(p.Document.Timeline[ch.Event]), path.dec.Reason)
+			res.staticViolations++
+		}
 	}
 	if useLayered {
 		fmt.Fprintf(progress, ">> chunk-%d layered\n", ch.Index)
 		if observeChunkDecoders != nil {
 			observeChunkDecoders(ch.Index, sortedKeys(decoders))
 		}
-		layered, err := renderLayeredChunk(ctx, r, p, work, trackPaths, ch, nFrames, encodeThreads, completed, progress, out, &res, probes, meta)
+		layered, err := renderLayeredChunk(ctx, r, p, work, trackPaths, ch, nFrames, encodeThreads, completed, progress, out, &res, path.probes, path.caps, meta)
 		if err != nil {
 			return res, setFail(err)
 		}
@@ -437,7 +428,60 @@ func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, work string,
 	return renderFramesChunk(ctx, r, p, trackPaths, decoders, progress, opts, ch, nFrames, encodeThreads, completed, setFail, started, out, res)
 }
 
-func renderLayeredChunk(ctx context.Context, r *Renderer, p *Plan, work string, trackPaths map[string]string, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, progress io.Writer, out string, res *chunkResult, probes []probeFrame, meta *trackMeta) (chunkResult, error) {
+type chunkPath struct {
+	probes    []probeFrame
+	dec       layerDecision
+	violation bool
+	caps      string
+}
+
+func decideChunkPath(ctx context.Context, r *Renderer, p *Plan, opts renderOpts, ch chunkRange, mode string, res *chunkResult) (chunkPath, error) {
+	if mode == "frames" || skipLayerProbe(p, opts, ch) {
+		return chunkPath{dec: layerDecision{Reason: "not eligible"}}, nil
+	}
+	if r.eventStatic(ch.Event) {
+		firstN := ch.First
+		lastN := ch.End - 1
+		first, dur, err := r.probeTimed(float64(firstN) / float64(p.FPS))
+		if err != nil {
+			return chunkPath{}, fmt.Errorf("probe %d: %w", firstN, err)
+		}
+		res.probe.add(dur)
+		last, dur, err := r.probeTimed(float64(lastN) / float64(p.FPS))
+		if err != nil {
+			return chunkPath{}, fmt.Errorf("probe %d: %w", lastN, err)
+		}
+		res.probe.add(dur)
+		dec, caps := staticChunkEligible(p, ch, first, last)
+		if !dec.Layered {
+			return chunkPath{dec: dec, caps: caps}, nil
+		}
+		if ok, reason := staticGuard(first, last); !ok {
+			return chunkPath{dec: layerDecision{Reason: reason}, violation: true, caps: caps}, nil
+		}
+		return chunkPath{probes: []probeFrame{first}, dec: layerDecision{Layered: true}, caps: caps}, nil
+	}
+	var probes []probeFrame
+	for n := ch.First; n < ch.End; n++ {
+		if err := ctx.Err(); err != nil {
+			return chunkPath{}, err
+		}
+		pr, dur, err := r.probeTimed(float64(n) / float64(p.FPS))
+		if err != nil {
+			return chunkPath{}, fmt.Errorf("probe %d: %w", n, err)
+		}
+		res.probe.add(dur)
+		probes = append(probes, pr)
+	}
+	dec := chunkEligible(p, ch, probes)
+	path := chunkPath{dec: dec}
+	if dec.Layered {
+		path.probes = probes
+	}
+	return path, nil
+}
+
+func renderLayeredChunk(ctx context.Context, r *Renderer, p *Plan, work string, trackPaths map[string]string, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, progress io.Writer, out string, res *chunkResult, probes []probeFrame, caps string, meta *trackMeta) (chunkResult, error) {
 	if failAtFrame != nil {
 		for n := ch.First; n < ch.End; n++ {
 			if e := failAtFrame(ch.Index, n); e != nil {
@@ -446,13 +490,29 @@ func renderLayeredChunk(ctx context.Context, r *Renderer, p *Plan, work string, 
 		}
 	}
 	t := float64(ch.First) / float64(p.FPS)
-	below, above, shotBelow, shotAbove, err := r.captureLayers(t)
-	res.shot.add(shotBelow)
-	res.shot.add(shotAbove)
+	var below, above []byte
+	var shotBelow, shotAbove time.Duration
+	var err error
+	if r.eventStatic(ch.Event) {
+		var belowHit, aboveHit bool
+		below, above, shotBelow, shotAbove, belowHit, aboveHit, err = r.captureEventLayers(t, ch.Event, probes[0].Geometry, caps)
+		if !belowHit {
+			res.shot.add(shotBelow)
+			res.screenshotBytes += int64(len(below))
+		}
+		if !aboveHit {
+			res.shot.add(shotAbove)
+			res.screenshotBytes += int64(len(above))
+		}
+	} else {
+		below, above, shotBelow, shotAbove, err = r.captureLayers(t)
+		res.shot.add(shotBelow)
+		res.shot.add(shotAbove)
+		res.screenshotBytes += int64(len(below) + len(above))
+	}
 	if err != nil {
 		return *res, err
 	}
-	res.screenshotBytes += int64(len(below) + len(above))
 	boxes := make([]slotBox, len(probes[0].Geometry))
 	for i, g := range probes[0].Geometry {
 		boxes[i] = snapSlot(g)
