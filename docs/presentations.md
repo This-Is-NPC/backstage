@@ -179,7 +179,8 @@ export also writes a `timings` object beside `render`: phase seconds
 stages (`decode`, `transfer`, `draw`, `screenshot`,
 `encode-write`, `probe`) with total, mean, max, p95 and frame count
 (`probe` is the Go round-trip of the geometry check, like decode),
-`layered-chunks`, `composite-seconds`, and intermediate
+`layered-chunks`, `composite-seconds`, `static-violations` (omitted when
+zero), and intermediate
 byte sizes (`track-bytes`, `audio-part-bytes`, `mix-wav-bytes`,
 `video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`)
 and cache counters (`cache-hits`, `cache-misses`, each `{tracks, audio, segments}`).
@@ -193,6 +194,16 @@ only one chunk. Progress ends with
 `probe-p95=`, `composite=` and `layered=`.
 A still chunk may print `>> chunk-N layered` after `running` and encode from
 two layer stills plus the prepared tracks instead of a screenshot per frame.
+A template that declares `static` for the event's layout (or `static: true` on
+a visual scene) probes the first and last frame of each chunk and keeps one
+below still and one above still on that worker, recapturing when the event,
+geometry, or caption set changes. A broken static promise prints
+`>> chunk-N static template <layout>: <reason>; using frames` or
+`>> chunk-N static scene <name>: <reason>; using frames`
+(`css animation`, `smil`, or `geometry`) and facts record `static-violations`
+(omitted when zero). The timings line includes `static-violations=` only
+when the count is positive. A geometry change that comes and goes between
+the two samples stays under the static promise.
 Layered eligibility needs constant slot geometry (integer or fractional)
 and radii whose computed value is a single `px` token; percent radii, scroll that changes per frame, and blend/transition
 chunks stay on the screenshot path. On both paths the track image sits in an
@@ -217,7 +228,8 @@ chunk's Chromium frame loop; it does not mean the encoder is the bottleneck. On 
 `complete` render the loop itself spends about 4.3 s in screenshot and
 3.7 s in draw of about 10 s total. Layered chunks skip that per-frame loop after
 a geometry probe; `composite-seconds` is the FFmpeg overlay encode and is not
-included in `encode-seconds`. A layered chunk records two screenshot samples.
+included in `encode-seconds`. A layered chunk records two screenshot samples
+unless a static event reuses a still from an earlier chunk on that worker.
 
 Visual reproducibility assumes fixed inputs, browser, fonts and tool versions;
 MP4 byte identity across environments is not promised. Prepared FFV1 tracks use

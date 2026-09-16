@@ -54,7 +54,19 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    graph (input `-ss` at `(S-0.5)/fps` plus relative `trim=start_frame=0`,
    scale `flags=area`, rounded-rect∩image mask, overlay `eof_action=repeat`,
    libx264 tail, `-frames:v`). The track image is an integer-pixel rectangle
-   inside the snapped slot on both paths. Track width/height and packet count are
+   inside the snapped slot on both paths. When the event's template declares
+   `static` for that layout (or `static: true` on a visual scene), the same
+   overlay graph runs after probes at the chunk's **first and last** frames.
+   Eligibility then ignores DOM hash, `canvas`,
+   `video`, and animated images, and takes the caption set from `Plan.Text`
+   (`t >= at && t < end` at every frame of the chunk). CSS/SMIL activity on
+   either sample, or slot geometry that differs between them, prints
+   `>> chunk-N static template <layout>: <reason>; using frames` (or
+   `static scene <name>` when the event has no layout) and increments
+   `static-violations`. A change that appears and disappears between those
+   two samples stays under the static promise. Each worker holds one below
+   still and one above still and replaces them when the event, geometry, or
+   (for above) caption key changes. Track width/height and packet count are
    measured once per track path per render and shared across workers. Other misses
    stay on the screenshot loop. The DOM hash includes `scrollTop`/`scrollLeft`,
    form-control `.value`, checkbox `checked`/`indeterminate` and `select`
@@ -62,8 +74,8 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    `activeElement` path. `getSelection()` and caret offset stay unseen.
    `data-fit` is `contain`, `cover` or `fill`; any other value is an initialize
    error that names the slot and the value. Progress is
-   `>> chunk-N running|layered|ok|failed|interrupted` and
-   `>> render k/n frames` summing frames written across misses.
+   `>> chunk-N running|layered|ok|failed|interrupted`, the static-promise
+   warning, and `>> render k/n frames` summing frames written across misses.
    Layered misses do not open PNG track decoders. Layer stills live under the
    render work dir (`.backstage-render-*`).
 6. Concat demuxer `-c copy` when there is more than one chunk, then one AAC
@@ -80,11 +92,14 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    on misses; `encode-seconds` is the max frames-path encoder Start to Wait
    (image2pipe chunks only). `composite-seconds` sums layered overlay encodes
    and is not copied into `encode-seconds`. A layered miss adds two screenshot
-   histogram samples (below and above). `chunk-seconds` lists misses only.
+   histogram samples (below and above) unless a static event reuses a still.
+   `chunk-seconds` lists misses only.
    Screenshot and draw dominate the screenshot loop; `probe` is the Go
    round-trip of `evalValue("probe")` (same histogram as decode/draw, not the
    JS `performance.now` inside the page); `layered-chunks` counts misses that
-   took the overlay path.
+   took the overlay path. `static-violations` counts static-promise fallbacks
+   and is omitted when zero. `initialize` returns one boolean per event for
+   that declaration.
    Facts `inputs` are the union of plan entries, files loaded while rendering
    misses, and manifests of hits for events in this interval.
 

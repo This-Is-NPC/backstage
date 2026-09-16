@@ -163,7 +163,12 @@ path the track image is placed in an integer-pixel rectangle inside the
 slot (`contain`/`cover`/`fill`; blend and morph still use `object-fit`). A still chunk with constant slot geometry (including CSS `%`),
 equal borders and radii whose computed values are a single `px` token,
 and no CSS/SMIL/`canvas` animation can encode from
-two layer stills plus the prepared tracks (`>> chunk-N layered`). Percent
+two layer stills plus the prepared tracks (`>> chunk-N layered`). Set
+`static: true` (or a list of layout names) when chrome and slot geometry do
+not change with time; those events probe the first and last frame of each
+chunk and keep one below still and one above still on that worker. The below
+still is reused while the event and slot geometry stay the same; the above
+still also keys on the chunk caption set. Percent
 radii, elliptical two-value radii, and changing `scrollTop`/`scrollLeft` or form
 `.value` stay on the screenshot path. The probe
 must see the same DOM hash at every frame of the chunk (the hash includes

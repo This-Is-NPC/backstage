@@ -25,6 +25,23 @@ window.render = async function (context) {
 };
 ```
 
+Optional `static: true` marks every event that uses the template, or
+`static: ["single", "two-screens"]` lists layouts whose chrome and slot
+geometry do not change with time (track images and captions still may).
+`static: true` also covers visual scenes, which have no layout; a list never
+matches a scene. `initialize` rejects any other type, and a non-string list
+entry, with `static must be true or an array of layout names`, and a name
+that is not a key of `layouts` with `unknown layout <name>`. The built-in
+template does not declare `static`. Each static chunk probes its first and
+last frame; the worker keeps one below still and one above still and
+recaptures when the event, slot geometry, or (for above) the chunk caption
+set changes. A live CSS or SMIL animation, or first/last geometry that do
+not match, falls back to the screenshot loop with a warning on that chunk.
+A change that appears and disappears between those two samples stays under
+the static promise. Without the declaration the renderer still requires a
+stable DOM hash, no `canvas` / `video`, and no animated images before it
+will overlay.
+
 Provide elements with `data-slot="center"` and
 `data-caption-slot="subtitle"`. `render(context)` must create the slots for its
 layout before resolving. Set `data-fit="cover"` to crop a video to its slot,
@@ -65,7 +82,8 @@ The probe does not see shadow DOM, nested iframes, CSSOM /
 `getSelection()` or caret offset: `activeElement` identity is hashed, but a
 selection or caret move that paints without changing that path is unseen. A
 template that changes pixels through those means is unsupported on the
-layered path and must stay on the screenshot loop.
+layered path and must stay on the screenshot loop unless it declares
+`static` for that layout and those pixels truly do not move.
 
 The built-in parameters are `title`, `background`, `foreground` and `border`.
 Custom templates may interpret additional JSON parameters. Visual scenes use
