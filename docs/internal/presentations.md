@@ -36,8 +36,10 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 5. Misses are partitioned into `N` contiguous slices (`N` from
    `resolveWorkers`: CPU/2, memory/2 GiB, number of misses). Each worker
    starts one Chromium for its life and keeps track decoders open across
-   consecutive chunks. At the start of each miss, a decoder for a track that
-   is no longer needed (`!trackNeeded`) is closed. `ensureDecoder` reuses the
+   consecutive chunks. Chromium runs with `--disable-partial-raster` so the
+   anti-aliased edge of a rounded slot is identical from one screenshot to
+   the next under CPU load. At the start of each miss, a decoder for a
+   track that is no longer needed (`!trackNeeded`) is closed. `ensureDecoder` reuses the
    decoder when `index == d.frame` (already on that frame),
    `index == d.frame+1` (the next frame after the last `get`), or `d.done`
    (hold after EOF). Otherwise it closes and reopens at `index` with input
