@@ -1,4 +1,4 @@
-package cli
+package budget
 
 import (
 	"bufio"
@@ -10,19 +10,19 @@ import (
 	"strings"
 )
 
-const hostMemoryReserve = 2 << 30
+const HostMemoryReserve = 2 << 30
 
-var readMemAvailable = func() (uint64, error) {
+var ReadMemAvailable = func() (uint64, error) {
 	body, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return 0, err
 	}
-	return parseMemAvailable(body)
+	return ParseMemAvailable(body)
 }
 
-var numCPU = runtime.NumCPU
+var NumCPU = runtime.NumCPU
 
-func parseMemAvailable(body []byte) (uint64, error) {
+func ParseMemAvailable(body []byte) (uint64, error) {
 	sc := bufio.NewScanner(bytes.NewReader(body))
 	for sc.Scan() {
 		line := sc.Text()
@@ -45,9 +45,9 @@ func parseMemAvailable(body []byte) (uint64, error) {
 	return 0, fmt.Errorf("meminfo: MemAvailable missing")
 }
 
-func memoryBudget(available uint64) uint64 {
-	if available <= hostMemoryReserve {
+func MemoryBudget(available uint64) uint64 {
+	if available <= HostMemoryReserve {
 		return 0
 	}
-	return available - hostMemoryReserve
+	return available - HostMemoryReserve
 }

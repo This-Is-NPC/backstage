@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/budget"
 	"github.com/This-Is-NPC/backstage/internal/facts"
 	"github.com/This-Is-NPC/backstage/internal/machine"
 )
@@ -81,9 +82,9 @@ func TestRealParallelStages(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
 
-	cpus := numCPU()
-	mem, memErr := readMemAvailable()
-	t.Logf("host budget NumCPU=%d MemAvailable=%d (%s) memoryBudget=%d", cpus, mem, fmtBytes(mem), memoryBudget(mem))
+	cpus := budget.NumCPU()
+	mem, memErr := budget.ReadMemAvailable()
+	t.Logf("host budget NumCPU=%d MemAvailable=%d (%s) memoryBudget=%d", cpus, mem, fmtBytes(mem), budget.MemoryBudget(mem))
 	if memErr != nil {
 		t.Logf("MemAvailable: %v", memErr)
 	}
@@ -225,7 +226,7 @@ func TestRealParallelStages(t *testing.T) {
 	spans := runningSpans(evs)
 	if !stagesOverlap(spans, nameA, nameB) {
 		t.Fatalf("no overlapping running interval between %s and %s\n  spans=%s\n  NumCPU=%d MemAvailable=%d (%s) err=%v memoryBudget=%d spec=%d CPU %s",
-			nameA, nameB, formatSpans(spans), cpus, mem, fmtBytes(mem), memErr, memoryBudget(mem),
+			nameA, nameB, formatSpans(spans), cpus, mem, fmtBytes(mem), memErr, budget.MemoryBudget(mem),
 			machine.DefaultSpec().CPUs, fmtBytes(machine.DefaultSpec().Memory))
 	}
 

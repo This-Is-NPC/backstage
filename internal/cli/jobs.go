@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/budget"
 	"github.com/This-Is-NPC/backstage/internal/engine"
 	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/workspace"
@@ -199,7 +200,7 @@ func (d *depsExec) schedule(plan *workspace.Plan, opts engine.Options, title str
 	if err != nil {
 		return err
 	}
-	memBudget := memoryBudget(avail)
+	memBudget := budget.MemoryBudget(avail)
 	cpus := d.cpus()
 	kind := "play"
 	if !opts.Record {
@@ -885,14 +886,14 @@ func (d *depsExec) memAvail() (uint64, error) {
 	if d.MemAvailable != nil {
 		return d.MemAvailable()
 	}
-	return readMemAvailable()
+	return budget.ReadMemAvailable()
 }
 
 func (d *depsExec) cpus() int {
 	if d.NumCPU != nil {
 		return d.NumCPU()
 	}
-	return numCPU()
+	return budget.NumCPU()
 }
 
 func (d *depsExec) stageSpec(stage string) (int, uint64) {
