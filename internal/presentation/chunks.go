@@ -41,13 +41,14 @@ func (f *firstFail) claim(idx int, err error) bool {
 }
 
 type chunkResult struct {
-	index                               int
-	rendered                            bool
-	decode, transfer, draw, shot, write msHist
-	decodedPNG, screenshotBytes         int64
-	rendererStart, decoderStart         float64
-	encode, wall                        float64
-	files                               map[string]string
+	index                                      int
+	rendered                                   bool
+	layered                                    bool
+	decode, transfer, draw, shot, write, probe msHist
+	decodedPNG, screenshotBytes                int64
+	rendererStart, decoderStart                float64
+	encode, wall, composite                    float64
+	files                                      map[string]string
 }
 
 func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, opts renderOpts) (err error) {
@@ -141,6 +142,7 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 	video := filepath.Join(work, "video.mp4")
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	meta := &trackMeta{}
 	var completed atomic.Int64
 	var fail firstFail
 	fail.cancel = cancel
@@ -152,7 +154,7 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 			wg.Add(1)
 			go func(part []chunkJob) {
 				defer wg.Done()
-				runChunkWorker(ctx, runCtx, p, work, trackPaths, progress, opts, part, nChunks, nFrames, encodeThreads, cache, segs, &completed, &fail, results)
+				runChunkWorker(ctx, runCtx, p, work, trackPaths, progress, opts, part, nChunks, nFrames, encodeThreads, cache, segs, &completed, &fail, results, meta)
 			}(part)
 		}
 		wg.Wait()
@@ -233,7 +235,7 @@ func concatChunks(ctx context.Context, work string, chunks []chunkRange, video s
 
 func mergeChunkResults(results []chunkResult, timings *renderTimings) map[string]string {
 	files := map[string]string{}
-	var decodeH, transferH, drawH, shotH, writeH msHist
+	var decodeH, transferH, drawH, shotH, writeH, probeH msHist
 	encodeMax := 0.0
 	for _, res := range results {
 		for rel, path := range res.files {
@@ -247,11 +249,15 @@ func mergeChunkResults(results []chunkResult, timings *renderTimings) map[string
 		drawH.merge(res.draw)
 		shotH.merge(res.shot)
 		writeH.merge(res.write)
+		probeH.merge(res.probe)
 		timings.DecodedPNGBytes += res.decodedPNG
 		timings.ScreenshotBytes += res.screenshotBytes
 		timings.RendererStartSeconds += res.rendererStart
 		timings.DecoderStartSeconds += res.decoderStart
-		if res.encode > encodeMax {
+		timings.CompositeSeconds += res.composite
+		if res.layered {
+			timings.LayeredChunks++
+		} else if res.encode > encodeMax {
 			encodeMax = res.encode
 		}
 		timings.ChunkSeconds = append(timings.ChunkSeconds, namedSeconds{ID: fmt.Sprintf("chunk-%d", res.index), Seconds: res.wall})
@@ -262,6 +268,7 @@ func mergeChunkResults(results []chunkResult, timings *renderTimings) map[string
 	timings.Draw = drawH.snapshot()
 	timings.Screenshot = shotH.snapshot()
 	timings.EncodeWrite = writeH.snapshot()
+	timings.Probe = probeH.snapshot()
 	return files
 }
 
@@ -283,7 +290,7 @@ func ensureDecoder(ctx context.Context, decoders map[string]*decoder, id, path s
 	return nd, time.Since(started), nil
 }
 
-func runChunkWorker(parent, ctx context.Context, p *Plan, work string, trackPaths map[string]string, progress io.Writer, opts renderOpts, miss []chunkJob, nChunks, nFrames, encodeThreads int, cache *renderCache, segs *segmentCache, completed *atomic.Int64, fail *firstFail, results []chunkResult) {
+func runChunkWorker(parent, ctx context.Context, p *Plan, work string, trackPaths map[string]string, progress io.Writer, opts renderOpts, miss []chunkJob, nChunks, nFrames, encodeThreads int, cache *renderCache, segs *segmentCache, completed *atomic.Int64, fail *firstFail, results []chunkResult, meta *trackMeta) {
 	if len(miss) == 0 {
 		return
 	}
@@ -314,7 +321,7 @@ func runChunkWorker(parent, ctx context.Context, p *Plan, work string, trackPath
 		workPath := chunkVideoPath(work, nChunks, ch.Index)
 		var res chunkResult
 		hit, err := cache.getOrFill(ctx, "segments", job.key, ".mp4", workPath, fmt.Sprintf("chunk-%d", ch.Index), segs.entryValid, func(tmp string) (map[string]string, error) {
-			out, e := renderChunk(parent, ctx, r, p, trackPaths, decoders, progress, opts, ch, nFrames, encodeThreads, completed, fail, tmp)
+			out, e := renderChunk(parent, ctx, r, p, work, trackPaths, decoders, progress, opts, ch, nFrames, encodeThreads, completed, fail, tmp, meta)
 			res = out
 			if e != nil {
 				return nil, e
@@ -344,7 +351,7 @@ func runChunkWorker(parent, ctx context.Context, p *Plan, work string, trackPath
 	}
 }
 
-func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, trackPaths map[string]string, decoders map[string]*decoder, progress io.Writer, opts renderOpts, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, fail *firstFail, out string) (chunkResult, error) {
+func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, work string, trackPaths map[string]string, decoders map[string]*decoder, progress io.Writer, opts renderOpts, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, fail *firstFail, out string, meta *trackMeta) (chunkResult, error) {
 	res := chunkResult{index: ch.Index}
 	fmt.Fprintf(progress, ">> chunk-%d running\n", ch.Index)
 	status := "ok"
@@ -370,14 +377,126 @@ func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, trackPaths m
 		return err
 	}
 	started := time.Now()
+	for _, id := range sortedKeys(p.Tracks) {
+		tr := p.Tracks[id]
+		if trackNeeded(tr, ch.First, ch.End, p.FPS) {
+			continue
+		}
+		if d := decoders[id]; d != nil {
+			d.close()
+			delete(decoders, id)
+		}
+	}
+	mode := currentLayerMode()
+	var probes []probeFrame
+	if mode != "frames" && !skipLayerProbe(p, opts, ch) {
+		for n := ch.First; n < ch.End; n++ {
+			if err := ctx.Err(); err != nil {
+				return res, setFail(err)
+			}
+			pr, dur, err := r.probeTimed(float64(n) / float64(p.FPS))
+			if err != nil {
+				return res, setFail(fmt.Errorf("probe %d: %w", n, err))
+			}
+			res.probe.add(dur)
+			probes = append(probes, pr)
+		}
+	}
+	useLayered := false
+	if len(probes) > 0 {
+		dec := chunkEligible(p, ch, probes)
+		switch mode {
+		case "layered":
+			if !dec.Layered {
+				return res, setFail(fmt.Errorf("layered: %s", dec.Reason))
+			}
+			useLayered = true
+		case "frames":
+			useLayered = false
+		default:
+			useLayered = dec.Layered
+		}
+	} else if mode == "layered" {
+		return res, setFail(fmt.Errorf("layered: not eligible"))
+	}
+	if useLayered {
+		fmt.Fprintf(progress, ">> chunk-%d layered\n", ch.Index)
+		if observeChunkDecoders != nil {
+			observeChunkDecoders(ch.Index, sortedKeys(decoders))
+		}
+		layered, err := renderLayeredChunk(ctx, r, p, work, trackPaths, ch, nFrames, encodeThreads, completed, progress, out, &res, probes, meta)
+		if err != nil {
+			return res, setFail(err)
+		}
+		layered.wall = roundSec(time.Since(started))
+		layered.files = r.filesForEvents(chunkEvents(p, ch)...)
+		layered.rendered = true
+		layered.layered = true
+		return layered, nil
+	}
+	return renderFramesChunk(ctx, r, p, trackPaths, decoders, progress, opts, ch, nFrames, encodeThreads, completed, setFail, started, out, res)
+}
+
+func renderLayeredChunk(ctx context.Context, r *Renderer, p *Plan, work string, trackPaths map[string]string, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, progress io.Writer, out string, res *chunkResult, probes []probeFrame, meta *trackMeta) (chunkResult, error) {
+	if failAtFrame != nil {
+		for n := ch.First; n < ch.End; n++ {
+			if e := failAtFrame(ch.Index, n); e != nil {
+				return *res, e
+			}
+		}
+	}
+	t := float64(ch.First) / float64(p.FPS)
+	below, above, shotBelow, shotAbove, err := r.captureLayers(t)
+	res.shot.add(shotBelow)
+	res.shot.add(shotAbove)
+	if err != nil {
+		return *res, err
+	}
+	res.screenshotBytes += int64(len(below) + len(above))
+	boxes := make([]slotBox, len(probes[0].Geometry))
+	for i, g := range probes[0].Geometry {
+		boxes[i] = snapSlot(g)
+	}
+	observeMu.Lock()
+	frameObs := observeFrame
+	compObs := observeComposedFrame
+	observeMu.Unlock()
+	var observe func(n int, png []byte) error
+	if frameObs != nil || compObs != nil {
+		observe = func(n int, png []byte) error {
+			tt := float64(n) / float64(p.FPS)
+			observeMu.Lock()
+			if observeFrame != nil {
+				observeFrame(n, tt, png)
+			}
+			if observeComposedFrame != nil {
+				observeComposedFrame(n, tt, png)
+			}
+			observeMu.Unlock()
+			return nil
+		}
+	}
+	encodeAt := time.Now()
+	err = compositeChunk(ctx, p, ch, trackPaths, boxes, below, above, encodeThreads, work, out, meta, observe)
+	res.composite = roundSec(time.Since(encodeAt))
+	if err != nil {
+		return *res, err
+	}
+	nOut := ch.End - ch.First
+	for i := 0; i < nOut; i++ {
+		k := int(completed.Add(1) - 1)
+		if k%p.FPS == 0 {
+			fmt.Fprintf(progress, ">> render %d/%d frames\n", k, nFrames)
+		}
+	}
+	return *res, nil
+}
+
+func renderFramesChunk(ctx context.Context, r *Renderer, p *Plan, trackPaths map[string]string, decoders map[string]*decoder, progress io.Writer, opts renderOpts, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, setFail func(error) error, started time.Time, out string, res chunkResult) (chunkResult, error) {
 	var decoderDur time.Duration
 	for _, id := range sortedKeys(p.Tracks) {
 		tr := p.Tracks[id]
 		if !trackNeeded(tr, ch.First, ch.End, p.FPS) {
-			if d := decoders[id]; d != nil {
-				d.close()
-				delete(decoders, id)
-			}
 			continue
 		}
 		index := trackFrame(tr, ch.First, p.FPS)

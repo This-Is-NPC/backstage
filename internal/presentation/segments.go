@@ -110,12 +110,20 @@ func embeddedWebHashes() map[string]string {
 	return out
 }
 
+func x264CodecArgs() []string {
+	return []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"}
+}
+
+func x264EncodeTail(p *Plan, encodeThreads int, out string) []string {
+	return append(x264CodecArgs(), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
+}
+
 func x264BaseArgs(p *Plan, opts renderOpts) []string {
 	args := []string{"-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-"}
 	if opts.Scale != 1 {
 		args = append(args, "-vf", draftCropFilter())
 	}
-	return append(args, "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p")
+	return append(args, x264CodecArgs()...)
 }
 
 func segmentEncodeArgs(p *Plan, opts renderOpts) []string {

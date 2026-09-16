@@ -9,14 +9,16 @@ import (
 
 // Test-only seams. observeRender is nil in production; noteRender calls it under observeMu.
 var (
-	prepareSerial      = false
-	screenshotOptimize = true
-	ffv1GOP            = 1
-	screenshotObserver func(optimize bool)
-	observeRender      func(renderNote)
-	observeFrame       func(n int, t float64, png []byte)
-	observeMu          sync.Mutex
-	prepareOne         = prepareTrack
+	prepareSerial        = false
+	screenshotOptimize   = true
+	ffv1GOP              = 1
+	screenshotObserver   func(optimize bool)
+	observeRender        func(renderNote)
+	observeFrame         func(n int, t float64, png []byte)
+	observeComposedFrame func(n int, t float64, png []byte)
+	layerMode            = "auto"
+	observeMu            sync.Mutex
+	prepareOne           = prepareTrack
 )
 
 type renderNote struct {

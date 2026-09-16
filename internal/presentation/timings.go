@@ -44,7 +44,10 @@ type renderTimings struct {
 	Draw                 framePhase         `json:"draw"`
 	Screenshot           framePhase         `json:"screenshot"`
 	EncodeWrite          framePhase         `json:"encode-write"`
-	// EncodeSeconds is the longest chunk encoder Start to Wait. It overlaps that chunk's frame loop.
+	Probe                framePhase         `json:"probe"`
+	LayeredChunks        int                `json:"layered-chunks"`
+	CompositeSeconds     float64            `json:"composite-seconds"`
+	// EncodeSeconds is the longest frames-path chunk encoder Start to Wait.
 	EncodeSeconds   float64          `json:"encode-seconds"`
 	MuxSeconds      *float64         `json:"mux-seconds,omitempty"`
 	ConcatSeconds   *float64         `json:"concat-seconds,omitempty"`
@@ -184,8 +187,9 @@ func (t renderTimings) progressLine(frames int) string {
 	for _, s := range t.PrepareTrackSeconds {
 		prep += s
 	}
-	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f concat=%.3f mux=%.3f workers=%d frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f cache-hits=%d cache-misses=%d\n",
+	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f concat=%.3f mux=%.3f workers=%d frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f probe-p95=%.3f composite=%.3f layered=%d cache-hits=%d cache-misses=%d\n",
 		t.TotalSeconds, t.RendererStartSeconds, t.DecoderStartSeconds, prep, audio, t.EncodeSeconds, concat, mux, t.Workers, frames,
 		t.Decode.P95Seconds, t.Transfer.P95Seconds, t.Draw.P95Seconds, t.Screenshot.P95Seconds, t.EncodeWrite.P95Seconds,
+		t.Probe.P95Seconds, t.CompositeSeconds, t.LayeredChunks,
 		t.CacheHits.Tracks+t.CacheHits.Audio+t.CacheHits.Segments, t.CacheMisses.Tracks+t.CacheMisses.Audio+t.CacheMisses.Segments)
 }

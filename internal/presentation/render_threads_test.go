@@ -27,7 +27,10 @@ func resetSeams() {
 	screenshotObserver = nil
 	observeRender = nil
 	observeFrame = nil
+	observeComposedFrame = nil
+	layerMode = "auto"
 	observeCommand = nil
+	observeCountPackets = nil
 	observeChunkDecoders = nil
 	failAtFrame = nil
 	prepareOne = prepareTrack

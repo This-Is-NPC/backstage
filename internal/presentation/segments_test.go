@@ -522,7 +522,7 @@ func chunkHits(log string, n int) [4]bool {
 }
 
 func isEncodeCommand(name string, args []string) bool {
-	return filepath.Base(name) == "ffmpeg" && containsArg(args, "libx264") && containsArg(args, "image2pipe")
+	return filepath.Base(name) == "ffmpeg" && containsArg(args, "libx264")
 }
 
 func isDecoderCommand(args []string) bool {
@@ -835,6 +835,7 @@ func TestDecoderReopensAcrossCacheGap(t *testing.T) {
 	defer resetSeams()
 	plan := codedLongPlan(t)
 	plan.Project.Render.Workers = 1
+	layerMode = "frames"
 	chunks := planChunks(plan, 0, plan.Frames)
 	if len(chunks) != 3 {
 		t.Fatalf("chunks=%d %+v", len(chunks), chunks)
@@ -926,6 +927,7 @@ func TestHideTrackClosesDecoder(t *testing.T) {
 	defer resetSeams()
 	plan := hideTrackPlan(t)
 	plan.Project.Render.Workers = 1
+	layerMode = "frames"
 	if n := len(planChunks(plan, 0, plan.Frames)); n < 2 {
 		t.Fatalf("chunks=%d", n)
 	}
@@ -938,14 +940,14 @@ func TestHideTrackClosesDecoder(t *testing.T) {
 	if err := Render(ctx, plan, filepath.Join(t.TempDir(), "out.mp4"), io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if !containsID(got[0], "feat") || !containsID(got[0], "cam") {
-		t.Fatalf("chunk 0 decoders %v", got[0])
+	if !containsID(got[1], "cam") {
+		t.Fatalf("chunk 1 missing cam: %v", got[1])
 	}
 	if containsID(got[1], "feat") {
 		t.Fatalf("chunk 1 still has feat: %v", got[1])
 	}
-	if !containsID(got[1], "cam") {
-		t.Fatalf("chunk 1 missing cam: %v", got[1])
+	if !containsID(got[0], "feat") || !containsID(got[0], "cam") {
+		t.Fatalf("chunk 0 decoders %v", got[0])
 	}
 }
 

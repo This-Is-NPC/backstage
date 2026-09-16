@@ -123,6 +123,7 @@ func TestOneWorkerFFmpegArgs(t *testing.T) {
 	defer resetSeams()
 	plan := timedPlan(t)
 	plan.Project.Render.Workers = 1
+	layerMode = "frames"
 	var cmds [][]string
 	observeCommand = func(name string, args []string) {
 		if name == "ffmpeg" {
@@ -149,12 +150,19 @@ func TestOneWorkerFFmpegArgs(t *testing.T) {
 			encoder = args
 		}
 	}
-	mixAt, decAt, encAt := indexOfKind(kinds, "mix"), indexOfKind(kinds, "decoder"), indexOfKind(kinds, "encoder")
-	if mixAt < 0 || decAt < 0 || encAt < 0 {
+	mixAt, encAt := indexOfKind(kinds, "mix"), indexOfKind(kinds, "encoder")
+	if mixAt < 0 || encAt < 0 {
 		t.Fatalf("kinds %v", kinds)
 	}
-	if mixAt > decAt || mixAt > encAt {
-		t.Fatalf("mix must run in shared prepare, before the chunk decoder/encoder: %v", kinds)
+	if mixAt > encAt {
+		t.Fatalf("mix must run in shared prepare, before the chunk encoder: %v", kinds)
+	}
+	decoder := indexOfKind(kinds, "decoder")
+	if decoder < 0 {
+		t.Fatalf("missing decoder: %v", kinds)
+	}
+	if mixAt > decoder {
+		t.Fatalf("mix must run before the chunk decoder: %v", kinds)
 	}
 	if encoder == nil {
 		t.Fatal("missing encoder")
@@ -271,6 +279,23 @@ func TestMergeChunkResults(t *testing.T) {
 	}
 	if files["x"] != "/x" || files["y"] != "/y" || files["z"] != "/z" {
 		t.Fatal(files)
+	}
+	layered := chunkResult{rendered: true, layered: true, index: 3, encode: 99, composite: 1.5, wall: 2}
+	layered.shot.add(4 * time.Millisecond)
+	layered.shot.add(5 * time.Millisecond)
+	var mixed renderTimings
+	_ = mergeChunkResults([]chunkResult{a, b, hit, layered}, &mixed)
+	if mixed.EncodeSeconds != 3.4 {
+		t.Fatalf("layered encode leaked %v", mixed.EncodeSeconds)
+	}
+	if mixed.CompositeSeconds != 1.5 {
+		t.Fatalf("composite %v", mixed.CompositeSeconds)
+	}
+	if mixed.LayeredChunks != 1 {
+		t.Fatalf("layered-chunks %d", mixed.LayeredChunks)
+	}
+	if mixed.Screenshot.Frames != 4 {
+		t.Fatalf("screenshot frames %+v", mixed.Screenshot)
 	}
 }
 
@@ -669,6 +694,8 @@ func ffmpegKind(args []string) string {
 	case containsArg(args, "png") && containsArg(args, "image2pipe"):
 		return "decoder"
 	case containsArg(args, "libx264") && containsArg(args, "image2pipe"):
+		return "encoder"
+	case containsArg(args, "libx264"):
 		return "encoder"
 	case containsArg(args, "aac"):
 		return "mux"

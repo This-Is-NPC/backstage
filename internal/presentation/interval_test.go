@@ -142,6 +142,13 @@ func TestProgressLineIncludesDecoderStart(t *testing.T) {
 	}
 }
 
+func TestProgressLineIncludesProbeAndLayered(t *testing.T) {
+	line := renderTimings{Probe: framePhase{P95Seconds: 0.002}, CompositeSeconds: 0.4, LayeredChunks: 3}.progressLine(24)
+	if !strings.Contains(line, "probe-p95=0.002") || !strings.Contains(line, "composite=0.400") || !strings.Contains(line, "layered=3") {
+		t.Fatal(line)
+	}
+}
+
 func writePatternMKV(t *testing.T, fps int, duration float64) string {
 	t.Helper()
 	requireFFmpeg(t)

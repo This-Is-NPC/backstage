@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -111,25 +112,31 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 	return r, nil
 }
 func (r *Renderer) eval(fn string, value any) error {
-	_, err := r.evalNumber(fn, value, false)
-	return err
+	return r.evalValue(fn, value, nil)
 }
 
-func (r *Renderer) evalNumber(fn string, value any, read bool) (float64, error) {
+func (r *Renderer) evalNumber(fn string, value any) (float64, error) {
+	var ms float64
+	err := r.evalValue(fn, value, &ms)
+	return ms, err
+}
+
+func (r *Renderer) evalValue(fn string, value, dest any) error {
 	b, err := json.Marshal(value)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
 	defer cancel()
 	expr := "window." + fn + "(" + string(b) + ")"
 	await := func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) }
-	if !read {
-		return 0, chromedp.Run(ctx, chromedp.Evaluate(expr, nil, await))
-	}
-	var ms float64
-	err = chromedp.Run(ctx, chromedp.Evaluate(expr, &ms, await))
-	return ms, err
+	return chromedp.Run(ctx, chromedp.Evaluate(expr, dest, await))
+}
+
+func (r *Renderer) evalJS(expr string) error {
+	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
+	defer cancel()
+	return chromedp.Run(ctx, chromedp.Evaluate(expr, nil))
 }
 func (r *Renderer) Close() {
 	if r.cancel != nil {
@@ -201,7 +208,7 @@ func (r *Renderer) frameTimed(t float64, frames map[string][]byte) ([]byte, fram
 	t0 := time.Now()
 	images := encodeImages(frames)
 	t1 := time.Now()
-	ms, err := r.evalNumber("drawTimed", map[string]any{"time": t, "images": images}, true)
+	ms, err := r.evalNumber("drawTimed", map[string]any{"time": t, "images": images})
 	if err != nil {
 		return nil, st, err
 	}
@@ -217,6 +224,44 @@ func (r *Renderer) frameTimed(t float64, frames map[string][]byte) ([]byte, fram
 	shot, err := r.captureScreenshot()
 	st.screenshot = time.Since(shotAt)
 	return shot, st, err
+}
+
+func (r *Renderer) probeTimed(t float64) (probeFrame, time.Duration, error) {
+	var pr probeFrame
+	t0 := time.Now()
+	err := r.evalValue("probe", map[string]any{"time": t}, &pr)
+	return pr, time.Since(t0), err
+}
+
+func (r *Renderer) captureLayers(t float64) (below, above []byte, shotBelow, shotAbove time.Duration, err error) {
+	ctx, cancel := context.WithTimeout(r.ctx, 30*time.Second)
+	defer cancel()
+	transp := emulation.SetDefaultBackgroundColorOverride().WithColor(&cdp.RGBA{R: 0, G: 0, B: 0, A: 0})
+	clear := emulation.SetDefaultBackgroundColorOverride()
+	restore := func() {
+		_ = r.evalJS("document.documentElement.style.background='';document.body.style.background='';")
+		_ = chromedp.Run(ctx, clear)
+	}
+	defer restore()
+	if err = r.eval("drawLayer", map[string]any{"time": t, "layer": "below"}); err != nil {
+		return nil, nil, 0, 0, err
+	}
+	t0 := time.Now()
+	below, err = r.captureScreenshot()
+	shotBelow = time.Since(t0)
+	if err != nil {
+		return nil, nil, shotBelow, 0, err
+	}
+	if err = chromedp.Run(ctx, transp); err != nil {
+		return nil, nil, shotBelow, 0, err
+	}
+	if err = r.eval("drawLayer", map[string]any{"time": t, "layer": "above"}); err != nil {
+		return nil, nil, shotBelow, 0, err
+	}
+	t1 := time.Now()
+	above, err = r.captureScreenshot()
+	shotAbove = time.Since(t1)
+	return below, above, shotBelow, shotAbove, err
 }
 
 // Check exercises template initialization and a frame at every transition boundary.

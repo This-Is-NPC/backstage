@@ -145,6 +145,9 @@ func asFloat(t *testing.T, v any, name string) float64 {
 func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 	requireRenderTest(t)
 	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	layerMode = "frames"
 	plan := timedPlan(t)
 	out := filepath.Join(t.TempDir(), "show.mp4")
 	var log bytes.Buffer
@@ -171,10 +174,11 @@ func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 	timings := asObject(t, facts["timings"], "timings")
 	for _, key := range []string{
 		"renderer-start-seconds", "decoder-start-seconds", "prepare-track-seconds", "audio-seconds", "audio-part-seconds",
-		"decode", "transfer", "draw", "screenshot", "encode-write",
+		"decode", "transfer", "draw", "screenshot", "encode-write", "probe",
 		"encode-seconds", "mux-seconds", "metadata-seconds", "total-seconds", "workers",
 		"track-bytes", "audio-part-bytes", "mix-wav-bytes", "video-mp4-bytes", "final-mp4-bytes",
 		"decoded-png-bytes", "screenshot-bytes", "cache-hits", "cache-misses",
+		"layered-chunks", "composite-seconds",
 	} {
 		if _, ok := timings[key]; !ok {
 			t.Fatalf("timings missing %s", key)
@@ -192,6 +196,9 @@ func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 	}
 	if asFloat(t, timings["video-mp4-bytes"], "video-mp4-bytes") <= 0 {
 		t.Fatal("video-mp4-bytes")
+	}
+	if int(asFloat(t, timings["layered-chunks"], "layered-chunks")) != 0 {
+		t.Fatal("layered-chunks")
 	}
 	if asFloat(t, timings["decoded-png-bytes"], "decoded-png-bytes") <= 0 {
 		t.Fatal("decoded-png-bytes")
@@ -215,15 +222,68 @@ func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 	if part["id"] != "music" {
 		t.Fatal(part)
 	}
-	for _, key := range []string{"decode", "transfer", "draw", "screenshot", "encode-write"} {
+	for _, key := range []string{"decode", "transfer", "draw", "screenshot", "encode-write", "probe"} {
 		phase := asObject(t, timings[key], key)
 		for _, field := range []string{"seconds", "mean-seconds", "max-seconds", "p95-seconds", "frames"} {
 			if _, ok := phase[field]; !ok {
 				t.Fatalf("%s missing %s", key, field)
 			}
 		}
-		if int(asFloat(t, phase["frames"], key+".frames")) != plan.Frames {
+		n := int(asFloat(t, phase["frames"], key+".frames"))
+		if key == "probe" {
+			if n != 0 {
+				t.Fatalf("probe frames=%v want 0", phase["frames"])
+			}
+			continue
+		}
+		if n != plan.Frames {
 			t.Fatalf("%s frames=%v want %d", key, phase["frames"], plan.Frames)
+		}
+	}
+}
+
+func TestRenderRecordsLayeredTimings(t *testing.T) {
+	requireRenderTest(t)
+	useTempCache(t)
+	resetSeams()
+	defer resetSeams()
+	html := replaceFit(layerFillHTML, "fill")
+	plan := layerSlotPlan(t, 320, 180, 10, 0.4, "single", html, nil)
+	out := filepath.Join(t.TempDir(), "show.mp4")
+	var log bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := Render(ctx, plan, out, &log); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(log.Bytes(), []byte(">> chunk-0 layered\n")) {
+		t.Fatal(log.String())
+	}
+	timings := asObject(t, readFactsMap(t, out)["timings"], "timings")
+	if int(asFloat(t, timings["layered-chunks"], "layered-chunks")) != 1 {
+		t.Fatal(timings["layered-chunks"])
+	}
+	if asFloat(t, timings["decoded-png-bytes"], "decoded-png-bytes") != 0 {
+		t.Fatal(timings["decoded-png-bytes"])
+	}
+	if asFloat(t, timings["composite-seconds"], "composite-seconds") <= 0 {
+		t.Fatal(timings["composite-seconds"])
+	}
+	if asFloat(t, timings["encode-seconds"], "encode-seconds") != 0 {
+		t.Fatal(timings["encode-seconds"])
+	}
+	probe := asObject(t, timings["probe"], "probe")
+	if int(asFloat(t, probe["frames"], "probe.frames")) != plan.Frames {
+		t.Fatalf("probe %+v want %d", probe, plan.Frames)
+	}
+	shot := asObject(t, timings["screenshot"], "screenshot")
+	if int(asFloat(t, shot["frames"], "screenshot.frames")) != 2 {
+		t.Fatalf("screenshot %+v", shot)
+	}
+	for _, key := range []string{"decode", "transfer", "draw", "encode-write"} {
+		phase := asObject(t, timings[key], key)
+		if int(asFloat(t, phase["frames"], key+".frames")) != 0 {
+			t.Fatalf("%s %+v", key, phase)
 		}
 	}
 }
