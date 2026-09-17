@@ -6,6 +6,9 @@ an idea with an animated SVG. Changing the montage does not re-record the takes.
 ## Before you start
 
 - Have three video files in `recordings/`: `parent.mp4`, `laptop.mp4` and `browser.mp4`.
+  Those names stay valid after a later successful `play`; a failed take does
+  not replace them. A source that names `"scene"` reads the published
+  generation instead of the file path.
 - Install Chromium (or Google Chrome), FFmpeg and ffprobe.
 - Run the commands below from your project directory. All JSON paths are relative
   to that directory.
@@ -111,7 +114,8 @@ backstage render complete
 Preview renders first, then opens playback, seek and frame-step controls. Wait
 for that initial render; Ctrl-C closes its temporary server. Inspect the final
 frame to confirm that the animation finishes and the viewer can read the result.
-The export is `exports/complete.mp4` with a companion `.facts.json`.
+The export is `exports/complete.mp4` with a companion `.facts.json` that records
+input hashes and render `timings`.
 
 ## 5. Customize and reuse
 

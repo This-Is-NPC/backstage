@@ -65,7 +65,8 @@ You direct the scene. Backstage performs it and records the take.
 4. Rehearse the scene to check the timing and the targets.
 5. Play the scene to record the tutorial.
 
-The output is at `<project>/recordings/<scene>.mp4`.
+The output is at `<project>/recordings/<scene>.mp4`. That path is the last
+successful take; a failed take does not replace it.
 
 ## Quickstart
 
@@ -92,6 +93,7 @@ New here? Start with
 | :--- | :--- |
 | `backstage list` | it lists the scenes and productions of the project |
 | `backstage play SCENE` | it runs the scene and records an `.mp4` |
+| `backstage takes prune` | it removes abandoned or old recorded takes |
 | `backstage rehearse SCENE` | it runs the scene fast, with no recorder |
 | `backstage produce PRODUCTION` | it joins clips and transitions into one video |
 | `backstage setup --stage LAYOUT` | it stages a layout and stops |

@@ -12,10 +12,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var newMachine = machine.New
+
 func stageCmd() *cobra.Command {
 	c := &cobra.Command{Use: "stage", Short: "Create and manage shared Omarchy recording VMs"}
-	c.AddCommand(stageDoctorCmd(), stageCreateCmd(), stageListCmd(), stageInspectCmd(), stageCloneCmd())
-	for _, verb := range []string{"start", "stop", "ssh", "credentials", "snapshot", "snapshots", "restore", "delete"} {
+	c.AddCommand(stageDoctorCmd(), stageCreateCmd(), stageListCmd(), stageInspectCmd(), stageCloneCmd(), stagePruneStatesCmd())
+	for _, verb := range []string{"start", "stop", "ssh", "credentials", "snapshot", "snapshots", "restore", "snapshot-delete", "delete"} {
 		c.AddCommand(stageOperationCmd(verb))
 	}
 	return c
@@ -82,7 +84,7 @@ func stageCreateCmd() *cobra.Command {
 		if err = spec.Validate(); err != nil {
 			return err
 		}
-		m, err := machine.New()
+		m, err := newMachine()
 		if err != nil {
 			return err
 		}
@@ -123,7 +125,7 @@ func stageCreateCmd() *cobra.Command {
 func stageListCmd() *cobra.Command {
 	var asJSON bool
 	c := &cobra.Command{Use: "list", Short: "List shared stages", Args: cobra.NoArgs, RunE: func(c *cobra.Command, _ []string) error {
-		m, err := machine.New()
+		m, err := newMachine()
 		if err != nil {
 			return err
 		}
@@ -161,7 +163,7 @@ func stageListCmd() *cobra.Command {
 func stageInspectCmd() *cobra.Command {
 	var asJSON bool
 	c := &cobra.Command{Use: "inspect NAME", Short: "Show stage configuration and live state without secrets", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
-		m, err := machine.New()
+		m, err := newMachine()
 		if err != nil {
 			return err
 		}
@@ -194,7 +196,7 @@ func stageCloneCmd() *cobra.Command {
 		if snapshot == "" {
 			return errors.New("clone requires --snapshot (use initial for the original prepared state)")
 		}
-		m, err := machine.New()
+		m, err := newMachine()
 		if err != nil {
 			return err
 		}
@@ -219,20 +221,20 @@ func stageCloneCmd() *cobra.Command {
 }
 
 func stageOperationCmd(verb string) *cobra.Command {
-	var force, yes bool
+	var force, yes, origins bool
 	use := verb + " NAME"
 	count := 1
-	if verb == "snapshot" || verb == "restore" {
+	if verb == "snapshot" || verb == "restore" || verb == "snapshot-delete" {
 		use += " SNAPSHOT"
 		count = 2
 	}
-	c := &cobra.Command{Use: use, Short: map[string]string{"start": "Boot a stage and wait for SSH", "stop": "Shut down a stage", "ssh": "Open an administrative shell (invalidates continuity)", "credentials": "Explicitly reveal the filmed user's password", "snapshot": "Save a cold disk and firmware snapshot", "snapshots": "List saved states", "restore": "Restore a saved state, leaving the VM stopped", "delete": "Delete a managed stage"}[verb], Args: cobra.ExactArgs(count), RunE: func(c *cobra.Command, args []string) error {
-		m, err := machine.New()
+	c := &cobra.Command{Use: use, Short: map[string]string{"start": "Boot a stage and wait for SSH", "stop": "Shut down a stage", "ssh": "Open an administrative shell (invalidates continuity)", "credentials": "Explicitly reveal the filmed user's password", "snapshot": "Save a cold disk and firmware snapshot", "snapshots": "List saved states", "restore": "Restore a saved state, leaving the VM stopped", "snapshot-delete": "Remove a saved state except initial", "delete": "Delete a managed stage"}[verb], Args: cobra.ExactArgs(count), RunE: func(c *cobra.Command, args []string) error {
+		m, err := newMachine()
 		if err != nil {
 			return err
 		}
 		names := []string{args[0]}
-		if verb == "snapshot" || verb == "restore" || verb == "delete" {
+		if verb == "restore" || verb == "delete" || verb == "snapshot-delete" {
 			names = append(names, "image-catalog")
 		}
 		release, err := m.Store.LockMany(names...)
@@ -260,7 +262,16 @@ func stageOperationCmd(verb string) *cobra.Command {
 		case "restore":
 			return m.Restore(c.Context(), r, args[1])
 		case "snapshots":
+			if origins {
+				return writeJSON(c, r.SnapshotInfo())
+			}
 			return writeJSON(c, r.Snapshots)
+		case "snapshot-delete":
+			warning, err := m.DeleteSnapshot(r, args[1])
+			if warning != "" {
+				fmt.Fprintf(c.ErrOrStderr(), "warning: %s\n", warning)
+			}
+			return err
 		case "credentials":
 			secret, err := m.Store.Credentials(r.Name)
 			if err != nil {
@@ -302,6 +313,9 @@ func stageOperationCmd(verb string) *cobra.Command {
 	}
 	if verb == "delete" {
 		c.Flags().BoolVar(&yes, "yes", false, "confirm removal of this managed stage")
+	}
+	if verb == "snapshots" {
+		c.Flags().BoolVar(&origins, "origins", false, "include the origin of each saved state")
 	}
 	return c
 }

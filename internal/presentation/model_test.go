@@ -113,6 +113,44 @@ func TestStrictPresentationSchema(t *testing.T) {
 		t.Fatal("ignored typo")
 	}
 }
+func TestLoadPreservesDistinctWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	leaf := filepath.Join(workspace, "leaf")
+	if err := os.MkdirAll(filepath.Join(leaf, "scenes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(Document{Version: 1, Duration: 2, Timeline: []Event{{Scene: "explain"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leaf, "show.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leaf, "visual.html"), []byte("<html></html>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leaf, "scenes", "explain.json"), []byte(`{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"cue","start":0,"end":1,"text":"A rule"}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := Load(&scene.Project{Dir: leaf, Workspace: workspace, Presentations: map[string]scene.PresentationRef{"show": {File: "show.json"}}}, "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir, err := filepath.Abs(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Project.Dir != wantDir {
+		t.Fatalf("Dir = %q, want %q", plan.Project.Dir, wantDir)
+	}
+	if plan.Project.Workspace != wantWorkspace {
+		t.Fatalf("Workspace = %q, want %q", plan.Project.Workspace, wantWorkspace)
+	}
+}
 func TestTemplateInitDoesNotOverwrite(t *testing.T) {
 	root := t.TempDir()
 	if err := InitTemplate(root, "demo"); err != nil {

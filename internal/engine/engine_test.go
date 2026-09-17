@@ -428,8 +428,13 @@ type fakeRec struct {
 
 func (f *fakeRec) Start(out string) error {
 	f.out = out
-	*f.order = append(*f.order, "rec")
-	return nil
+	if f.order != nil {
+		*f.order = append(*f.order, "rec")
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(out, []byte("clip"), 0o644)
 }
 func (f *fakeRec) Stop() (string, error) { f.stopped = true; return f.out, nil }
 
@@ -470,17 +475,18 @@ func runClip(t *testing.T, opts Options) (order []string, recOut string) {
 }
 
 func TestRecordHidesStagingByDefault(t *testing.T) {
-	order, out := runClip(t, Options{Record: true, OutPath: "/tmp/clip.mp4"})
+	clip := filepath.Join(t.TempDir(), "clip.mp4")
+	order, out := runClip(t, Options{Record: true, OutPath: clip})
 	if len(order) != 2 || order[0] != "stage" || order[1] != "rec" {
 		t.Errorf("default should record after staging, got %v", order)
 	}
-	if out != "/tmp/clip.mp4" {
+	if out != clip {
 		t.Errorf("OutPath not honored: %s", out)
 	}
 }
 
 func TestShowStagingRecordsFirst(t *testing.T) {
-	order, _ := runClip(t, Options{Record: true, OutPath: "/tmp/clip.mp4", ShowStaging: true})
+	order, _ := runClip(t, Options{Record: true, OutPath: filepath.Join(t.TempDir(), "clip.mp4"), ShowStaging: true})
 	if len(order) != 2 || order[0] != "rec" || order[1] != "stage" {
 		t.Errorf("ShowStaging should record before staging, got %v", order)
 	}
@@ -501,7 +507,7 @@ func TestEmptyPaneLayoutSkipsStaging(t *testing.T) {
 		Speed:  0.0001,
 	}
 	s := &scene.Scene{Name: "demo", Layout: "screen", Steps: []scene.Step{{Action: "wait"}}}
-	if err := e.Run(s, Options{Record: true, OutPath: "/tmp/clip.mp4", Speed: 0.0001}); err != nil {
+	if err := e.Run(s, Options{Record: true, OutPath: filepath.Join(t.TempDir(), "clip.mp4"), Speed: 0.0001}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(ord) != 1 || ord[0] != "rec" {
@@ -705,7 +711,7 @@ func TestOfflineTransitionStepSkipsPreflight(t *testing.T) {
 		Speed:  0.0001,
 	}
 	s := &scene.Scene{Name: "demo", Layout: "solo", Steps: []scene.Step{{Action: "wait"}}}
-	if err := e.Run(s, Options{Record: true, OutPath: "/tmp/clip.mp4", Speed: 0.0001}); err != nil {
+	if err := e.Run(s, Options{Record: true, OutPath: filepath.Join(t.TempDir(), "clip.mp4"), Speed: 0.0001}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if len(pr.preflights) != 0 {
@@ -759,7 +765,7 @@ func TestNoDialogSkipsPreflight(t *testing.T) {
 		Speed:  0.0001,
 	}
 	s := &scene.Scene{Name: "demo", Layout: "solo", Steps: []scene.Step{{Action: "wait"}}}
-	if err := e.Run(s, Options{Record: true, OutPath: "/tmp/clip.mp4", Speed: 0.0001}); err != nil {
+	if err := e.Run(s, Options{Record: true, OutPath: filepath.Join(t.TempDir(), "clip.mp4"), Speed: 0.0001}); err != nil {
 		t.Fatalf("Run with no dialog step should not preflight: %v", err)
 	}
 	if len(pr.preflights) != 0 {

@@ -2,8 +2,12 @@
 
 A project is a folder containing `backstage.json` plus `scenes/` and (optionally)
 `hooks/`. Backstage finds the config by walking up from a scene to the nearest
-`backstage.json`; that folder is the **project root**, and `${PROJECT}` /
-`$PROJECT` in the config expand to it.
+`backstage.json`; that folder is the **leaf project**, and `${PROJECT}` /
+`$PROJECT` in the config expand to it. A file may set `"extends": "../backstage.json"`
+to inherit from a `backstage.json` in a strict ancestor directory. The directory
+of the topmost file in that chain is the **workspace**. `${WORKSPACE}` /
+`$WORKSPACE` expand to it. A project that does not extend another is its own
+workspace.
 
 ```json
 {
@@ -38,6 +42,7 @@ A project is a folder containing `backstage.json` plus `scenes/` and (optionally
 | `popup.style.chrome` | header treatment: `default`, `minimal`, or `none` | `default` |
 | `popup.style.class` | Hyprland window class for popup rules/closing | `backstage.popup` |
 | `term` | terminal command used for the stage and popup | `ghostty` |
+| `extends` | path to an ancestor `backstage.json`; not itself inherited | — |
 | `env` | map exported to panes, hooks, props, and offline transitions | — |
 | `hooks.setup` | script run when a scene is `"fresh"` | — |
 | `hooks.reset` | script run before every other take | — |
@@ -46,13 +51,71 @@ A project is a folder containing `backstage.json` plus `scenes/` and (optionally
 | `templates` | named HTML entries for presentation layouts | built-in when omitted |
 | `presentations` | named presentation JSON files, templates and outputs | — |
 | `vms` | named external VM connections or shared managed-stage references | — |
+| `state-groups` | named lists of `vms` aliases that share one snapshot generation | — |
 
-The video is written to `<project>/<record.out>/<scene-name>.mp4`.
+The video is written to `<project>/<record.out>/<scene-name>.mp4`. That path
+is a projection of the last successful take. A failed or short take is kept
+under `.takes/` and does not replace it. Internal readers use
+`<scene-name>.take.json` when that manifest exists. A project that has never
+published a manifest is read from the stable files with no lock; a first
+`play` at the same time may replace `SCENE.mp4` during that read.
+
+## Inheritance
+
+`extends` is relative to the file that declares it and must name a
+`backstage.json` in a strict ancestor directory. An absolute path is refused.
+A chain can have more than one level. `extends` is not inherited.
+
+Backstage merges the raw JSON from the workspace root down to the leaf before
+decoding. The nearest file that **has** a key wins:
+
+| Kind | Keys | Rule |
+|---|---|---|
+| Named maps | `vms`, `layouts`, `aliases`, `templates`, `presentations`, `transitions`, `productions`, `env`, `state-groups` | Union by name. The nearest entry replaces the inherited one whole. `null` removes that entry. |
+| Settings | `record`, `popup`, `popup.style`, `render`, `render.threads`, `hooks` | Field by field. `popup.size` is replaced whole. |
+| Scalars | `term` | The nearest present value wins. |
+
+In named maps, only `null` removes an inherited entry. An empty string or `0`
+is a value: `"env": {"FOO": ""}` still exports `FOO=`. For settings fields and
+scalars, `""`, `0`, or `null` clears an inherited value, the same as never
+setting the key. Defaults and validation run once, after the merge.
+
+File references (`hooks.setup`, `hooks.reset`, `templates.*.entry`,
+`presentations.*.file`, `transitions.*.live.prop`) are relative to the file that
+declares them. Inherited relative references are rewritten so they stay correct
+from the leaf (`hooks/reset.sh` in the root becomes `../hooks/reset.sh`).
+An inherited absolute path is left unchanged and then refused. Pane `cwd` /
+`cmd` and `transitions.*.cmd` are not rewritten; they run in the leaf. A parent
+command that needs its own files uses `${WORKSPACE}`. In `env` values both
+`${PROJECT}` and `${WORKSPACE}` expand, including the `$NAME` form. In pane and
+transition commands only `${WORKSPACE}` expands, so an existing `$PROJECT` shell
+variable is left alone.
+
+Reads must stay inside the workspace. Writes (`record.out`, clips,
+`production.mp4`, presentation `out`, `exports/`, `template init`) must stay
+inside the leaf. `backstage config show` prints the merged configuration and
+the file each key came from.
+
+Two leaf projects that share a workspace remain two projects. Outputs, continuity
+and provenance stay on the leaf.
 
 To use a managed VM, declare `"vms": {"demo": {"stage": "shared-name"}}` and
 set `"vm": "demo"` in the scene. `open`, `language` and `recorder` are optional
 project-level overrides. `stage` cannot be mixed with explicit connection fields.
 See [Manage VM stages](how-to-manage-vm-stages.md).
+
+A state group names two or more of those aliases so their snapshots stay one
+generation:
+
+```json
+"state-groups": { "household": ["laptop", "server"] }
+```
+
+Every member must be a managed `vms` alias. An alias or a stage belongs to at
+most one group. The group name follows the snapshot name rule. Validation runs
+after the merge; a bad group is a `config-error`. Scenes point at the group
+with `vm-start.group` / `vm-end.group`. See
+[Manage VM stages](how-to-manage-vm-stages.md#state-groups).
 
 ## Popup style
 
@@ -92,10 +155,10 @@ Windows, and non-Hyprland popup backends are out of scope for this driver.
 
 `backstage.json` and `scenes/*.json` are executable project configuration: pane
 commands, hooks, props, and transitions run local processes as the current user.
-Only run projects you trust. To keep shared configs from escaping the project by
-accident, project-relative paths reject absolute paths, `..` escapes, and known
-symlink escapes. Scene names are limited to letters, numbers, `.`, `_`, and `-`,
-and `env` keys must be valid shell identifiers.
+Only run projects you trust. Input paths must stay inside the workspace; output
+paths must stay inside the leaf. Absolute paths, escapes past that boundary, and
+known symlink escapes are refused. Scene names are limited to letters, numbers,
+`.`, `_`, and `-`, and `env` keys must be valid shell identifiers.
 
 ## Layouts
 
@@ -183,6 +246,23 @@ The target geometry every clip is normalized to before concatenation.
 |-----|---------|---------|
 | `render.w` / `render.h` | output size | `0` = the first scene clip's size (monitor native) |
 | `render.fps` | output frame rate | falls back to `record.fps` |
+| `render.workers` | parallel presentation render workers (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, nMiss))` |
+| `render.threads.prepare` | FFmpeg/FFV1 threads while preparing each presentation track | `max(1, n/w)` (`n` = CPUs, `w` = parallel tracks) |
+| `render.threads.filter` | `-filter_complex_threads` for that prepare | `1` |
+| `render.threads.encode` | libx264 threads for each presentation chunk encoder | `n`, then `max(1, encode/workers)` per chunk |
+
+`render.workers` and `render.threads` are read only by presentation `render` /
+`preview`. `produce` does not use these keys. `0`, `null` or an omitted field
+means the default. A negative value is a configuration error. A very large
+value is accepted as written (`workers` still capped at the number of missed chunks).
+
+Each chunk encoder starts before that chunk's frame loop and codes while its
+Chromium draws and captures screenshots, so `encode` threads share the CPUs
+with the browsers. `encode-seconds` is the longest of those processes from
+Start to Wait and overlaps that loop; it is not a bottleneck reading.
+Screenshot and draw are the loop cost. The default encode count is still `n`
+before dividing across workers; measure screenshot/draw/transfer p95 and
+the frame-loop total before raising it.
 
 ### transitions
 
@@ -300,9 +380,12 @@ values. Unset dimensions default to 1920×1080 for presentations; fps falls back
 to project `render.fps`, then 30. Project `render.fps` itself defaults to
 `record.fps`. These defaults do not change legacy production sizing.
 
-JSON resource paths are relative to the project root, including paths inside
-scene and presentation files. HTML/CSS references are relative to those files.
-Paths cannot escape the project through traversal or symlinks.
+JSON resource paths in a scene stay relative to the leaf and may use `..` to
+reach a file in the workspace. Inherited template and presentation files are
+rewritten relative to the leaf, then served over HTTP as workspace-relative
+URLs so CSS, scripts, fonts and images next to an ancestor template keep
+working. Paths cannot leave the workspace through traversal or symlinks;
+outputs cannot leave the leaf.
 
 `layouts` still configures recording panes. HTML templates define presentation
 layouts. Visual HTML is referenced by a `visual` scene; there is no `slides`

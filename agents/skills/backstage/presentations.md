@@ -6,6 +6,10 @@ ffprobe must be available. Resources are local; no Node.js is required.
 
 ## Project And Timeline
 
+A leaf may inherit `templates` and `presentations` from an ancestor
+`backstage.json`. Relative references inside the template (CSS, scripts, fonts,
+images) keep working as long as they stay inside the workspace.
+
 Add project registration (merge these keys into the existing backstage.json):
 
 ```json
@@ -39,10 +43,12 @@ A minimal `presentations/demo.json` using the built-in template:
 }
 ```
 
-`scene` resolves `scenes/NAME.json` and the existing
-`<record.out>/<scene.name>.mp4`. Supply `file` alongside `scene` to select another
-take with the same editorial content. Missing files are errors, not permission
-to record. Direct file sources need no scene.
+`scene` resolves `scenes/NAME.json` and the last successful take of that
+scene. The render holds that generation until it finishes. A `file` source
+reads the path you name, including the projected `<record.out>/<scene>.mp4`.
+A failed take does not replace that path. Supply `file` alongside `scene` to
+select another file with the same editorial content. Missing files are errors,
+not permission to record. Direct file sources need no scene.
 
 Tracks are independently timed instances. To show the same source in two slots,
 declare two track IDs. A track's optional `segments` lists `{from, to, rate}` in
@@ -152,8 +158,30 @@ wall-clock timers or network resources.
 
 Slots are axis-aligned rectangles. Borders, rounded corners, backgrounds and
 shadows move with screens. `data-fit="cover"` crops; default `contain` preserves
-the screen. Arbitrary video-slot masks and 3D transforms are unsupported.
+the screen; `fill` stretches. On both the screenshot path and the overlay
+path the track image is placed in an integer-pixel rectangle inside the
+slot (`contain`/`cover`/`fill`; blend and morph still use `object-fit`). A still chunk with constant slot geometry (including CSS `%`),
+equal borders and radii whose computed values are a single `px` token,
+and no CSS/SMIL/`canvas` animation can encode from
+two layer stills plus the prepared tracks (`>> chunk-N layered`). Set
+`static: true` (or a list of layout names) when chrome and slot geometry do
+not change with time; those events probe the first and last frame of each
+chunk and keep one below still and one above still on that worker. The below
+still is reused while the event and slot geometry stay the same; the above
+still also keys on the chunk caption set. Percent
+radii, elliptical two-value radii, and changing `scrollTop`/`scrollLeft` or form
+`.value` stay on the screenshot path. The probe
+must see the same DOM hash at every frame of the chunk (the hash includes
+scroll offsets and form values). Templates that change pixels through shadow
+DOM, nested iframes, CSSOM/`adoptedStyleSheets`, JS timers, their own
+`requestAnimationFrame`, WebGL, `object`/`embed`, `background-image` on
+`::before`/`::after`, or `mask-image`/`border-image` are unsupported on that
+path. Arbitrary video-slot masks and 3D transforms are
+unsupported. `.gif`, `.apng` and `.webp` in the template keep the screenshot
+path.
 JSON paths are project-relative; HTML/CSS resources are relative to their files.
+Files a template fetches through the event prefix enter that chunk's cache
+manifest; changing those bytes re-renders the events that loaded them.
 
 ## Validate And Review
 
@@ -164,11 +192,28 @@ backstage render demo
 ```
 
 `--check` validates resources, timing and slots but does not execute every
-animation frame. Preview renders first, then opens the exact MP4 with playback,
-seek and frame-step controls. Ctrl-C closes it and removes its temporary files.
-It is not a live editor. Check the final animation state and that audio/captions
-follow the intended clock before exporting.
+animation frame. Project `render.threads` (`prepare`, `filter`, `encode`)
+applies only to presentation render; `0` uses the CPU defaults. Automatic
+`render.workers` (`0`) runs one Chromium per worker from CPU, memory and the
+number of segment-cache misses. The encoder shares the machine with Chromium during
+the frame loop; `encode-seconds` overlaps that loop and is not the
+bottleneck. Screenshot and draw are the loop cost unless a chunk is
+`layered`. A second render reuses
+cached tracks, mix and encoded chunks when the footage and the compiled plan
+match (`>> chunk-N cached`; `backstage cache prune` reclaims that cache,
+default 10G). Preview renders
+first, then opens the exact MP4 with playback, seek and frame-step controls
+(`preview --from --to --scale`; the player clock is absolute presentation
+time). Ctrl-C closes it and removes its temporary files. It is not a live
+editor. Check the final animation state and that audio/captions follow the
+intended clock before exporting.
 
 Output defaults to `exports/NAME.mp4`; `--out` overrides the project-relative
-path. Companion facts record inputs and tool versions. Source recordings remain
+path. Companion facts record inputs, tool versions and a `timings` object
+beside `render` (phase seconds, per-frame total/mean/max/p95, intermediate
+bytes). Facts `inputs` list plan entries plus files loaded by events inside
+the rendered interval. Progress ends with `>> render timings: ...`. Source input hashes stay
+the same; `builtin:runtime.html` changes only because the runtime adds
+`drawTimed`. Measured draw includes image load, host fonts, and a compositor
+paint, not pure canvas cost. Source recordings remain
 unchanged; failed exports do not replace an existing MP4.

@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -122,7 +123,7 @@ func TestRunReportsAShortTakeInsteadOfFinishingQuietly(t *testing.T) {
 	t.Cleanup(func() { takeSlack = wasSlack })
 
 	s := &scene.Scene{Name: "demo", Layout: "solo", Steps: []scene.Step{{Action: "wait", DelayAfter: 2}}}
-	err := e.Run(s, Options{Record: true, Speed: 0.1, OutPath: "/tmp/clip.mp4"})
+	err := e.Run(s, Options{Record: true, Speed: 0.1, OutPath: filepath.Join(t.TempDir(), "clip.mp4")})
 	if err == nil {
 		t.Fatal("a take missing its ending was reported as a good take")
 	}

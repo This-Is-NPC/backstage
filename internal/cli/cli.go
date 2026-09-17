@@ -3,7 +3,9 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,8 +16,10 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/This-Is-NPC/backstage/internal/engine"
+	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/production"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 	"github.com/This-Is-NPC/backstage/internal/scene"
@@ -29,8 +33,12 @@ const rehearseSpeed = 0.2
 // up from the current directory.
 var projectFlag string
 
+// binVersion is the binary version passed to Execute, written into clip facts.
+var binVersion string
+
 // Execute runs the backstage CLI.
 func Execute(version string) error {
+	binVersion = version
 	root := &cobra.Command{
 		Use:     "backstage",
 		Short:   "Declarative terminal screencast recorder — Lights, camera... Automation!",
@@ -38,7 +46,7 @@ func Execute(version string) error {
 	}
 	root.PersistentFlags().StringVar(&projectFlag, "project", "",
 		"project dir (default: search up from cwd)")
-	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd(), renderCmd(), previewCmd(), templateCmd())
+	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd(), renderCmd(), previewCmd(), templateCmd(), configCmd(), takesCmd(), cacheCmd(), statusCmd())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return root.ExecuteContext(ctx)
@@ -72,6 +80,7 @@ func produceCmd() *cobra.Command {
 				Context: c.Context(),
 				Project: p, Prod: prod, OutPath: out,
 				ShowStaging: showStaging, KeepSegments: keepSegments, Speed: speed,
+				Version: binVersion,
 			})
 			if err != nil {
 				return err
@@ -172,24 +181,298 @@ func listProject(out io.Writer, p *scene.Project) error {
 }
 
 func playCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "play SCENE",
+	var adopt, withDeps, jsonOut, adoptConfirmed, stale bool
+	var jobs, progressFD int
+	var reservedStages []string
+	var reservedFDs []int
+	var stateGen string
+	c := &cobra.Command{
+		Use:   "play [SCENE | --stale [DIR]]",
 		Short: "Stage the scene, record it, and write an mp4",
-		Args:  cobra.ExactArgs(1),
+		Args:  playRehearseArgs,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runScene(args[0], engine.Options{Context: c.Context(), Record: true, Speed: 1})
+			opts := engine.Options{Context: c.Context(), Record: true, Speed: 1, Adopt: adopt}
+			if err := refuseSchedulerChildFlags(c, withDeps); err != nil {
+				return err
+			}
+			if err := applyInternalChild(&opts, reservedStages, reservedFDs, progressFD, adoptConfirmed, stateGen); err != nil {
+				return err
+			}
+			if err := requireSchedulerFlags(c, withDeps); err != nil {
+				return err
+			}
+			if adopt && !adoptConfirmed {
+				opts.ConfirmAdopt = func(snapshot string) error {
+					return confirmAdoptNames(c.Context(), c.InOrStdin(), c.ErrOrStderr(), snapshot)
+				}
+			}
+			d, err := newDepsExec(c.OutOrStdout(), nil, nil)
+			if err != nil {
+				return err
+			}
+			d.Jobs = jobs
+			d.JSON = jsonOut
+			if stale {
+				if withDeps {
+					return fmt.Errorf("--stale cannot be used with --with-deps")
+				}
+				dir, err := staleWorkspace(args)
+				if err != nil {
+					return err
+				}
+				return d.runStale(dir, opts)
+			}
+			if withDeps {
+				return d.run(args[0], opts)
+			}
+			return runScene(args[0], opts)
 		},
 	}
+	c.Flags().BoolVar(&adopt, "adopt", false, "replace a snapshot that has no origin after typing its name")
+	c.Flags().BoolVar(&withDeps, "with-deps", false, "record stale or missing producers first")
+	c.Flags().BoolVar(&stale, "stale", false, "record every stale or missing scene; optional DIR argument defaults to .")
+	c.Flags().IntVar(&jobs, "jobs", 0, "limit concurrent takes (0 = host budget only)")
+	c.Flags().BoolVar(&jsonOut, "json", false, "emit job.progress lines and a final JSON report")
+	c.Flags().StringArrayVar(&reservedStages, "internal-reserved-stage", nil, "")
+	c.Flags().IntSliceVar(&reservedFDs, "internal-reserved-fd", nil, "")
+	c.Flags().IntVar(&progressFD, "internal-progress-fd", -1, "")
+	c.Flags().StringVar(&stateGen, "internal-state-generation", "", "")
+	c.Flags().BoolVar(&adoptConfirmed, "internal-adopt-confirmed", false, "")
+	_ = c.Flags().MarkHidden("internal-reserved-stage")
+	_ = c.Flags().MarkHidden("internal-reserved-fd")
+	_ = c.Flags().MarkHidden("internal-progress-fd")
+	_ = c.Flags().MarkHidden("internal-state-generation")
+	_ = c.Flags().MarkHidden("internal-adopt-confirmed")
+	return c
 }
 
 func rehearseCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "rehearse SCENE",
+	var replaceState, withDeps, jsonOut, adoptConfirmed, stale bool
+	var jobs, progressFD int
+	var reservedStages []string
+	var reservedFDs []int
+	var stateGen string
+	c := &cobra.Command{
+		Use:   "rehearse [SCENE | --stale [DIR]]",
 		Short: "Dry-run the scene fast, without recording",
-		Args:  cobra.ExactArgs(1),
+		Args:  playRehearseArgs,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runScene(args[0], engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed})
+			opts := engine.Options{Context: c.Context(), Record: false, Speed: rehearseSpeed, ReplaceState: replaceState}
+			if err := refuseSchedulerChildFlags(c, withDeps); err != nil {
+				return err
+			}
+			if err := applyInternalChild(&opts, reservedStages, reservedFDs, progressFD, adoptConfirmed, stateGen); err != nil {
+				return err
+			}
+			if err := requireSchedulerFlags(c, withDeps); err != nil {
+				return err
+			}
+			d, err := newDepsExec(c.OutOrStdout(), nil, nil)
+			if err != nil {
+				return err
+			}
+			d.Jobs = jobs
+			d.JSON = jsonOut
+			if stale {
+				if withDeps {
+					return fmt.Errorf("--stale cannot be used with --with-deps")
+				}
+				dir, err := staleWorkspace(args)
+				if err != nil {
+					return err
+				}
+				return d.runStale(dir, opts)
+			}
+			if withDeps {
+				return d.run(args[0], opts)
+			}
+			return runScene(args[0], opts)
 		},
+	}
+	c.Flags().BoolVar(&replaceState, "replace-state", false, "let a rehearsal replace a snapshot a recording made")
+	c.Flags().BoolVar(&withDeps, "with-deps", false, "rehearse stale or missing producers first")
+	c.Flags().BoolVar(&stale, "stale", false, "rehearse every stale or missing scene; optional DIR argument defaults to .")
+	c.Flags().IntVar(&jobs, "jobs", 0, "limit concurrent takes (0 = host budget only)")
+	c.Flags().BoolVar(&jsonOut, "json", false, "emit job.progress lines and a final JSON report")
+	c.Flags().StringArrayVar(&reservedStages, "internal-reserved-stage", nil, "")
+	c.Flags().IntSliceVar(&reservedFDs, "internal-reserved-fd", nil, "")
+	c.Flags().IntVar(&progressFD, "internal-progress-fd", -1, "")
+	c.Flags().StringVar(&stateGen, "internal-state-generation", "", "")
+	c.Flags().BoolVar(&adoptConfirmed, "internal-adopt-confirmed", false, "")
+	_ = c.Flags().MarkHidden("internal-reserved-stage")
+	_ = c.Flags().MarkHidden("internal-reserved-fd")
+	_ = c.Flags().MarkHidden("internal-progress-fd")
+	_ = c.Flags().MarkHidden("internal-state-generation")
+	_ = c.Flags().MarkHidden("internal-adopt-confirmed")
+	return c
+}
+
+func changedInternalFlags(cmd *cobra.Command) []string {
+	var names []string
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if strings.HasPrefix(f.Name, "internal-") && f.Changed {
+			names = append(names, f.Name)
+		}
+	})
+	sort.Strings(names)
+	return names
+}
+
+func refuseSchedulerChildFlags(cmd *cobra.Command, withDeps bool) error {
+	names := changedInternalFlags(cmd)
+	if len(names) == 0 {
+		return nil
+	}
+	if cmd.Flags().Changed("internal-state-generation") {
+		gen, err := cmd.Flags().GetString("internal-state-generation")
+		if err != nil {
+			return err
+		}
+		if gen != "" && !engine.ValidStateGeneration(gen) {
+			return fmt.Errorf("internal-state-generation: must be 32 lowercase hex digits")
+		}
+	}
+	if withDeps || cmd.Flags().Changed("stale") {
+		return fmt.Errorf("--%s cannot be used with --with-deps or --stale", names[0])
+	}
+	var payload []string
+	for _, name := range names {
+		if name == "internal-reserved-stage" || name == "internal-reserved-fd" {
+			continue
+		}
+		payload = append(payload, name)
+	}
+	if len(payload) > 0 && (!cmd.Flags().Changed("internal-reserved-stage") || !cmd.Flags().Changed("internal-reserved-fd")) {
+		return fmt.Errorf("--%s requires --internal-reserved-stage and --internal-reserved-fd", payload[0])
+	}
+	return nil
+}
+
+func requireSchedulerFlags(cmd *cobra.Command, withDeps bool) error {
+	if !cmd.Flags().Changed("jobs") && !cmd.Flags().Changed("json") {
+		return nil
+	}
+	if withDeps || cmd.Flags().Changed("stale") {
+		return nil
+	}
+	return fmt.Errorf("--jobs and --json require --with-deps or --stale")
+}
+
+func playRehearseArgs(cmd *cobra.Command, args []string) error {
+	stale, err := cmd.Flags().GetBool("stale")
+	if err != nil {
+		return err
+	}
+	if stale {
+		if cmd.Flags().Changed("with-deps") {
+			return fmt.Errorf("--stale cannot be used with --with-deps")
+		}
+		return cobra.MaximumNArgs(1)(cmd, args)
+	}
+	return cobra.ExactArgs(1)(cmd, args)
+}
+
+func staleWorkspace(args []string) (string, error) {
+	dir := "."
+	if len(args) == 1 {
+		dir = args[0]
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("--stale: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("--stale needs a workspace directory, not a file: %s", dir)
+	}
+	return dir, nil
+}
+
+func confirmAdoptNames(ctx context.Context, in io.Reader, errOut io.Writer, snapshot string) error {
+	names := strings.Fields(snapshot)
+	if len(names) <= 1 {
+		return confirmSnapshotName(ctx, in, errOut, snapshot)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return interrupted(err)
+	}
+	fmt.Fprintf(errOut, "Replace snapshots %s? Type their names: ", strings.Join(names, ", "))
+	type readResult struct {
+		line string
+		err  error
+	}
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(in).ReadString('\n')
+		ch <- readResult{line: line, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return interrupted(ctx.Err())
+	case got := <-ch:
+		if got.err != nil {
+			return got.err
+		}
+		gotNames := strings.Fields(got.line)
+		if !sameNameSet(gotNames, names) {
+			return errors.New("adoption cancelled")
+		}
+		return nil
+	}
+}
+
+func sameNameSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	need := map[string]int{}
+	for _, n := range want {
+		need[n]++
+	}
+	for _, n := range got {
+		need[n]--
+		if need[n] < 0 {
+			return false
+		}
+	}
+	for _, n := range need {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func confirmSnapshotName(ctx context.Context, in io.Reader, errOut io.Writer, snapshot string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return interrupted(err)
+	}
+	fmt.Fprintf(errOut, "Replace snapshot %s? Type its name: ", snapshot)
+	type readResult struct {
+		line string
+		err  error
+	}
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := bufio.NewReader(in).ReadString('\n')
+		ch <- readResult{line: line, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return interrupted(ctx.Err())
+	case got := <-ch:
+		if got.err != nil {
+			return got.err
+		}
+		if strings.TrimSpace(got.line) != snapshot {
+			return errors.New("adoption cancelled")
+		}
+		return nil
 	}
 }
 
@@ -269,11 +552,82 @@ func runScene(scenePath string, opts engine.Options) error {
 	if err := s.Validate(p); err != nil {
 		return err
 	}
+	if err := requireGenerationLock(p, s, opts); err != nil {
+		return err
+	}
+	release, err := reserveSceneStages(p, s, &opts)
+	if err != nil {
+		return err
+	}
+	if release != nil {
+		defer release()
+	}
 	eng, err := engine.NewForScene(p, s)
 	if err != nil {
 		return err
 	}
+	if opts.Version == "" {
+		opts.Version = binVersion
+	}
 	return eng.Run(s, opts)
+}
+
+func requireGenerationLock(p *scene.Project, s *scene.Scene, opts engine.Options) error {
+	if opts.StateGeneration != "" && !engine.ValidStateGeneration(opts.StateGeneration) {
+		return fmt.Errorf("internal-state-generation: must be 32 lowercase hex digits")
+	}
+	if opts.StateGeneration == "" && len(opts.ReservedStages) == 0 {
+		return nil
+	}
+	if s.VM == "" {
+		return fmt.Errorf("internal child flags require a reserved lock on the scene stage")
+	}
+	cfg := p.VMs[s.VM]
+	if cfg.Stage == "" {
+		return fmt.Errorf("internal child flags require a reserved lock on the scene stage")
+	}
+	if !opts.ReservedStages[cfg.Stage] {
+		if opts.StateGeneration != "" {
+			return fmt.Errorf("internal-state-generation requires a reserved lock on %s", cfg.Stage)
+		}
+		return fmt.Errorf("internal child flags require a reserved lock on %s", cfg.Stage)
+	}
+	return nil
+}
+
+func reserveSceneStages(p *scene.Project, s *scene.Scene, opts *engine.Options) (func(), error) {
+	names := scene.StartGroupStages(p, s)
+	if len(names) == 0 {
+		return nil, nil
+	}
+	var missing []string
+	for _, name := range names {
+		if opts.ReservedStages[name] {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if len(missing) == 0 {
+		return nil, nil
+	}
+	store, err := machine.DefaultStore()
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Init(); err != nil {
+		return nil, err
+	}
+	release, err := store.LockMany(missing...)
+	if err != nil {
+		return nil, err
+	}
+	if opts.ReservedStages == nil {
+		opts.ReservedStages = map[string]bool{}
+	}
+	for _, name := range missing {
+		opts.ReservedStages[name] = true
+	}
+	return release, nil
 }
 
 // loadProjectFrom resolves a project config from an explicit dir or by searching

@@ -24,6 +24,9 @@ described below.
 | `vm` | which guest to run inside; empty stages on this machine |
 | `fresh` | run the `setup` hook instead of `reset` |
 | `reset` | default true; false skips hooks, not desktop preparation |
+| `inputs` | extra files or directories hashed into `inputs-sha256` |
+| `vm-start` | `clean` / `reuse` / `continue` — how the guest starts. Clean may set `"group"`; then `snapshot` is required |
+| `vm-end` | `{ "snapshot": "name" }` — save that disk state after a successful take. Optional `"group"` with `state-groups` |
 
 ## Actions
 
@@ -46,6 +49,16 @@ moves on early records the next command being typed over the last one's output.
 
 Measure the real thing once and write that number down.
 
+`play` writes `<out>/<name>.facts.json` beside every take: the Backstage
+version, `inputs-sha256`, and `result` (`ok`, `steps-failed`, or `short`).
+The digest covers the scene without narration, resolved layout and VM
+entry, used aliases and transitions, the hook that runs, prop and
+`inputs` files, env, fps, speed, staging, and the start image or
+predecessor. A directory in `inputs` hashes every regular file below it.
+Unused aliases and transitions do not enter. A guest take also records
+the machine. `rehearse` writes neither a clip nor facts and does not
+compute the digest. A missing input fails the take before recording.
+
 ## Do Not Type Shell Metacharacters
 
 Typing goes through a virtual keyboard. A trailing `&`, a redirect, or a pipe
@@ -65,7 +78,8 @@ the stage opens for you.
 
 ## Visual Scenes And Narration
 
-A visual scene declares `type: "visual"`, project-relative HTML `entry` and a
+A visual scene declares `type: "visual"`, a leaf-relative HTML `entry` (`..`
+may reach a file in the workspace) and a
 positive `duration`. It does not accept VM, recording layout, steps or reset
 configuration. Use it as a presentation event, not with play or rehearse.
 

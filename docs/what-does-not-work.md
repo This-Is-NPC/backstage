@@ -152,6 +152,13 @@ because every later failure looks like something else.
 **A scene that records one screen.** Two computers are two scenes. Compose the
 clips afterwards.
 
+**A state group that leaves silent members off.** A `group` start restores
+(or A12-skips) every member's disk and boots only the scene `vm`. The others
+stay shut off. The pair is consistent at rest. A guest that must talk to its
+partner during the take finds that partner dark. Film each computer in its
+own scene. "One computer that manages another" is a later phase; there is no
+extra field for it.
+
 
 ## Presentation limits
 

@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +22,11 @@ import (
 )
 
 func command(ctx context.Context, name string, args ...string) *exec.Cmd {
+	observeMu.Lock()
+	if observeCommand != nil {
+		observeCommand(name, append([]string(nil), args...))
+	}
+	observeMu.Unlock()
 	c := exec.CommandContext(ctx, name, args...)
 	scene.SetProcessGroup(c)
 	c.Cancel = func() error {
@@ -45,6 +52,11 @@ func run(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 func num(n float64) string { return strconv.FormatFloat(n, 'f', 9, 64) }
+
+// inspectMedia probes a file. Tests replace it so Load can resolve takes
+// without calling ffprobe.
+var inspectMedia = probe
+
 func probe(path string) (Media, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -245,18 +257,28 @@ func tempo(rate float64) string {
 	}
 	return strings.Join(append(s, "atempo="+num(rate)), ",")
 }
-func (p *Plan) mix(ctx context.Context, dir string) (string, error) {
+func (p *Plan) mix(ctx context.Context, dir string, cache *renderCache) (string, []namedSeconds, error) {
 	if len(p.AudioParts) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
+	if cache != nil {
+		return cache.mix(ctx, p, dir)
+	}
+	return p.mixDirect(ctx, dir)
+}
+
+func (p *Plan) mixDirect(ctx context.Context, dir string) (string, []namedSeconds, error) {
 	args := []string{"-v", "error", "-y", "-threads", "1"}
 	var paths []string
+	var parts []namedSeconds
 	for i, a := range p.AudioParts {
 		path := filepath.Join(dir, fmt.Sprintf("audio-%d.wav", i))
 		filter := "atrim=start=" + num(a.From) + ":end=" + num(a.To) + ",asetpts=PTS-STARTPTS," + tempo(a.Rate) + ",aresample=48000,aformat=channel_layouts=stereo"
+		started := time.Now()
 		if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-i", a.Path, "-vn", "-af", filter, "-c:a", "pcm_s16le", path); err != nil {
-			return "", err
+			return "", nil, err
 		}
+		parts = append(parts, namedSeconds{ID: a.ID, Seconds: roundSec(time.Since(started))})
 		if a.Loop {
 			args = append(args, "-stream_loop", "-1")
 		}
@@ -282,11 +304,11 @@ func (p *Plan) mix(ctx context.Context, dir string) (string, error) {
 	filters = append(filters, fmt.Sprintf("%samix=inputs=%d:normalize=0,alimiter=limit=0.95:level=0:latency=1,apad,atrim=duration=%s[mix]", inputs.String(), len(paths), num(p.Document.Duration)))
 	path := filepath.Join(dir, "mix.wav")
 	args = append(args, "-filter_complex_threads", "1", "-filter_complex", strings.Join(filters, ";"), "-map", "[mix]", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-t", num(p.Document.Duration), path)
-	return path, run(ctx, "ffmpeg", args...)
+	return path, parts, run(ctx, "ffmpeg", args...)
 }
 
 // Prepare each selected track once. FFV1 retains frames without storing PNG sequences.
-func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps int) (string, error) {
+func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps, threads, filterThreads, gop int) (string, []string, error) {
 	var filters []string
 	var labels strings.Builder
 	for i, s := range t.Segments {
@@ -296,8 +318,97 @@ func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps int)
 	}
 	filters = append(filters, fmt.Sprintf("%sconcat=n=%d:v=1:a=0,fps=%d[v]", labels.String(), len(t.Segments), fps))
 	out := filepath.Join(dir, id+".mkv")
-	err := run(ctx, "ffmpeg", "-v", "error", "-y", "-threads", "1", "-i", t.Media.Path, "-filter_complex_threads", "1", "-filter_complex", strings.Join(filters, ";"), "-map", "[v]", "-an", "-c:v", "ffv1", "-threads", "1", out)
-	return out, err
+	args := []string{"-v", "error", "-y", "-threads", strconv.Itoa(threads), "-i", t.Media.Path, "-filter_complex_threads", strconv.Itoa(filterThreads), "-filter_complex", strings.Join(filters, ";"), "-map", "[v]", "-an", "-c:v", "ffv1", "-threads", strconv.Itoa(threads)}
+	if gop > 0 {
+		args = append(args, "-g", strconv.Itoa(gop))
+	}
+	args = append(args, out)
+	return out, append([]string(nil), args...), run(ctx, "ffmpeg", args...)
+}
+
+func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer, cache *renderCache) (map[string]string, map[string]float64, error) {
+	ids := sortedKeys(p.Tracks)
+	if len(ids) == 0 {
+		noteRender(renderNote{PreparedPaths: map[string]string{}})
+		return nil, nil, nil
+	}
+	prepThreads, filterThreads, _ := resolveRenderThreads(planThreadCfg(p), len(ids))
+	limit := runtime.NumCPU()
+	if limit < 1 {
+		limit = 1
+	}
+	if len(ids) < limit {
+		limit = len(ids)
+	}
+	if prepareSerial {
+		limit = 1
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	paths := make([]string, len(ids))
+	secs := make([]float64, len(ids))
+	prepArgs := make([][]string, len(ids))
+	var (
+		wg      sync.WaitGroup
+		errOnce sync.Once
+		first   error
+		sem     = make(chan struct{}, limit)
+	)
+	for i, id := range ids {
+		i, id := i, id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+			if ctx.Err() != nil {
+				return
+			}
+			fmt.Fprintf(progress, ">> prepare track %s\n", id)
+			started := time.Now()
+			var (
+				path string
+				args []string
+				err  error
+			)
+			if cache != nil {
+				path, args, err = cache.prepareTrack(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads, ffv1GOP)
+			} else {
+				path, args, err = prepareOne(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads, ffv1GOP)
+			}
+			if err != nil {
+				errOnce.Do(func() {
+					first = err
+					cancel()
+				})
+				return
+			}
+			paths[i] = path
+			prepArgs[i] = args
+			secs[i] = roundSec(time.Since(started))
+		}()
+	}
+	wg.Wait()
+	if first != nil {
+		return nil, nil, first
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	out := map[string]string{}
+	times := map[string]float64{}
+	var allArgs []string
+	for i, id := range ids {
+		out[id] = paths[i]
+		times[id] = secs[i]
+		allArgs = append(allArgs, prepArgs[i]...)
+	}
+	noteRender(renderNote{PrepareArgs: allArgs, PreparedPaths: out})
+	return out, times, nil
 }
 
 // Decoder has bounded memory and reads exactly one PNG at a time from FFmpeg.
@@ -305,14 +416,25 @@ type decoder struct {
 	cmd    *exec.Cmd
 	reader io.ReadCloser
 	stderr bytes.Buffer
+	args   []string
 	frame  int
+	start  int
 	last   []byte
 	done   bool
 }
 
-func newDecoder(ctx context.Context, path string) (*decoder, error) {
-	d := &decoder{frame: -1}
-	d.cmd = command(ctx, "ffmpeg", "-v", "error", "-threads", "1", "-i", path, "-an", "-threads", "1", "-f", "image2pipe", "-c:v", "png", "-")
+func newDecoder(ctx context.Context, path string, start, fps int) (*decoder, error) {
+	if start < 0 {
+		start = 0
+	}
+	d := &decoder{frame: start - 1, start: start}
+	args := []string{"-v", "error", "-threads", "1"}
+	if start > 0 {
+		args = append(args, "-ss", decoderSeekTime(start, fps))
+	}
+	args = append(args, "-i", path, "-an", "-threads", "1", "-f", "image2pipe", "-c:v", "png", "-")
+	d.args = append([]string(nil), args...)
+	d.cmd = command(ctx, "ffmpeg", args...)
 	d.cmd.Stderr = &d.stderr
 	var err error
 	d.reader, err = d.cmd.StdoutPipe()
@@ -324,6 +446,54 @@ func newDecoder(ctx context.Context, path string) (*decoder, error) {
 	}
 	return d, nil
 }
+
+func openTrackDecoder(ctx context.Context, path string, start, fps int) (*decoder, error) {
+	d, err := newDecoder(ctx, path, start, fps)
+	if err != nil {
+		return nil, err
+	}
+	if start <= 0 {
+		return d, nil
+	}
+	b, err := readPNG(d.reader)
+	if err == nil {
+		d.frame = start
+		d.last = b
+		return d, nil
+	}
+	if errors.Is(err, io.EOF) {
+		waitErr := d.cmd.Wait()
+		d.done = true
+		_ = d.reader.Close()
+		if waitErr != nil {
+			return nil, suffixStderr(fmt.Errorf("decode: %w", waitErr), d.stderr.String())
+		}
+		count, e := countPackets(ctx, path)
+		if e != nil {
+			return nil, e
+		}
+		if count > start {
+			return nil, suffixStderr(fmt.Errorf("decoder returned no frames (packets=%d start=%d)", count, start), d.stderr.String())
+		}
+		return newDecoder(ctx, path, count-1, fps)
+	}
+	_ = d.reader.Close()
+	if d.cmd.Process != nil {
+		_ = syscall.Kill(-d.cmd.Process.Pid, syscall.SIGKILL)
+	}
+	_ = d.cmd.Wait()
+	d.done = true
+	return nil, suffixStderr(err, d.stderr.String())
+}
+
+func suffixStderr(err error, stderr string) error {
+	s := strings.TrimSpace(stderr)
+	if s == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, s)
+}
+
 func readPNG(r io.Reader) ([]byte, error) {
 	var b bytes.Buffer
 	head := make([]byte, 8)

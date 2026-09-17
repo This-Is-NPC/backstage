@@ -33,10 +33,46 @@ func ValidateEnvKey(key string) error {
 	return nil
 }
 
-// SafePath joins project-relative path parts and rejects absolute paths, ..
-// escapes, or symlink ancestors that escape the project root.
-func (p *Project) SafePath(parts ...string) (string, error) {
-	root, err := filepath.Abs(p.Dir)
+// InputPath joins project-relative path parts for a file that is read.
+// Paths resolve from the leaf project and must stay inside the workspace.
+func (p *Project) InputPath(parts ...string) (string, error) {
+	return confinedPath(p.Dir, p.WorkspaceRoot(), parts...)
+}
+
+// OutputPath joins project-relative path parts for a file that is written.
+// Base and boundary are both the leaf project.
+func (p *Project) OutputPath(parts ...string) (string, error) {
+	return confinedPath(p.Dir, p.Dir, parts...)
+}
+
+// WorkspaceRoot is the directory of the topmost file in an extends chain,
+// or Dir when the project does not extend another or Workspace is unset.
+func (p *Project) WorkspaceRoot() string {
+	if p != nil && p.Workspace != "" {
+		return p.Workspace
+	}
+	if p != nil {
+		return p.Dir
+	}
+	return ""
+}
+
+// ConfinedPath joins parts onto base and rejects absolute parts, .. escapes,
+// or symlink ancestors that leave boundary. InputPath and OutputPath use it;
+// the presentation asset handler uses it with the workspace as both arguments.
+func ConfinedPath(base, boundary string, parts ...string) (string, error) {
+	return confinedPath(base, boundary, parts...)
+}
+
+// confinedPath joins parts onto base and rejects absolute parts, .. escapes,
+// or symlink ancestors that leave boundary. base is where relative paths
+// resolve from; boundary is the directory the result must stay inside.
+func confinedPath(base, boundary string, parts ...string) (string, error) {
+	root, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	bound, err := filepath.Abs(boundary)
 	if err != nil {
 		return "", err
 	}
@@ -51,26 +87,26 @@ func (p *Project) SafePath(parts ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(root, abs)
+	rel, err := filepath.Rel(bound, abs)
 	if err != nil {
 		return "", err
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q escapes project root %q", abs, root)
+		return "", fmt.Errorf("path %q escapes project root %q", abs, bound)
 	}
-	evalRoot, err := filepath.EvalSymlinks(root)
+	evalBound, err := filepath.EvalSymlinks(bound)
 	if err != nil {
-		return "", fmt.Errorf("project root %q: %w", root, err)
+		return "", fmt.Errorf("project root %q: %w", bound, err)
 	}
 	if rel == "." {
-		return evalRoot, nil
+		return evalBound, nil
 	}
-	check := root
+	check := bound
 	// resolved tracks the canonical real path: the symlink-resolved prefix for
 	// components that exist, plus any not-yet-existing tail components appended
 	// verbatim. Returning this instead of the raw abs path closes the TOCTOU gap
 	// where a checked component is swapped to an escaping symlink before use.
-	resolved := evalRoot
+	resolved := evalBound
 	appending := false
 	for _, elem := range strings.Split(rel, string(filepath.Separator)) {
 		if elem == "" || elem == "." {
@@ -95,12 +131,12 @@ func (p *Project) SafePath(parts ...string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		realRel, err := filepath.Rel(evalRoot, evalCheck)
+		realRel, err := filepath.Rel(evalBound, evalCheck)
 		if err != nil {
 			return "", err
 		}
 		if realRel == ".." || strings.HasPrefix(realRel, ".."+string(filepath.Separator)) {
-			return "", fmt.Errorf("path %q escapes project root %q through symlink", abs, root)
+			return "", fmt.Errorf("path %q escapes project root %q through symlink", abs, bound)
 		}
 		resolved = evalCheck
 	}
@@ -130,12 +166,12 @@ func (p *Project) PropEnv() []string {
 }
 
 // PropCommand builds an *exec.Cmd for a project-relative executable: it resolves
-// rel through SafePath, sets the project dir + env, and inherits stdio. Callers
+// rel through InputPath, sets the project dir + env, and inherits stdio. Callers
 // that need lifecycle control (start, kill, wait separately) use this; callers
 // that just want to block use RunProp. Centralizing the build keeps env/cwd/arg
 // handling from drifting between the engine and the production pipeline.
 func (p *Project) PropCommand(rel string, args []string) (*exec.Cmd, error) {
-	path, err := p.SafePath(rel)
+	path, err := p.InputPath(rel)
 	if err != nil {
 		return nil, err
 	}
@@ -190,5 +226,5 @@ func (p *Project) ScenePathSafe(name string) (string, error) {
 	if err := ValidateName("scene", name); err != nil {
 		return "", err
 	}
-	return p.SafePath("scenes", name+".json")
+	return p.InputPath("scenes", name+".json")
 }

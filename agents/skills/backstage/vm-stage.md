@@ -8,8 +8,17 @@ Backstage can create local Omarchy VMs through libvirt/QEMU:
 backstage stage doctor
 backstage stage create demo --omarchy latest
 backstage stage snapshot demo product-installed
+backstage stage snapshots demo --origins
+backstage stage snapshot-delete demo product-installed
+backstage stage prune-states demo --workspace .
 backstage stage clone demo tutorial --snapshot product-installed
 ```
+
+The pool filesystem must support POSIX ACLs. Capture keeps catalog disks
+`0440` and adds a named read ACL for your user so a later snapshot can
+open them after libvirt has taken ownership. `stage doctor` probes that
+ACL and prints `sudo setfacl` commands for older unreadable images; it
+never runs `sudo`. Do not `chmod` a captured image after the ACL.
 
 Reference a shared stage with `"vms": {"laptop": {"stage": "demo"}}`.
 Keep `"vm": "laptop"` in the scene. Do not combine `stage` with explicit
@@ -19,12 +28,45 @@ Choose the scene's starting state explicitly when it matters:
 
 - `"vm-start": {"mode": "clean", "snapshot": "product-installed"}` restores
   a cold snapshot; omitting `snapshot` uses the stage's `initial` snapshot.
+  After a `vm-end` the live overlay may already be that snapshot: if the
+  guest is `shut off` and the disk plus NVRAM still match the stored
+  fingerprint (path, inode, size, mtime-ns, ctime-ns), Begin skips Stop
+  and `activate`, does not wait for `image-catalog`, and facts record
+  `restore-skipped` with `start-image` equal to the captured image. A
+  `--stale` or `--with-deps` consumer on the same stage is the usual
+  case. Any difference, or a recording from a rehearsal snapshot, restores
+  as before. A `"group": "household"` on that clean start (snapshot
+  required) restores or skips every member of `state-groups.household`
+  first, then boots only this `vm`. Silent members stay shut off. A group
+  skip also needs `origin.generation` to match. Do not write a scene that
+  talks to another group member during the take.
 - `"vm-start": {"mode": "reuse"}` keeps disk contents and reorganizes the
   desktop, like the existing behavior.
 - `"vm-start": {"mode": "continue", "after": "01-install"}` preserves the
   entire live session. The predecessor must have succeeded in the same project,
   boot, session and execution type (rehearsal or recording). This mode skips
   reset/setup hooks and rejects explicit `fresh: true` or `reset: true`.
+  A predecessor that declares `vm-end` is refused.
+- `"vm-end": {"snapshot": "theme-installed"}` saves that disk state after a
+  successful take. Missing snapshots are created. A manual snapshot needs
+  `play --adopt` and typing the snapshot name. A rehearsal will not replace a
+  recording without `rehearse --replace-state`. A recording will not start
+  `clean` from a rehearsal. Produce has neither flag. `"group": "household"`
+  stamps `origin.group` and a 16-byte hex `origin.generation`. `produce`,
+`--with-deps` and `--stale` mint one generation for the run and remake
+every `group-sibling` producer of that snapshot in the same project,
+plus a stale or missing producer on a sibling's chain. Those commands
+refuse the child generation and reserved-stage flags. A group consumer occupies
+every member stage in the scheduler. An isolated
+producer mints a new id; an isolated consumer reads the members and locks
+all of them.   `play --with-deps`
+  and `rehearse --with-deps` walk that chain from declared producers, keep
+  a `continue` pair adjacent on the stage, refuse a replacement that
+  belongs to another scene before the lock, and do not treat `--adopt` or
+  `--replace-state` as implied for a producer. Different managed stages
+  may record at once; a host take never overlaps a VM. `--stale` uses the
+  same scheduler and also records downstream consumers. A clean restore waits for `image-catalog` unless that skip applies. Create and
+  Clone still hold the catalog for the whole verb.
 
 Rehearse a whole continuation chain before recording that chain. Never continue
 a recording from a rehearsal. Restore/reboot/SSH access invalidates continuity.
@@ -38,10 +80,48 @@ preparation. They receive `BACKSTAGE_VM_ADDRESS`, `BACKSTAGE_VM_ADMIN`,
 `BACKSTAGE_VM_USER`, `BACKSTAGE_VM_KEY`, `BACKSTAGE_VM_KNOWN_HOSTS`,
 `BACKSTAGE_VM_DOMAIN` and `BACKSTAGE_STAGE`.
 
-`stage list`, `inspect`, `start`, `stop`, `ssh`, `snapshots`, `restore` and
-`delete` manage the machines without a project. Creation/snapshots/restoration
-leave a stage stopped. Recordings leave it running. `latest` is resolved at
-creation; existing stages keep their installed version.
+`stage list`, `inspect`, `start`, `stop`, `ssh`, `snapshots`, `restore`,
+`snapshot-delete`, `prune-states` and `delete` manage the machines without a
+project. `prune-states` still needs `--workspace` so it can see which
+scenes still declare a state.
+Creation/snapshots/restoration leave a stage stopped. Recordings leave it
+running. `latest` is resolved at creation; existing stages keep their
+installed version.
+
+`stage snapshots` is the name-to-image map. `--origins` adds `{ image, origin }`
+(`origin` is `null` for `initial` and any hand-made snapshot). A produced
+state records the leaf project, scene, inputs digest, images, take kind,
+time and Backstage version. A group `vm-end` also stores `group` and
+`generation`. `inspect --json` includes `snapshot-origins`
+and `at-state` when a `vm-end` left the overlay at that capture.
+`stage doctor` prints `at-state SNAPSHOT (fingerprint ok|stale)` when
+the field exists. An older binary ignores `at-state` and does not clear
+it on Start; the fingerprint (ctime included) makes the next current
+Begin restore. It also ignores `origin.group` / `generation` and
+`state-groups`, and restores only the scene `vm`. Groups need the
+current binary. The record schema stays 1.
+`snapshot-delete` refuses `initial` and removes the mapping and origin
+together. `prune-states STAGE --workspace DIR` runs that deletion for
+produced snapshots no valid scene in the workspace still declares as
+`vm-end` on the stage. A broken config or scene, or an unreadable
+`backstage.json` under the workspace, stops it before any lock — also
+on `--dry-run`, which then lists those errors and warnings and prints
+no plan. A real run evaluates again under the stage lock and aborts
+without removing if that look fails. `image-catalog` is taken only
+around each deletion. `--dry-run` otherwise lists the same set
+without locks or new files, wording removals as `would remove`. It
+keeps `initial`, manual or relative origins, an origin path that is not
+already clean (`..`, `.`, `//`), origins outside the workspace (a hidden
+directory or a nested workspace is outside), `missing-project` unless
+`--include-missing-projects`, snapshots a `vm-start clean` consumer still
+uses (including a group consumer on another stage), and the image the stage is on. Reasons: `undeclared`, `initial`,
+`manual`, `outside-workspace`, `missing-project`, `consumed`, `in-use`.
+A failure mid-run lists `failed` and `not attempted`. Every error,
+including a missing argument or an unknown flag, is printed once to
+stderr; workspace errors, warnings and conflicts are not repeated.
+After flags parse, `--json` writes one document: the report (`cleanup-warnings`
+for pending cleanup), a workspace abort, a conflict, or
+`{"stage": STAGE, "error": "..."}`.
 
 ## Existing external VMs
 
@@ -151,7 +231,41 @@ the host's own cursor in the film.
 
 ## Provenance
 
-Each clip gets a `.facts.json` beside it: the domain, the accounts, the address
-and the guest's Omarchy version. A film is evidence, and evidence has a
-provenance. That file is the difference between a take that can be reproduced
-and one that can only be re-shot.
+Every recorded clip gets a `.facts.json` beside it, on the host and on a VM:
+the Backstage version, when it was made, and a `result` (`ok`, `steps-failed`,
+or `short`, or `capture-failed` when `vm-end` does not commit). A guest clip
+also records the machine; a clean start records `start-image` and
+`start-state.snapshot`. A successful `vm-end` adds `end-state`. Completed
+VM phases go in `timings` (seconds, capture bytes, `capture-mode`,
+`image-depth`, `catalog-wait-seconds`, `restore-skipped` when a clean
+start found the overlay already at that snapshot, and `capture-fallback` when a
+delta check flattened); they are not an input. `boot-seconds` only when Begin booted a stopped
+domain. `vm-end` and `stage snapshot` stop the guest, then hold
+`image-catalog` only around the decision/marker and the catalog
+commit (`qemu-img convert` is unlocked). A marker in
+`machines/pending/` protects the parent until commit; `Collect` reads
+markers first and drops a marker whose stage record is gone, only
+when the listed paths match managed storage. Unreadable markers or
+paths outside the store stop Collect; Recover and Delete skip them
+with a warning and doctor lists them. A leftover marker after a
+committed `stage snapshot` is a warning. `capture-seconds` excludes catalog
+waits (`catalog-wait-seconds`). `Create` and `Clone` still hold the
+catalog for the whole verb. `vm-end` and `stage snapshot` write a qcow2 delta against the
+activation image when the backing chain matches the catalog, up to the
+host `max-image-depth` (`BACKSTAGE_IMAGE_DEPTH`, then
+`machines/settings.json`, then 8). That default was measured; lower
+it with `BACKSTAGE_IMAGE_DEPTH` or `machines/settings.json` if a
+cold chain is slow. `0` disables deltas. A chain that
+includes a cached OS base stays complete (`cached-base`) so the base
+is never promoted. An unreadable `bases/*.json` flattens
+(`base-cache-unreadable`) instead of failing the capture. An unknown settings key is an error; doctor
+reports it. `Create` and `Clone` keep `initial` complete. An older
+`Collect` may delete unused schema 1 images and then stop on schema 2;
+`vm-end`, `snapshot-delete` and `prune-states` on that binary warn
+`pending cleanup` every time. Catalog disks are `0440` plus the
+named read ACL. The stage
+`provision.log` records `timing <field> <value>` for
+the same measures, including a manual `stage snapshot` and
+`stage restore`. A film is
+evidence, and evidence has a provenance. That file is the difference between
+a take that can be reproduced and one that can only be re-shot.

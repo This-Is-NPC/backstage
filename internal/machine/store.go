@@ -3,6 +3,7 @@
 package machine
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -12,14 +13,66 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 )
 
 const Schema = 1
+const ImageSchema = 1
+const ImageSchemaV2 = 2
 const Recipe = "1"
 
+// DefaultMaxImageDepth is the host limit. 0 disables deltas.
+// Measured on September 14, 2026: no boot or read regression through
+// depth 8; the host page cache was not dropped.
+const DefaultMaxImageDepth = 8
+
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`)
+
+// ErrBusy is returned by LockMany when a lock is already held.
+var ErrBusy = errors.New("stage/resource is busy")
+
+// ErrCommitted means atomicWrite already renamed the pending file into
+// place. The destination holds the new bytes; only the directory sync
+// failed. errors.Is(err, ErrCommitted) is true.
+var ErrCommitted = errors.New("atomic write already renamed")
+
+// BusyError names the held lock. errors.Is(err, ErrBusy) is true.
+type BusyError struct {
+	Name string
+}
+
+// CommittedError wraps a post-rename failure. The file is already durable
+// enough for a later Load; callers must not roll the write back.
+type CommittedError struct {
+	Err error
+}
+
+func (e *BusyError) Error() string {
+	return fmt.Sprintf("stage/resource %s is busy", e.Name)
+}
+
+func (e *BusyError) Is(target error) bool {
+	return target == ErrBusy
+}
+
+func (e *CommittedError) Error() string {
+	if e.Err == nil {
+		return ErrCommitted.Error()
+	}
+	return fmt.Sprintf("%s: %v", ErrCommitted, e.Err)
+}
+
+func (e *CommittedError) Unwrap() error { return e.Err }
+
+func (e *CommittedError) Is(target error) bool {
+	return target == ErrCommitted
+}
+
+var syncParentDir = func(dir *os.File) error {
+	return dir.Sync()
+}
 
 func ValidateName(name string) error {
 	if !namePattern.MatchString(name) || name == "image-catalog" {
@@ -64,6 +117,31 @@ type Source struct {
 	Image   string `json:"image,omitempty"`
 }
 
+const (
+	TakeRecording = "recording"
+	TakeRehearsal = "rehearsal"
+)
+
+// SnapshotOrigin records who made a named disk state.
+type SnapshotOrigin struct {
+	Project      string    `json:"project"`
+	Scene        string    `json:"scene"`
+	InputsSHA256 string    `json:"inputs-sha256"`
+	StartImage   string    `json:"start-image"`
+	Image        string    `json:"image"`
+	Take         string    `json:"take"`
+	Made         time.Time `json:"made"`
+	Backstage    string    `json:"backstage"`
+	Group        string    `json:"group,omitempty"`
+	Generation   string    `json:"generation,omitempty"`
+}
+
+// SnapshotInfo is the --origins view of one named state.
+type SnapshotInfo struct {
+	Image  string          `json:"image"`
+	Origin *SnapshotOrigin `json:"origin"`
+}
+
 type Continuity struct {
 	Project   string `json:"project"`
 	Scene     string `json:"scene"`
@@ -72,23 +150,64 @@ type Continuity struct {
 }
 
 type Record struct {
-	Schema     int               `json:"schema"`
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Domain     string            `json:"domain"`
-	URI        string            `json:"uri"`
-	Disk       string            `json:"disk"`
-	NVRAM      string            `json:"nvram"`
-	Firmware   string            `json:"firmware"`
-	Video      string            `json:"video"`
-	Spec       Spec              `json:"spec"`
-	Source     Source            `json:"source"`
-	Status     string            `json:"status"`
-	Phase      string            `json:"phase"`
-	LastError  string            `json:"last-error,omitempty"`
-	Created    time.Time         `json:"created"`
-	Snapshots  map[string]string `json:"snapshots"`
-	Continuity *Continuity       `json:"continuity,omitempty"`
+	Schema          int                       `json:"schema"`
+	ID              string                    `json:"id"`
+	Name            string                    `json:"name"`
+	Domain          string                    `json:"domain"`
+	URI             string                    `json:"uri"`
+	Disk            string                    `json:"disk"`
+	NVRAM           string                    `json:"nvram"`
+	Firmware        string                    `json:"firmware"`
+	Video           string                    `json:"video"`
+	Spec            Spec                      `json:"spec"`
+	Source          Source                    `json:"source"`
+	Status          string                    `json:"status"`
+	Phase           string                    `json:"phase"`
+	LastError       string                    `json:"last-error,omitempty"`
+	Created         time.Time                 `json:"created"`
+	Snapshots       map[string]string         `json:"snapshots"`
+	SnapshotOrigins map[string]SnapshotOrigin `json:"snapshot-origins,omitempty"`
+	Continuity      *Continuity               `json:"continuity,omitempty"`
+	AtState         *AtState                  `json:"at-state,omitempty"`
+}
+
+// FilePrint is the identity of one stage file at capture time.
+type FilePrint struct {
+	Path    string `json:"path"`
+	Inode   uint64 `json:"inode"`
+	Size    int64  `json:"size"`
+	MtimeNs int64  `json:"mtime-ns"`
+	CtimeNs int64  `json:"ctime-ns"`
+}
+
+// AtState is the last vm-end capture still sitting on the live overlay.
+type AtState struct {
+	Snapshot string    `json:"snapshot"`
+	Image    string    `json:"image"`
+	Disk     FilePrint `json:"disk"`
+	NVRAM    FilePrint `json:"nvram"`
+}
+
+// SnapshotInfo reports each saved state and its origin, if any.
+func (r *Record) SnapshotInfo() map[string]SnapshotInfo {
+	out := make(map[string]SnapshotInfo, len(r.Snapshots))
+	for name, id := range r.Snapshots {
+		info := SnapshotInfo{Image: id}
+		if o, ok := originOf(r, name); ok {
+			cp := o
+			info.Origin = &cp
+		}
+		out[name] = info
+	}
+	return out
+}
+
+func originOf(r *Record, name string) (SnapshotOrigin, bool) {
+	if r == nil || r.SnapshotOrigins == nil {
+		return SnapshotOrigin{}, false
+	}
+	o, ok := r.SnapshotOrigins[name]
+	return o, ok
 }
 
 type Credentials struct {
@@ -96,8 +215,9 @@ type Credentials struct {
 	Key      string `json:"key"`
 }
 
-// Image is a standalone immutable disk plus matching firmware and credentials.
+// Image is an immutable disk plus matching firmware and credentials.
 // Active disks depend only on these objects, never on another stage's disk.
+// Parent is the catalog id of the backing image; empty means a complete image.
 type Image struct {
 	Schema      int         `json:"schema"`
 	ID          string      `json:"id"`
@@ -108,6 +228,7 @@ type Image struct {
 	Source      Source      `json:"source"`
 	Credentials Credentials `json:"credentials"`
 	Created     time.Time   `json:"created"`
+	Parent      string      `json:"parent,omitempty"`
 }
 
 type Store struct{ Root, Cache, Storage string }
@@ -135,6 +256,10 @@ func (s *Store) Init() error {
 		}
 	}
 	return nil
+}
+
+func validImageID(id string) bool {
+	return regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id)
 }
 
 func randomID() string {
@@ -179,10 +304,13 @@ func atomicWrite(path string, b []byte, mode os.FileMode) (err error) {
 	}
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
-		return err
+		return &CommittedError{Err: err}
 	}
 	defer dir.Close()
-	return dir.Sync()
+	if err = syncParentDir(dir); err != nil {
+		return &CommittedError{Err: err}
+	}
+	return nil
 }
 
 func readJSON(path string, v any) error {
@@ -232,6 +360,37 @@ func (s *Store) SaveCredentials(name string, c Credentials) error {
 	return atomicJSON(filepath.Join(s.Dir(name), "credentials.json"), c)
 }
 
+func (s *Store) listImages() ([]*Image, error) {
+	entries, err := os.ReadDir(filepath.Join(s.Root, "images"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var images []*Image
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		img, err := s.Image(strings.TrimSuffix(name, ".json"))
+		if err != nil {
+			continue
+		}
+		images = append(images, img)
+	}
+	return images, nil
+}
+
+func imageSchemaOK(n int) bool {
+	return n == ImageSchema || n == ImageSchemaV2
+}
+
+func (s *Store) imageJSON(id string) string {
+	return filepath.Join(s.Root, "images", id+".json")
+}
+
 func (s *Store) Image(id string) (*Image, error) {
 	if !regexp.MustCompile(`^[a-f0-9]{32}$`).MatchString(id) {
 		return nil, errors.New("invalid image id")
@@ -240,7 +399,7 @@ func (s *Store) Image(id string) (*Image, error) {
 	if err := readJSON(filepath.Join(s.Root, "images", id+".json"), &i); err != nil {
 		return nil, err
 	}
-	if i.Schema != Schema || i.ID != id {
+	if !imageSchemaOK(i.Schema) || i.ID != id {
 		return nil, errors.New("unsupported image record")
 	}
 	return &i, nil
@@ -268,16 +427,68 @@ func (s *Store) List() ([]*Record, error) {
 	return result, nil
 }
 
+// HeldLock is one flock file returned by LockHold.
+type HeldLock struct {
+	Name string
+	File *os.File
+}
+
+// LockPath is the flock file for a stage or for image-catalog.
+func (s *Store) LockPath(name string) string {
+	return filepath.Join(s.Root, "locks", name+".lock")
+}
+
+// catalogWaitNotify is called when LockWait starts or finishes waiting
+// for image-catalog. A child job uses it to report progress.
+var catalogWaitNotify func(waiting bool)
+
+// SetCatalogWaitNotify sets the image-catalog wait hook for this process.
+func SetCatalogWaitNotify(fn func(waiting bool)) {
+	catalogWaitNotify = fn
+}
+
+func notifyCatalogWait(waiting bool) {
+	if catalogWaitNotify != nil {
+		catalogWaitNotify(waiting)
+	}
+}
+
 // LockMany uses a fixed order and nonblocking flock. Process death releases it.
 func (s *Store) LockMany(names ...string) (func(), error) {
+	held, err := s.lockMany(names...)
+	if err != nil {
+		return nil, err
+	}
+	return releaseHeld(held), nil
+}
+
+// LockHold is LockMany that also returns the open lock files so a parent
+// can inherit them into a child with ExtraFiles.
+func (s *Store) LockHold(names ...string) ([]HeldLock, func(), error) {
+	held, err := s.lockMany(names...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return held, releaseHeld(held), nil
+}
+
+func releaseHeld(held []HeldLock) func() {
+	return func() {
+		for _, h := range held {
+			_ = h.File.Close()
+		}
+	}
+}
+
+func (s *Store) lockMany(names ...string) ([]HeldLock, error) {
 	if err := s.Init(); err != nil {
 		return nil, err
 	}
 	sort.Strings(names)
-	files := []*os.File{}
+	var held []HeldLock
 	release := func() {
-		for _, f := range files {
-			_ = f.Close()
+		for _, h := range held {
+			_ = h.File.Close()
 		}
 	}
 	seen := map[string]bool{}
@@ -290,7 +501,7 @@ func (s *Store) LockMany(names ...string) (func(), error) {
 			release()
 			return nil, err
 		}
-		f, err := os.OpenFile(filepath.Join(s.Root, "locks", name+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+		f, err := os.OpenFile(s.LockPath(name), os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
 			release()
 			return nil, err
@@ -298,9 +509,50 @@ func (s *Store) LockMany(names ...string) (func(), error) {
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 			_ = f.Close()
 			release()
-			return nil, fmt.Errorf("stage/resource %s is busy", name)
+			return nil, &BusyError{Name: name}
 		}
-		files = append(files, f)
+		held = append(held, HeldLock{Name: name, File: f})
 	}
-	return release, nil
+	return held, nil
+}
+
+// LockWait is LockMany that retries while a name is busy. The wait is
+// cancelled with ctx. One line is printed for image-catalog.
+func (s *Store) LockWait(ctx context.Context, names ...string) (func(), error) {
+	printed := false
+	for {
+		release, err := s.LockMany(names...)
+		if err == nil {
+			if printed {
+				notifyCatalogWait(false)
+			}
+			return release, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if !errors.Is(err, ErrBusy) {
+			return nil, err
+		}
+		if !printed {
+			for _, name := range names {
+				if name == "image-catalog" {
+					fmt.Println(">> waiting for image-catalog")
+					notifyCatalogWait(true)
+					break
+				}
+			}
+			printed = true
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// Origin returns the recorded producer of a named snapshot, if any.
+func (r *Record) Origin(name string) (SnapshotOrigin, bool) {
+	return originOf(r, name)
 }

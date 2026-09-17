@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 )
 
@@ -51,6 +53,62 @@ func (p *Project) ValidateConfig() error {
 	if err := prompter.ValidateTitle(style.Title); err != nil {
 		return err
 	}
+	if p.Render.Threads.Prepare < 0 || p.Render.Threads.Filter < 0 || p.Render.Threads.Encode < 0 {
+		return fmt.Errorf("render.threads values must not be negative")
+	}
+	if p.Render.Workers < 0 {
+		return fmt.Errorf("render.workers must not be negative")
+	}
+	return p.validateStateGroups()
+}
+
+func (p *Project) validateStateGroups() error {
+	if p == nil || len(p.StateGroups) == 0 {
+		return nil
+	}
+	aliasOwner := map[string]string{}
+	stageOwner := map[string]string{}
+	names := make([]string, 0, len(p.StateGroups))
+	for name := range p.StateGroups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := machine.ValidateName(name); err != nil {
+			return fmt.Errorf("state-group %q: invalid name", name)
+		}
+		aliases := p.StateGroups[name]
+		if len(aliases) < 2 {
+			return fmt.Errorf("state-group %q: need at least two members", name)
+		}
+		seenAlias := map[string]bool{}
+		seenStage := map[string]bool{}
+		for _, alias := range aliases {
+			if alias == "" || seenAlias[alias] {
+				return fmt.Errorf("state-group %q: alias %q is repeated", name, alias)
+			}
+			seenAlias[alias] = true
+			vm, ok := p.VMs[alias]
+			if !ok {
+				return fmt.Errorf("state-group %q: %q is not a vm alias", name, alias)
+			}
+			if vm.Stage == "" {
+				return fmt.Errorf("state-group %q: %q is not a managed stage", name, alias)
+			}
+			if seenStage[vm.Stage] {
+				return fmt.Errorf("state-group %q: stage %q is repeated", name, vm.Stage)
+			}
+			seenStage[vm.Stage] = true
+			if other, ok := aliasOwner[alias]; ok && other != name {
+				return fmt.Errorf("vm %q belongs to state-groups %q and %q", alias, other, name)
+			}
+			aliasOwner[alias] = name
+			if other, ok := stageOwner[vm.Stage]; ok && other != name {
+				return fmt.Errorf("stage %q belongs to state-groups %q and %q", vm.Stage, other, name)
+			}
+			stageOwner[vm.Stage] = name
+		}
+	}
 	return nil
 }
 
@@ -64,8 +122,16 @@ func (s *Scene) Validate(p *Project) error {
 		if id == "" || audio.File == "" {
 			return fmt.Errorf("scene audio needs name and file")
 		}
-		if _, err := p.SafePath(audio.File); err != nil {
+		if _, err := p.InputPath(audio.File); err != nil {
 			return err
+		}
+	}
+	for _, in := range s.Inputs {
+		if strings.TrimSpace(in) == "" {
+			return fmt.Errorf("scene %q: inputs entry is empty", s.Name)
+		}
+		if _, err := p.InputPath(in); err != nil {
+			return fmt.Errorf("scene %q: input %q: %w", s.Name, in, err)
 		}
 	}
 	ids := map[string]bool{}
@@ -79,14 +145,20 @@ func (s *Scene) Validate(p *Project) error {
 		if s.Duration <= 0 || s.Entry == "" {
 			return fmt.Errorf("visual scene requires entry and positive duration")
 		}
-		if s.VM != "" || s.VMStart != nil || s.Layout != "" || len(s.Steps) != 0 || s.Recorder != "" || s.Fresh || s.Reset != nil {
+		if s.VM != "" || s.VMStart != nil || s.VMEnd != nil || s.Layout != "" || len(s.Steps) != 0 || s.Recorder != "" || s.Fresh || s.Reset != nil {
 			return fmt.Errorf("visual scene cannot declare recording configuration")
 		}
-		_, err := p.SafePath(s.Entry)
+		_, err := p.InputPath(s.Entry)
 		return err
 	}
 
 	if err := s.ValidateVMStart(p); err != nil {
+		return err
+	}
+	if err := s.ValidateVMEnd(p); err != nil {
+		return err
+	}
+	if err := s.ValidateContinuePredecessor(p); err != nil {
 		return err
 	}
 	if s.Name != "" {
@@ -161,13 +233,16 @@ func (s *Scene) ValidateVMStart(p *Project) error {
 		if x.Snapshot != "" && !regexp.MustCompile(`^[a-z][a-z0-9-]{0,47}$`).MatchString(x.Snapshot) {
 			return fmt.Errorf("invalid snapshot name")
 		}
+		if err := s.validateSceneGroup(p, x.Group, x.Snapshot, "vm-start"); err != nil {
+			return err
+		}
 	case "reuse":
-		if x.Snapshot != "" || x.After != "" {
-			return fmt.Errorf("reuse cannot specify snapshot or after")
+		if x.Snapshot != "" || x.After != "" || x.Group != "" {
+			return fmt.Errorf("reuse cannot specify snapshot, after or group")
 		}
 	case "continue":
-		if vm.Stage == "" || x.After == "" || x.Snapshot != "" {
-			return fmt.Errorf("continue requires a managed stage and after, and cannot specify snapshot")
+		if vm.Stage == "" || x.After == "" || x.Snapshot != "" || x.Group != "" {
+			return fmt.Errorf("continue requires a managed stage and after, and cannot specify snapshot or group")
 		}
 		if x.After == s.Name {
 			return fmt.Errorf("a scene cannot continue itself")
@@ -177,6 +252,69 @@ func (s *Scene) ValidateVMStart(p *Project) error {
 		}
 	default:
 		return fmt.Errorf("vm-start.mode must be clean, reuse or continue")
+	}
+	return nil
+}
+
+func (s *Scene) ValidateVMEnd(p *Project) error {
+	if s.VMEnd == nil {
+		return nil
+	}
+	vm, ok := p.VMs[s.VM]
+	if !ok || s.VM == "" || vm.Stage == "" {
+		return fmt.Errorf("vm-end requires a managed stage")
+	}
+	if s.VMEnd.Snapshot == "initial" {
+		return fmt.Errorf("cannot save the initial snapshot")
+	}
+	if err := machine.ValidateName(s.VMEnd.Snapshot); err != nil {
+		return err
+	}
+	if err := s.validateSceneGroup(p, s.VMEnd.Group, s.VMEnd.Snapshot, "vm-end"); err != nil {
+		return err
+	}
+	if s.StartGroup() != "" && s.VMStart != nil && s.VMStart.Snapshot == s.VMEnd.Snapshot {
+		return fmt.Errorf("a scene cannot start and save the same group snapshot")
+	}
+	return nil
+}
+
+func (s *Scene) validateSceneGroup(p *Project, group, snapshot, field string) error {
+	if group == "" {
+		return nil
+	}
+	if snapshot == "" {
+		return fmt.Errorf("%s group requires a snapshot", field)
+	}
+	members, err := p.GroupMembers(group)
+	if err != nil {
+		return err
+	}
+	if !memberAlias(members, s.VM) {
+		return fmt.Errorf("vm %q is not a member of state-group %q", s.VM, group)
+	}
+	return nil
+}
+
+// ValidateContinuePredecessor refuses continue after a scene that ends the guest.
+// A missing predecessor file is not this rule.
+func (s *Scene) ValidateContinuePredecessor(p *Project) error {
+	if s.VMStartMode() != "continue" || s.VMStart == nil || p == nil {
+		return nil
+	}
+	path, err := p.ScenePathSafe(s.VMStart.After)
+	if err != nil {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	pred, err := LoadScene(path)
+	if err != nil {
+		return err
+	}
+	if pred.VMEnd != nil {
+		return fmt.Errorf("cannot continue %q: that scene ends the guest", s.VMStart.After)
 	}
 	return nil
 }
@@ -243,7 +381,7 @@ func (p *Project) ValidateTransition(name string) error {
 		return fmt.Errorf("transition %q: cmd must write to {{out}}", name)
 	}
 	if t.HasLive() {
-		if _, err := p.SafePath(t.Live.Prop); err != nil {
+		if _, err := p.InputPath(t.Live.Prop); err != nil {
 			return fmt.Errorf("transition %q live.prop: %w", name, err)
 		}
 	}

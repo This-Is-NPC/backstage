@@ -26,7 +26,24 @@ func testManager(t *testing.T) *Manager {
 	if err := os.MkdirAll(s.Storage, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("BACKSTAGE_IMAGE_DEPTH", "")
 	return &Manager{Store: s, Runner: ExecRunner{}, URI: "qemu:///system", Timeout: time.Second, Output: io.Discard}
+}
+
+func stubCapture(fn func(*Manager, context.Context, *Record) (*Image, error)) {
+	captureStageImage = func(m *Manager, ctx context.Context, r *Record, _ bool, _ int) (*capturedImage, error) {
+		img, err := fn(m, ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		return &capturedImage{Image: img, Mode: CaptureModeComplete}, nil
+	}
+}
+
+func restoreDefaultCapture() {
+	captureStageImage = func(m *Manager, ctx context.Context, r *Record, allowDelta bool, maxDepth int) (*capturedImage, error) {
+		return m.captureSnapshotImage(ctx, r, allowDelta, maxDepth)
+	}
 }
 
 func testRecord(name string) *Record {
@@ -340,7 +357,7 @@ func TestCollectRetainsCloneBackingAfterOriginDeletion(t *testing.T) {
 	m := testManager(t)
 	imageIDs := []string{randomID(), randomID(), randomID()}
 	for _, id := range imageIDs {
-		i := Image{Schema: Schema, ID: id, Disk: m.diskPath(id, "-image.qcow2"), NVRAM: m.diskPath(id, "-image.fd")}
+		i := Image{Schema: ImageSchema, ID: id, Disk: m.diskPath(id, "-image.qcow2"), NVRAM: m.diskPath(id, "-image.fd")}
 		if err := os.WriteFile(i.Disk, []byte("disk"), 0o600); err != nil {
 			t.Fatal(err)
 		}

@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/facts"
 	"github.com/This-Is-NPC/backstage/internal/guest"
 	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/pane"
@@ -17,6 +21,7 @@ import (
 	"github.com/This-Is-NPC/backstage/internal/recorder"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 	"github.com/This-Is-NPC/backstage/internal/stage"
+	"github.com/This-Is-NPC/backstage/internal/take"
 )
 
 // Options tune a run. Record off + Speed < 1 is a rehearsal (dry-run).
@@ -38,6 +43,17 @@ type Options struct {
 	// OnInterrupt runs after recorder/popup/stage cleanup but before the interrupt
 	// handler exits. Production uses this to remove its segment work directory.
 	OnInterrupt func()
+	// Version is the Backstage binary version written into clip facts.
+	Version string
+	// Adopt lets play replace a snapshot that has no origin, after ConfirmAdopt.
+	Adopt bool
+	// ReplaceState lets a rehearsal replace a snapshot a recording made.
+	ReplaceState bool
+	// ConfirmAdopt asks the operator to type the snapshot name. Used with Adopt.
+	ConfirmAdopt func(snapshot string) error
+	// StateGeneration is the id of one producing run. Empty on an isolated
+	// group consumer, which reads the generation already on the members.
+	StateGeneration string
 }
 
 // Engine runs a scene over the stage/recorder/prompter/pane drivers.
@@ -52,10 +68,60 @@ type Engine struct {
 	Speed float64
 	// PaneDriver overrides the default tmux driver. A vm stage sets it,
 	// because on that stage a target names a computer and not a pane.
-	PaneDriver pane.Driver
-	pane       pane.Driver
-	rehearsing bool
-	cmdGuard   *CommandGuard
+	PaneDriver    pane.Driver
+	pane          pane.Driver
+	rehearsing    bool
+	cmdGuard      *CommandGuard
+	startImage    string
+	startSnapshot string
+	inputsSHA256  string
+	takeSess      atomic.Pointer[take.Session]
+	stateSaved    bool
+	capturing     atomic.Bool
+	captureMu     sync.Mutex
+	captureDone   chan struct{}
+	managedRec    *machine.Record
+	leafProject   string
+	endFacts      endFactsWrite
+	timings       facts.Timings
+	groupMembers  []facts.GroupMember
+}
+
+// ErrCaptureFailed is returned when vm-end cannot commit a snapshot.
+var ErrCaptureFailed = errors.New("vm-end capture failed")
+
+type endFactsWrite struct {
+	result  string
+	end     *facts.EndState
+	written bool
+}
+
+func (w endFactsWrite) publishedOK() bool {
+	return w.written && w.result == facts.ResultOK && w.end != nil && w.end.Snapshot != "" && w.end.Image != "" && w.end.Status == ""
+}
+
+var beginManaged = func(m *machine.Manager, ctx context.Context, r *machine.Record, mode, snapshot, after, project string, recording bool) (*guest.Guest, error) {
+	return m.Begin(ctx, r, mode, snapshot, after, project, recording)
+}
+
+var finishManaged = func(m *machine.Manager, r *machine.Record, g *guest.Guest, project, name string, recording bool) error {
+	return m.Finish(r, g, project, name, recording)
+}
+
+var replaceTakeState = func(m *machine.Manager, ctx context.Context, r *machine.Record, name string, origin machine.SnapshotOrigin, adopt bool) (machine.ReplaceResult, error) {
+	return m.ReplaceSnapshot(ctx, r, name, origin, adopt)
+}
+
+var captureWaitTimeout = 30 * time.Second
+
+var onWaitCapture = func() {}
+
+type recordingGuest interface {
+	RecordingGuest() (*guest.Guest, string)
+}
+
+type sessionTimer interface {
+	SessionTimings() (map[string]float64, *float64)
 }
 
 // New builds an Engine with the default Hyprland/gpu drivers for a project.
@@ -159,6 +225,16 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	if e.Speed <= 0 {
 		e.Speed = 1
 	}
+	e.startImage = ""
+	e.startSnapshot = ""
+	e.inputsSHA256 = ""
+	e.stateSaved = false
+	e.timings = facts.Timings{}
+	e.managedRec = nil
+	e.leafProject = ""
+	e.endFacts = endFactsWrite{}
+	e.groupMembers = nil
+	ensureProducerGeneration(s, &opts)
 	prevRehearsing := e.rehearsing
 	e.rehearsing = !opts.Record
 	defer func() { e.rehearsing = prevRehearsing }()
@@ -226,6 +302,10 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	e.cmdGuard = cmdGuard
 	defer func() { e.cmdGuard = prevCmdGuard }()
 
+	e.takeSess.Store(nil)
+	// Registered before the interrupt guard so the recorder stops first.
+	defer func() { e.finishTakeSession(&runErr) }()
+
 	guard := newInterruptGuard(
 		func() error {
 			cancel()
@@ -242,11 +322,15 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	}()
 
 	if e.Managed != nil {
-		if !opts.ReservedStages[e.ManagedName] {
-			release, err := e.Managed.Store.LockMany(e.ManagedName)
-			if err != nil {
-				return err
-			}
+		lockNames := []string{e.ManagedName}
+		if extra := scene.StartGroupStages(e.Project, s); len(extra) > 0 {
+			lockNames = extra
+		}
+		release, err := lockUnreserved(e.Managed.Store, opts.ReservedStages, lockNames)
+		if err != nil {
+			return err
+		}
+		if release != nil {
 			defer release()
 		}
 		r, err := e.Managed.Store.Load(e.ManagedName)
@@ -260,25 +344,59 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		if resolved, err := filepath.EvalSymlinks(project); err == nil {
 			project = resolved
 		}
+		e.leafProject = project
+		// reuse and continue keep the image the take started on. clean
+		// overwrites this with the restored snapshot after Begin.
+		e.startImage = r.Source.Image
+		if err := e.checkVMEnd(r, s, project, opts); err != nil {
+			return err
+		}
+		if err := e.prepareGroup(ctx, s, opts); err != nil {
+			return err
+		}
 		snapshot, after := "", ""
 		if s.VMStart != nil {
 			snapshot = s.VMStart.Snapshot
 			after = s.VMStart.After
 		}
-		g, err := e.Managed.Begin(ctx, r, s.VMStartMode(), snapshot, after, project, opts.Record)
+		g, err := beginManaged(e.Managed, ctx, r, s.VMStartMode(), snapshot, after, project, opts.Record)
+		e.mergeStart(e.Managed.StartTimes)
 		if err != nil {
 			return err
 		}
-		vm := e.Stager.(*stage.VM)
-		g.Open = vm.Guest.Open
-		g.Language = vm.Guest.Language
-		*vm.Guest = *g
-		vm.Continue = s.VMStartMode() == "continue"
+		if vm, ok := e.Stager.(*stage.VM); ok {
+			g.Open = vm.Guest.Open
+			g.Language = vm.Guest.Language
+			*vm.Guest = *g
+			vm.Continue = s.VMStartMode() == "continue"
+		}
+		if s.VMStartMode() == "clean" {
+			e.startSnapshot = snapshot
+			if e.startSnapshot == "" {
+				e.startSnapshot = "initial"
+			}
+			e.startImage = r.Snapshots[e.startSnapshot]
+			if e.startImage == "" {
+				e.startImage = r.Source.Image
+			}
+		}
+		e.managedRec = r
 		defer func() {
-			if runErr == nil {
-				runErr = e.Managed.Finish(r, g, project, s.Name, opts.Record)
+			if runErr == nil && !e.stateSaved {
+				runErr = finishManaged(e.Managed, r, g, project, s.Name, opts.Record)
 			}
 		}()
+	}
+	if opts.Record || s.VMEnd != nil {
+		digest, err := scene.InputsDigest(e.Project, s, scene.DigestOptions{
+			Speed:       e.Speed,
+			ShowStaging: opts.ShowStaging,
+			StartState:  scene.StartStateToken(s, e.startImage),
+		})
+		if err != nil {
+			return err
+		}
+		e.inputsSHA256 = digest
 	}
 	if s.VMStartMode() != "continue" {
 		if err := e.runHooks(s); err != nil {
@@ -287,26 +405,38 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	}
 
 	out := opts.OutPath
-	if out == "" {
-		if err := scene.ValidateName("scene", s.Name); err != nil {
-			return err
+	prepareOut := func() (string, error) {
+		if out != "" {
+			return out, nil
 		}
-		var err error
-		out, err = e.Project.SafePath(e.Project.Record.Out, s.Name+".mp4")
+		if !opts.Record {
+			return "", nil
+		}
+		if sess := e.takeSess.Load(); sess != nil {
+			return sess.Clip(), nil
+		}
+		pending, err := take.BeginContext(ctx, e.Project, s.Name)
 		if err != nil {
-			return err
+			return "", err
 		}
+		e.takeSess.Store(pending)
+		out = pending.Clip()
+		return out, nil
 	}
 	startRec := func() error {
 		if !opts.Record {
 			return nil
+		}
+		path, err := prepareOut()
+		if err != nil {
+			return err
 		}
 		recMu.Lock()
 		recArmed = true
 		recStopped = false
 		recMu.Unlock()
 		fmt.Println(">> start recording")
-		if err := e.Rec.Start(out); err != nil {
+		if err := e.Rec.Start(path); err != nil {
 			return err
 		}
 		recMu.Lock()
@@ -329,6 +459,10 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		m, err := e.Stager.Setup(layout, e.Project)
 		if err != nil {
 			return err
+		}
+		if timed, ok := e.Stager.(sessionTimer); ok {
+			e.mergeSession(timed.SessionTimings())
+			e.logSessionTimings()
 		}
 		if e.PaneDriver != nil {
 			e.pane = e.PaneDriver
@@ -366,23 +500,316 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		if err := stopRec(); err != nil {
 			return err
 		}
-		if vm, ok := e.Stager.(*stage.VM); ok {
-			if err := vm.Facts(out); err != nil {
-				return err
-			}
-		}
 		// Joined and not returned: the take is on disk and a short one is still
 		// worth keeping and looking at, the same reason a failed step does not
 		// abandon the rest of the scene. What must not happen is finishing quietly.
+		stepsFailed := runErr != nil
 		if err := checkTake(out, window); err != nil {
 			fmt.Fprintf(os.Stderr, "   !! %v\n", err)
 			runErr = errors.Join(runErr, err)
 		}
-		fmt.Printf(">> done. %s  (stage open — backstage kill)\n", out)
+		result := facts.ResultOK
+		switch {
+		case stepsFailed:
+			result = facts.ResultStepsFailed
+		case runErr != nil:
+			result = facts.ResultShort
+		}
+		if err := e.writeClipFacts(out, s, opts.Version, result, nil); err != nil {
+			return errors.Join(runErr, err)
+		}
+		var captureErr error
+		if result == facts.ResultOK && s.VMEnd != nil {
+			if err := e.saveEndState(ctx, s, out, opts); err != nil {
+				captureErr = err
+				runErr = errors.Join(runErr, err)
+			}
+		}
+		publish := result == facts.ResultOK && captureErr == nil
+		if s.VMEnd != nil && (errors.Is(runErr, ErrCaptureFailed) || !e.endFacts.publishedOK()) {
+			publish = false
+		}
+		if sess := e.takeSess.Load(); sess != nil && !sess.Finished() {
+			if !publish {
+				if !e.endFacts.written {
+					_ = os.Chmod(filepath.Dir(sess.Clip()), 0o700)
+				}
+				path, err := sess.KeepAttempt()
+				if err != nil {
+					return errors.Join(runErr, err)
+				}
+				if err := e.retryEndFacts(sess.Clip(), s, opts.Version); err != nil {
+					runErr = errors.Join(runErr, err)
+				}
+				fmt.Printf(">> done. %s  (stage open — backstage kill)\n", path)
+			} else {
+				pub, err := sess.Publish(ctx)
+				if err != nil {
+					return errors.Join(runErr, err)
+				}
+				fmt.Printf(">> done. %s  (stage open — backstage kill)\n", pub.StableClip)
+			}
+		} else if sess == nil || !sess.Finished() {
+			fmt.Printf(">> done. %s  (stage open — backstage kill)\n", out)
+		}
 	} else {
+		if runErr == nil && s.VMEnd != nil {
+			if err := e.saveEndState(ctx, s, "", opts); err != nil {
+				runErr = err
+			}
+		}
 		fmt.Println(">> rehearsal done (no recording).  (stage open — backstage kill)")
 	}
 	return runErr
+}
+
+func (e *Engine) writeClipFacts(clip string, s *scene.Scene, version, result string, end *facts.EndState) error {
+	f := facts.Facts{
+		Backstage:    version,
+		Result:       result,
+		Made:         time.Now().Format(time.RFC3339),
+		InputsSHA256: e.inputsSHA256,
+	}
+	if src, ok := e.Stager.(recordingGuest); ok {
+		g, omarchy := src.RecordingGuest()
+		if omarchy == "" {
+			return fmt.Errorf("the stage never read the guest's Omarchy version")
+		}
+		if g != nil {
+			f.Stage = g.StageName
+			f.Origin = g.Origin
+			f.StartMode = g.StartMode
+			f.Snapshot = g.Snapshot
+			f.ISOVersion = g.ISOVersion
+			f.ISOChecksum = g.ISOChecksum
+			f.Recipe = g.Recipe
+			f.Domain = g.Domain
+			f.User = g.User
+			f.Address = g.Address
+		}
+		f.Omarchy = omarchy
+	}
+	if s.VMStartMode() == "clean" {
+		snap := e.startSnapshot
+		if snap == "" && s.VMStart != nil && s.VMStart.Snapshot != "" {
+			snap = s.VMStart.Snapshot
+		}
+		if snap == "" {
+			snap = "initial"
+		}
+		f.StartState = &facts.StartState{Snapshot: snap}
+		f.StartImage = e.startImage
+	}
+	if len(e.groupMembers) > 0 {
+		f.GroupMembers = append([]facts.GroupMember(nil), e.groupMembers...)
+	}
+	f.EndState = end
+	if !e.timings.Empty() {
+		t := e.timings
+		if len(t.StagePhases) > 0 {
+			t.StagePhases = maps.Clone(t.StagePhases)
+		}
+		f.Timings = &t
+	}
+	return facts.Write(facts.Path(clip), f)
+}
+
+func (e *Engine) mergeStart(t machine.StartTimes) {
+	e.timings.RestoreStopSeconds = t.RestoreStopSeconds
+	e.timings.RestoreActivateSeconds = t.RestoreActivateSeconds
+	e.timings.BootSeconds = t.BootSeconds
+	e.timings.RestoreSkipped = t.RestoreSkipped
+}
+
+func (e *Engine) mergeSession(phases map[string]float64, session *float64) {
+	if len(phases) > 0 {
+		e.timings.StagePhases = maps.Clone(phases)
+	}
+	e.timings.SessionSeconds = session
+}
+
+func (e *Engine) mergeCapture(r machine.ReplaceResult) {
+	if r.ShutdownSeconds != nil {
+		e.timings.ShutdownSeconds = r.ShutdownSeconds
+	}
+	if r.CaptureSeconds != nil {
+		e.timings.CaptureSeconds = r.CaptureSeconds
+	}
+	if r.CaptureBytes != nil {
+		e.timings.CaptureBytes = r.CaptureBytes
+	}
+	if r.CaptureApparentBytes != nil {
+		e.timings.CaptureApparentBytes = r.CaptureApparentBytes
+	}
+	if r.CaptureMode != nil {
+		e.timings.CaptureMode = r.CaptureMode
+	}
+	if r.ImageDepth != nil {
+		e.timings.ImageDepth = r.ImageDepth
+	}
+	if r.CaptureFallback != nil {
+		e.timings.CaptureFallback = r.CaptureFallback
+	}
+	if r.CatalogWaitSeconds != nil {
+		e.timings.CatalogWaitSeconds = r.CatalogWaitSeconds
+	}
+}
+
+func (e *Engine) logSessionTimings() {
+	if e.Managed == nil || e.managedRec == nil {
+		return
+	}
+	if e.timings.SessionSeconds != nil {
+		e.Managed.LogTiming(e.managedRec, "session-seconds", *e.timings.SessionSeconds)
+	}
+	names := make([]string, 0, len(e.timings.StagePhases))
+	for name := range e.timings.StagePhases {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		e.Managed.LogTiming(e.managedRec, "stage-phases."+name, e.timings.StagePhases[name])
+	}
+}
+
+func (e *Engine) checkVMEnd(r *machine.Record, s *scene.Scene, project string, opts Options) error {
+	if s.VMEnd == nil {
+		return nil
+	}
+	name := s.VMEnd.Snapshot
+	if _, exists := r.Snapshots[name]; exists {
+		if current, ok := r.Origin(name); ok {
+			if !opts.Record && current.Take == machine.TakeRecording && !opts.ReplaceState {
+				return fmt.Errorf("rehearsal cannot replace recording snapshot %q", name)
+			}
+		} else if opts.Adopt && opts.ConfirmAdopt != nil {
+			if err := opts.ConfirmAdopt(name); err != nil {
+				return err
+			}
+		}
+	}
+	return machine.CheckReplace(r, name, machine.SnapshotOrigin{Project: project, Scene: s.Name}, opts.Adopt)
+}
+
+func (e *Engine) saveEndState(ctx context.Context, s *scene.Scene, clip string, opts Options) error {
+	e.startCapturePhase()
+	defer e.endCapturePhase()
+	if e.Managed == nil || e.managedRec == nil || s.VMEnd == nil {
+		return errors.New("vm-end requires a managed stage")
+	}
+	kind := machine.TakeRecording
+	if !opts.Record {
+		kind = machine.TakeRehearsal
+	}
+	origin := machine.SnapshotOrigin{
+		Project:      e.leafProject,
+		Scene:        s.Name,
+		InputsSHA256: e.inputsSHA256,
+		StartImage:   e.startImage,
+		Take:         kind,
+		Backstage:    opts.Version,
+		Group:        s.EndGroup(),
+		Generation:   opts.StateGeneration,
+	}
+	result, err := replaceTakeState(e.Managed, ctx, e.managedRec, s.VMEnd.Snapshot, origin, opts.Adopt)
+	e.mergeCapture(result)
+	if err != nil {
+		e.endFacts = endFactsWrite{
+			result: facts.ResultCaptureFailed,
+			end:    &facts.EndState{Snapshot: s.VMEnd.Snapshot, Status: "failed"},
+		}
+		if clip != "" {
+			if werr := e.writeClipFacts(clip, s, opts.Version, e.endFacts.result, e.endFacts.end); werr != nil {
+				return errors.Join(ErrCaptureFailed, err, werr)
+			}
+			e.endFacts.written = true
+		}
+		return errors.Join(ErrCaptureFailed, err)
+	}
+	e.stateSaved = true
+	if result.Warning != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", result.Warning)
+	}
+	if clip != "" && result.Image != nil {
+		e.endFacts = endFactsWrite{
+			result: facts.ResultOK,
+			end:    &facts.EndState{Snapshot: s.VMEnd.Snapshot, Image: result.Image.ID},
+		}
+		if werr := e.writeClipFacts(clip, s, opts.Version, e.endFacts.result, e.endFacts.end); werr != nil {
+			return werr
+		}
+		e.endFacts.written = true
+	}
+	return nil
+}
+
+func (e *Engine) retryEndFacts(clip string, s *scene.Scene, version string) error {
+	if clip == "" || e.endFacts.end == nil || e.endFacts.written {
+		return nil
+	}
+	if err := e.writeClipFacts(clip, s, version, e.endFacts.result, e.endFacts.end); err != nil {
+		return err
+	}
+	e.endFacts.written = true
+	return nil
+}
+
+func (e *Engine) startCapturePhase() {
+	e.captureMu.Lock()
+	e.captureDone = make(chan struct{})
+	e.capturing.Store(true)
+	e.captureMu.Unlock()
+}
+
+func (e *Engine) endCapturePhase() {
+	e.capturing.Store(false)
+	e.captureMu.Lock()
+	done := e.captureDone
+	e.captureMu.Unlock()
+	if done != nil {
+		close(done)
+	}
+}
+
+func (e *Engine) waitCapture(timeout time.Duration) {
+	onWaitCapture()
+	e.captureMu.Lock()
+	done := e.captureDone
+	e.captureMu.Unlock()
+	if done == nil {
+		return
+	}
+	if timeout <= 0 {
+		<-done
+		return
+	}
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+	}
+}
+
+func (e *Engine) finishTakeSession(runErr *error) {
+	sess := e.takeSess.Load()
+	if sess == nil || sess.Finished() {
+		return
+	}
+	if !sess.HasClip() {
+		if err := sess.Discard(); err != nil && runErr != nil {
+			*runErr = errors.Join(*runErr, err)
+		}
+		return
+	}
+	path, err := sess.KeepAttempt()
+	if err != nil {
+		if runErr != nil {
+			*runErr = errors.Join(*runErr, err)
+		}
+		return
+	}
+	fmt.Fprintf(os.Stderr, "   !! take kept at %s\n", path)
 }
 
 func (e *Engine) cleanupOnInterrupt(extra func()) {
@@ -394,6 +821,12 @@ func (e *Engine) cleanupOnInterrupt(extra func()) {
 	}
 	if e.Stager != nil {
 		_ = e.Stager.Teardown()
+	}
+	if e.capturing.Load() {
+		e.waitCapture(captureWaitTimeout)
+	}
+	if sess := e.takeSess.Load(); sess != nil {
+		sess.Interrupt()
 	}
 	if extra != nil {
 		extra()
@@ -456,7 +889,7 @@ func (e *Engine) runHooks(s *scene.Scene) error {
 // runScript runs a project-relative hook script with the project env, in the
 // project directory.
 func (e *Engine) runScript(rel string) error {
-	path, err := e.Project.SafePath(rel)
+	path, err := e.Project.InputPath(rel)
 	if err != nil {
 		return err
 	}

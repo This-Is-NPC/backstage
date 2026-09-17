@@ -42,13 +42,17 @@ type Scene struct {
 	// one way later.
 	VM      string   `json:"vm,omitempty"`
 	VMStart *VMStart `json:"vm-start,omitempty"`
+	VMEnd   *VMEnd   `json:"vm-end,omitempty"`
 	// Recorder overrides the vm's, for a scene that needs the other one.
 	// A scene ending in a logout, a reboot or a greeter has to be filmed
 	// from outside the session it is about to end.
 	Recorder string `json:"recorder,omitempty"`
 	Fresh    bool   `json:"fresh,omitempty"`
 	Reset    *bool  `json:"reset,omitempty"`
-	Steps    []Step `json:"steps"`
+	// Inputs lists extra files or directories whose contents belong in the
+	// take digest. Paths are leaf-relative and must stay inside the workspace.
+	Inputs []string `json:"inputs,omitempty"`
+	Steps  []Step   `json:"steps"`
 }
 
 // LayoutName returns the layout to stage.
@@ -76,6 +80,8 @@ type Project struct {
 	Layouts map[string]Layout `json:"layouts"`
 	// VMs are the Omarchy guests a scene can be staged on, by name.
 	VMs map[string]VMCfg `json:"vms,omitempty"`
+	// StateGroups name sets of VM aliases that share one generation.
+	StateGroups map[string][]string `json:"state-groups,omitempty"`
 
 	// Render targets the final video when stitching a production (concat needs a
 	// consistent size/fps across clips).
@@ -85,8 +91,16 @@ type Project struct {
 	// Productions are named ordered sequences of scenes with transitions between.
 	Productions map[string]Production `json:"productions,omitempty"`
 
-	// Dir is the project root (directory holding the config). Set by LoadProject.
+	// Dir is the leaf project root (directory holding this project's config).
+	// Set by LoadProject.
 	Dir string `json:"-"`
+	// Workspace is the workspace root: the directory of the topmost file in
+	// an extends chain, or Dir when the project does not extend another.
+	Workspace string `json:"-"`
+	// Extends is the leaf file's extends value, if it declared one.
+	Extends string `json:"-"`
+	// Origins maps a dotted configuration key to the file that supplied it.
+	Origins map[string]string `json:"-"`
 }
 
 // VMCfg is one Omarchy guest a scene can run on.
@@ -142,6 +156,7 @@ type VMStart struct {
 	Mode     string `json:"mode"`
 	Snapshot string `json:"snapshot,omitempty"`
 	After    string `json:"after,omitempty"`
+	Group    string `json:"group,omitempty"`
 }
 
 func (s *Scene) VMStartMode() string {
@@ -151,12 +166,31 @@ func (s *Scene) VMStartMode() string {
 	return s.VMStart.Mode
 }
 
+// VMEnd names a disk state to save after a successful take.
+type VMEnd struct {
+	Snapshot string `json:"snapshot"`
+	Group    string `json:"group,omitempty"`
+}
+
+// RenderThreads is used by presentation render. produce ignores these keys.
+// Zero or omitted values mean the presentation renderer picks a default.
+// Negative values are a config error. Very large values are accepted as written.
+type RenderThreads struct {
+	Prepare int `json:"prepare,omitempty"`
+	Filter  int `json:"filter,omitempty"`
+	Encode  int `json:"encode,omitempty"`
+}
+
 // RenderCfg is the target geometry for a stitched production. Zero w/h means the
 // monitor's native resolution; zero fps falls back to record.fps.
+// Workers is parallel presentation render chunks; zero or omitted means the
+// renderer picks a default. produce ignores Workers and Threads.
 type RenderCfg struct {
-	W   int `json:"w,omitempty"`
-	H   int `json:"h,omitempty"`
-	FPS int `json:"fps,omitempty"`
+	W       int           `json:"w,omitempty"`
+	H       int           `json:"h,omitempty"`
+	FPS     int           `json:"fps,omitempty"`
+	Workers int           `json:"workers,omitempty"`
+	Threads RenderThreads `json:"threads,omitempty"`
 }
 
 // ResolveRenderDims returns the (fps, w, h) a transition should target, applying

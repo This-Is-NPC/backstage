@@ -12,13 +12,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/This-Is-NPC/backstage/internal/engine"
+	"github.com/This-Is-NPC/backstage/internal/facts"
 	"github.com/This-Is-NPC/backstage/internal/machine"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 	"github.com/This-Is-NPC/backstage/internal/recorder"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 	"github.com/This-Is-NPC/backstage/internal/stage"
+	"github.com/This-Is-NPC/backstage/internal/take"
 	"github.com/This-Is-NPC/backstage/internal/transition"
 )
 
@@ -31,6 +34,7 @@ type Options struct {
 	ShowStaging  bool    // include the stage montage in scene clips
 	KeepSegments bool    // keep intermediate clips for debugging
 	Speed        float64 // scene timing multiplier (1 = real time)
+	Version      string  // Backstage binary version written into scene-clip facts
 }
 
 // segment is one ordered piece of the final video.
@@ -49,6 +53,33 @@ type interruptGuard interface {
 
 var newInterruptGuard = func(stop func() error, onInterrupt func()) interruptGuard {
 	return engine.NewInterruptGuard(stop, onInterrupt)
+}
+
+var runEngine = func(p *scene.Project, s *scene.Scene, opts engine.Options) error {
+	eng, err := engine.NewForScene(p, s)
+	if err != nil {
+		return err
+	}
+	return eng.Run(s, opts)
+}
+
+var teardownHost = func() error {
+	return (&stage.Hypr{}).Teardown()
+}
+
+var retimeClip = Retime
+
+var importTake = take.ImportContext
+
+type producer struct {
+	opts       Options
+	reserved   map[string]bool
+	generation string
+	segDir     string
+	speed      float64
+	cleanup    func()
+	raw        []string
+	first      string
 }
 
 // plan flattens a production into an ordered list of scene/transition segments.
@@ -153,63 +184,14 @@ func Run(opts Options) (string, error) {
 	// 1. resolve target geometry. If config omitted either dimension, record the
 	// first scene clip early so transitions can receive real {{w}}/{{h}} values.
 	segs := plan(opts.Prod)
-	raw := make([]string, len(segs))
-	firstSceneClip := ""
-	recordScene := func(i int, sg segment) error {
-		clip := filepath.Join(segDir, fmt.Sprintf("%03d-%s.mp4", i, sg.kind))
-		path, err := p.ScenePathSafe(sg.name)
-		if err != nil {
-			return err
-		}
-		s, err := scene.LoadScene(path)
-		if err != nil {
-			return err
-		}
-		if err := s.Validate(p); err != nil {
-			return err
-		}
-		fmt.Printf(">> scene %q → clip\n", sg.name)
-		eng, err := engine.NewForScene(p, s)
-		if err != nil {
-			return err
-		}
-		runErr := eng.Run(s, engine.Options{
-			Context: opts.Context, ReservedStages: reserved,
-			Record: true, OutPath: clip, ShowStaging: opts.ShowStaging, Speed: speed,
-			OnInterrupt: cleanupSegmentsOnInterrupt,
-		})
-		var teardownErr error
-		if s.VM == "" {
-			teardownErr = (&stage.Hypr{}).Teardown()
-		}
-		if runErr != nil {
-			if teardownErr != nil {
-				return fmt.Errorf("scene %q: %w; teardown: %v", sg.name, runErr, teardownErr)
-			}
-			return runErr
-		}
-		if teardownErr != nil {
-			return fmt.Errorf("teardown after scene %q: %w", sg.name, teardownErr)
-		}
-		// And then how to present it. The take on disk keeps the time it
-		// really took; what goes into the production is a retimed copy.
-		//
-		// After the recording and never during it: a scene played fast is a
-		// machine given less time, and the whole point of a long take is that
-		// the machine had every second of it.
-		shown := clip
-		if len(sg.speed) > 0 {
-			fmt.Printf(">> scene %q → retimed\n", sg.name)
-			shown, err = Retime(clip, sg.speed, "")
-			if err != nil {
-				return err
-			}
-		}
-		raw[i] = shown
-		if firstSceneClip == "" {
-			firstSceneClip = shown
-		}
-		return nil
+	pr := &producer{
+		opts:       opts,
+		reserved:   reserved,
+		generation: engine.NewStateGeneration(),
+		segDir:     segDir,
+		speed:      speed,
+		cleanup:    cleanupSegmentsOnInterrupt,
+		raw:        make([]string, len(segs)),
 	}
 	firstSceneIndex := -1
 	for i, sg := range segs {
@@ -223,13 +205,13 @@ func Run(opts Options) (string, error) {
 		if firstSceneIndex == -1 {
 			return "", fmt.Errorf("production has no scene clips")
 		}
-		if err := recordScene(firstSceneIndex, segs[firstSceneIndex]); err != nil {
+		if err := pr.recordScene(firstSceneIndex, segs[firstSceneIndex]); err != nil {
 			return "", err
 		}
-		if firstSceneClip == "" {
+		if pr.first == "" {
 			return "", fmt.Errorf("production has no scene clips")
 		}
-		probeW, probeH, err := probeDims(firstSceneClip)
+		probeW, probeH, err := probeDims(pr.first)
 		if err != nil {
 			return "", err
 		}
@@ -243,11 +225,11 @@ func Run(opts Options) (string, error) {
 
 	// 2. render remaining segments in production order.
 	for i, sg := range segs {
-		if raw[i] != "" {
+		if pr.raw[i] != "" {
 			continue
 		}
 		if sg.kind == "scene" {
-			if err := recordScene(i, sg); err != nil {
+			if err := pr.recordScene(i, sg); err != nil {
 				return "", err
 			}
 		} else {
@@ -265,13 +247,13 @@ func Run(opts Options) (string, error) {
 					return "", err
 				}
 			}
-			raw[i] = clip
+			pr.raw[i] = clip
 		}
 	}
 
 	// 3. normalize each clip to the same geometry/fps/pixfmt so concat is clean.
 	var norm []string
-	for i, c := range raw {
+	for i, c := range pr.raw {
 		if c == "" {
 			return "", fmt.Errorf("segment %d produced no clip", i)
 		}
@@ -285,7 +267,7 @@ func Run(opts Options) (string, error) {
 	// 4. concat into the final video.
 	out := opts.OutPath
 	if out == "" {
-		out, err = p.SafePath(p.Record.Out, "production.mp4")
+		out, err = p.OutputPath(p.Record.Out, "production.mp4")
 		if err != nil {
 			return "", err
 		}
@@ -299,6 +281,145 @@ func Run(opts Options) (string, error) {
 	return out, nil
 }
 
+func (pr *producer) recordScene(i int, sg segment) error {
+	p := pr.opts.Project
+	clip := filepath.Join(pr.segDir, fmt.Sprintf("%03d-%s.mp4", i, sg.kind))
+	path, err := p.ScenePathSafe(sg.name)
+	if err != nil {
+		return err
+	}
+	s, err := scene.LoadScene(path)
+	if err != nil {
+		return err
+	}
+	if err := s.Validate(p); err != nil {
+		return err
+	}
+	fmt.Printf(">> scene %q → clip\n", sg.name)
+	runErr := runEngine(p, s, engine.Options{
+		Context: pr.opts.Context, ReservedStages: pr.reserved,
+		Record: true, OutPath: clip, ShowStaging: pr.opts.ShowStaging, Speed: pr.speed,
+		OnInterrupt: pr.cleanup, Version: pr.opts.Version,
+		StateGeneration: pr.generation,
+	})
+	pubErr := pr.finishTake(s, clip, runErr)
+	var teardownErr error
+	if s.VM == "" {
+		teardownErr = teardownHost()
+	}
+	if runErr != nil {
+		if pubErr != nil {
+			runErr = errors.Join(runErr, pubErr)
+		}
+		if teardownErr != nil {
+			return fmt.Errorf("scene %q: %w; teardown: %v", sg.name, runErr, teardownErr)
+		}
+		return runErr
+	}
+	if pubErr != nil {
+		if teardownErr != nil {
+			return fmt.Errorf("scene %q: %w; teardown: %v", sg.name, pubErr, teardownErr)
+		}
+		return pubErr
+	}
+	if teardownErr != nil {
+		return fmt.Errorf("teardown after scene %q: %w", sg.name, teardownErr)
+	}
+	// And then how to present it. The take on disk keeps the time it
+	// really took; what goes into the production is a retimed copy.
+	//
+	// After the recording and never during it: a scene played fast is a
+	// machine given less time, and the whole point of a long take is that
+	// the machine had every second of it.
+	shown := clip
+	if len(sg.speed) > 0 {
+		fmt.Printf(">> scene %q → retimed\n", sg.name)
+		shown, err = retimeClip(clip, sg.speed, "")
+		if err != nil {
+			return err
+		}
+	}
+	pr.raw[i] = shown
+	if pr.first == "" {
+		pr.first = shown
+	}
+	return nil
+}
+
+func publishEligible(speed float64, showStaging bool) bool {
+	return speed == 1 && !showStaging
+}
+
+func successfulEndState(end *facts.EndState) bool {
+	return end != nil && end.Snapshot != "" && end.Image != "" && end.Status == ""
+}
+
+func (pr *producer) finishTake(s *scene.Scene, clip string, runErr error) error {
+	if !publishEligible(pr.speed, pr.opts.ShowStaging) {
+		return nil
+	}
+	name := s.Name
+	factsPath := facts.Path(clip)
+	f, err := facts.Read(factsPath)
+	if err != nil {
+		if runErr != nil {
+			return nil
+		}
+		return fmt.Errorf("scene %q facts: %w", name, err)
+	}
+	ok := f.Result == facts.ResultOK
+	failed := f.Result == facts.ResultStepsFailed || f.Result == facts.ResultShort || f.Result == facts.ResultCaptureFailed
+	if s.VMEnd != nil {
+		if errors.Is(runErr, engine.ErrCaptureFailed) || !successfulEndState(f.EndState) {
+			ok = false
+			failed = true
+		}
+	}
+	if !ok && !failed {
+		return nil
+	}
+	ctx := pr.opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var sess atomic.Pointer[take.Session]
+	guard := newInterruptGuard(func() error {
+		cancel()
+		return nil
+	}, func() {
+		if s := sess.Load(); s != nil {
+			s.Interrupt()
+		}
+		if pr.cleanup != nil {
+			pr.cleanup()
+		}
+	})
+	defer guard.Release()
+	imported, err := importTake(ctx, pr.opts.Project, name, clip, factsPath, func(s *take.Session) {
+		sess.Store(s)
+	})
+	if err != nil {
+		return fmt.Errorf("scene %q: import take: %w", name, err)
+	}
+	sess.Store(imported)
+	if ok {
+		pub, err := imported.Publish(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf(">> published %q %s\n", name, pub.StableClip)
+		return nil
+	}
+	path, err := imported.KeepAttempt()
+	if err != nil {
+		return err
+	}
+	fmt.Printf(">> attempt %q %s\n", name, path)
+	return nil
+}
+
 func renderOfflineTransition(cmdText string, v transition.Vars, env []string, dir string, onInterrupt func()) error {
 	cmd := transition.BuildCommand(cmdText, v, env, dir)
 	if err := runProductionCommand(cmd, onInterrupt); err != nil {
@@ -307,7 +428,9 @@ func renderOfflineTransition(cmdText string, v transition.Vars, env []string, di
 	return transition.VerifyOutput(v.Out)
 }
 
-func runProductionCommand(cmd *exec.Cmd, onInterrupt func()) error {
+var runProductionCommand = runProductionCommandImpl
+
+func runProductionCommandImpl(cmd *exec.Cmd, onInterrupt func()) error {
 	scene.SetProcessGroup(cmd)
 	cmdGuard := &engine.CommandGuard{}
 	guard := newInterruptGuard(func() error {

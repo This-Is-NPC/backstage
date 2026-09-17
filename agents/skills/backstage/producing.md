@@ -1,8 +1,37 @@
 # Producing
 
-`play` records one scene. `produce` records its scenes again and joins the
-results. To arrange existing takes without recording, use `render`; see
-[presentations.md](presentations.md).
+`play` records one scene. `play --with-deps` records that scene's stale or
+missing producers first, after printing the plan and reserving every stage
+in it. Different stages run together under the host budget; a host-display
+take never overlaps a VM take. A group consumer occupies every member
+stage, so no other take on those stages runs with it. Remaking one
+group producer also remakes its `group-sibling` producers in the same
+project so the run keeps one generation, and remakes a stale or missing
+producer on a sibling's chain. A blocked sibling stops the
+plan before the lock. `--with-deps` and `--stale` mint the generation;
+they refuse `--internal-state-generation` and `--internal-reserved-*`. `--jobs 1` is serial. `--stale` is a switch and the workspace is an optional
+argument (`--stale [DIR]`, default `.`). It records every seeded scene in
+the workspace, plus consumers that would go stale after those takes, with
+the same rules. Each take is a
+child process with its own log under `~/.local/state/backstage/jobs`.
+`--jobs` and `--json` need `--with-deps` or `--stale`. `--json` emits
+`job.progress` lines, a `plan.warning` line for each plan warning, and a
+final report that repeats those warnings. Ctrl-C signals every
+child, prints the final report once (the take in progress is interrupted)
+and exits 130. `produce` stays serial: it records its scenes again and joins the
+results. A scene at `--speed 1` without `--show-staging` is published to
+`record.out` as soon as it succeeds; the published take is the raw clip, not
+a retimed copy. A later failure does not undo that publication. A failed
+take (`steps-failed`, `short`, or `capture-failed`) is kept as an attempt
+even without `--keep-segments`. A scene with `vm-end` rewrites facts in the
+work directory before that import. If one scene produces a snapshot another
+scene in the same production consumes, the producer comes first.
+A `state-groups` consumer waits for the producer of every member. The
+production mints one generation and reserves every member stage. Silent
+members are restored and stay off; only the scene `vm` boots.
+`continue` cannot follow a scene that ends the guest. Other speeds and
+`--show-staging` stay in the work directory. To arrange existing takes
+without recording, use `render`; see [presentations.md](presentations.md).
 
 ```bash
 backstage produce tour                        # a declared production

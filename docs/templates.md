@@ -25,18 +25,65 @@ window.render = async function (context) {
 };
 ```
 
+Optional `static: true` marks every event that uses the template, or
+`static: ["single", "two-screens"]` lists layouts whose chrome and slot
+geometry do not change with time (track images and captions still may).
+`static: true` also covers visual scenes, which have no layout; a list never
+matches a scene. `initialize` rejects any other type, and a non-string list
+entry, with `static must be true or an array of layout names`, and a name
+that is not a key of `layouts` with `unknown layout <name>`. The built-in
+template does not declare `static`. Each static chunk probes its first and
+last frame; the worker keeps one below still and one above still and
+recaptures when the event, slot geometry, or (for above) the chunk caption
+set changes. A live CSS or SMIL animation, or first/last geometry that do
+not match, falls back to the screenshot loop with a warning on that chunk.
+A change that appears and disappears between those two samples stays under
+the static promise. Without the declaration the renderer still requires a
+stable DOM hash, no `canvas` / `video`, and no animated images before it
+will overlay.
+
 Provide elements with `data-slot="center"` and
 `data-caption-slot="subtitle"`. `render(context)` must create the slots for its
-layout before resolving. Set `data-fit="cover"` to crop a video to its slot;
-`contain` preserves its entire screen. The built-in template provides `single`
-(`center`), `two-screens` (`left`, `right`) and `three-screens` (`left`,
-`right-top`, `right-bottom`).
+layout before resolving. Set `data-fit="cover"` to crop a video to its slot,
+`contain` to preserve the entire screen, or `fill` to stretch. Only those
+three values exist: any other `data-fit` (including `none` and `scale-down`)
+is an error at initialize; the message names the slot and the value. The built-in template provides `single` (`center`), `two-screens` (`left`, `right`) and
+`three-screens` (`left`, `right-top`, `right-bottom`).
 
 Slots describe axis-aligned screen rectangles. Their border, background,
 rounded corners and shadow are carried with the rendered screen; CSS controls
 the rest of the page. The runtime replaces slot pixels with prepared video
-frames. Arbitrary 3D transforms and masks on video slots are not supported.
-Caption appearance uses the slot's font, text alignment, color and background.
+frames. Screens stack in layout slot order (first slot is behind). During a
+blend, tracks that appear only on the previous event are drawn last. The
+compositor, the probe, and `draw` share this order. A chunk whose slots keep
+constant geometry (fractional CSS `%`
+included), equal borders and equal corner radii whose computed values are a
+single `px` token (or `0`), no CSS/Web Animation, no SMIL, no `canvas`/`video`,
+and no `.gif`/`.apng`/`.webp`
+images can be composed from two layer stills plus the prepared tracks.
+Percent radii, elliptical two-value radii, and a scroll offset or form
+`.value` that changes keep the screenshot path. The track image is placed in
+an integer-pixel rectangle inside the slot on both the screenshot path and
+the overlay path (`contain`/`cover`/`fill`; blend and morph still use
+`object-fit`). The probe hashes the template DOM together with each
+element's `scrollTop` / `scrollLeft`, the `.value` of `input` /
+`textarea` / `select`, `checked` / `indeterminate` on checkboxes, selected
+option indices on `select`, and the `activeElement` path at every frame of
+the chunk; a node that appears and disappears in the middle, or a scroll
+offset that changes, keeps the screenshot path. Arbitrary 3D transforms and
+masks on video slots are not supported. Caption appearance uses the slot's
+font, text alignment, color and background. The letterbox of `contain` shows
+the slot background that the template already painted.
+
+The probe does not see shadow DOM, nested iframes, CSSOM /
+`adoptedStyleSheets`, `setTimeout`/`setInterval`, a template's own
+`requestAnimationFrame`, WebGL, `object`/`embed`, `background-image` on
+`::before`/`::after`, or `mask-image`/`border-image`. It also does not see
+`getSelection()` or caret offset: `activeElement` identity is hashed, but a
+selection or caret move that paints without changing that path is unseen. A
+template that changes pixels through those means is unsupported on the
+layered path and must stay on the screenshot loop unless it declares
+`static` for that layout and those pixels truly do not move.
 
 The built-in parameters are `title`, `background`, `foreground` and `border`.
 Custom templates may interpret additional JSON parameters. Visual scenes use
@@ -46,7 +93,10 @@ The runtime waits for images and fonts, pauses CSS/Web Animations and evaluates
 their current time, and sets SVG animation time explicitly. Custom JavaScript
 must derive state from `context`; wall-clock timers, random values and external
 network data cannot produce repeatable frames. Load assets locally. Fonts,
-images, CSS and scripts may be separate files.
+images, CSS and scripts may be separate files. Each timeline event is served
+under `/event-<i>/`, so relative URLs resolve inside that event. Every file
+fetched through that prefix is recorded in the chunk's cache manifest; changing
+the bytes of such a file re-renders the events that loaded it.
 
 ## Leave time for the animation to finish
 

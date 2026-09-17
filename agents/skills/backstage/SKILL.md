@@ -31,7 +31,7 @@ Read the matching guide before writing or changing anything:
 ## The Shape Of A Project
 
 ```
-backstage.json     recording settings, vms, templates, presentations
+backstage.json     recording settings, vms, templates, presentations; may extend an ancestor
 scenes/*.json      recording or visual scenes; narration and audio assets
 presentations/     JSON timelines that reuse media
 templates/         editable HTML/CSS
@@ -46,6 +46,7 @@ exports/           rendered presentations
 
 ```bash
 backstage list                  # scenes, productions and presentations
+backstage status [DIR]          # which takes are stale, blocked or missing
 backstage rehearse SCENE        # fast, no camera; check the flow first
 backstage play SCENE            # the take
 backstage produce PRODUCTION    # record scenes again and join them
@@ -53,6 +54,8 @@ backstage render NAME --check   # validate existing media and template slots
 backstage render NAME           # export a presentation from existing media
 backstage preview NAME          # render first, then open playback controls
 backstage template init NAME    # create an editable HTML template
+backstage config show           # merged configuration and the file each key came from
+backstage takes prune           # drop abandoned or old takes; not the last success
 backstage kill                  # strike the set
 ```
 
@@ -77,6 +80,12 @@ one way later without recording anything again.
 
 ## When A Recording Goes Stale
 
-Do not re-shoot by hand. Change the scene, or change the product, and play the
-scene again. A recording that cannot be regenerated is a screenshot with a
-duration.
+`backstage status` (and `status --json`) reports which recording takes are
+missing, stale, blocked or in error, and why. The directory argument limits
+scene rows, not errors: scene and config errors from the whole workspace stay
+in the Errors section (`kind` `scene-error` or `config-error`) and force a
+non-zero exit. A scene in error does not abort the report through the graph.
+Graph conflicts among valid scenes still exit non-zero. JSON that does not parse,
+or a chain that does not reach this root, is only a warning. Do not re-shoot
+by hand. Change the scene, or change the product, and play the scene again.
+A recording that cannot be regenerated is a screenshot with a duration.

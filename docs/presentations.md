@@ -45,9 +45,14 @@ A complete presentation document uses schema version 1:
 }
 ```
 
-A source `scene` references `scenes/NAME.json` and defaults to the existing
-`<record.out>/<scene.name>.mp4` (the filename supplies the name when omitted). Supply `file` alongside `scene` to use another take while
-retaining its editorial content. It never re-records a missing file.
+A source `scene` references `scenes/NAME.json` and the last successful take
+of that scene (the filename supplies the name when omitted). The documented
+`<record.out>/<scene.name>.mp4` path is a projection of that take; a `scene`
+source reads the published generation and holds it for the whole render.
+Supply `file` alongside `scene` to use another file while retaining editorial
+content. A `file` source follows the projection, so an existing
+`recordings/NAME.mp4` reference still tracks new successful takes. A failed
+take never replaces that path. It never re-records a missing file.
 
 Tracks are instances of sources: use distinct IDs to place the same source in
 multiple slots or play it at different positions. Each track can select cuts:
@@ -155,16 +160,121 @@ independent positions. Source cues beyond the final duration are clipped.
 
 ## Output and validation
 
+When a presentation or its template is inherited from an ancestor
+`backstage.json`, relative references inside the template (CSS, scripts, fonts,
+images) keep working as long as they stay inside the workspace. Requests that
+leave the workspace, including through symlinks, are refused. Companion facts
+record input hashes under workspace-relative keys; without `extends` those keys
+match today's project-relative paths.
+
 `render --check` probes inputs and checks timing, template initialization and
 slots without decoding every video frame. Runtime errors can still occur later
 inside custom code; these abort the export. The final MP4 is replaced only when
 rendering and encoding succeed. A companion `.facts.json` records configuration,
-resolved dimensions, source/resource hashes and tool versions.
+resolved dimensions, source/resource hashes and tool versions. A successful
+export also writes a `timings` object beside `render`: phase seconds
+(`renderer-start-seconds`, `decoder-start-seconds`, `prepare-track-seconds`, `audio-seconds`,
+`audio-part-seconds`, `encode-seconds`, `concat-seconds`, `mux-seconds`, `metadata-seconds`,
+`total-seconds`), `workers`, per-chunk wall times (`chunk-seconds`), per-frame
+stages (`decode`, `transfer`, `draw`, `screenshot`,
+`encode-write`, `probe`) with total, mean, max, p95 and frame count
+(`probe` is the Go round-trip of the geometry check, like decode),
+`layered-chunks`, `composite-seconds`, `static-violations` (omitted when
+zero), and intermediate
+byte sizes (`track-bytes`, `audio-part-bytes`, `mix-wav-bytes`,
+`video-mp4-bytes`, `final-mp4-bytes`, `decoded-png-bytes`, `screenshot-bytes`)
+and cache counters (`cache-hits`, `cache-misses`, each `{tracks, audio, segments}`).
+Absent phases and missing files are omitted. `renderer-start-seconds` is the
+sum of Chromium startups across the worker pool (one browser per worker);
+`decoder-start-seconds` sums decoder opens on cache misses; `encode-seconds` is
+the longest frames-path encoder Start to Wait (image2pipe chunks). Layered
+overlay time is `composite-seconds` only. `concat-seconds` is omitted when there is
+only one chunk. Progress ends with
+`>> render timings: ...` including `decoder-start=`, `workers=`, `concat=`,
+`probe-p95=`, `composite=` and `layered=`.
+A still chunk may print `>> chunk-N layered` after `running` and encode from
+two layer stills plus the prepared tracks instead of a screenshot per frame.
+A template that declares `static` for the event's layout (or `static: true` on
+a visual scene) probes the first and last frame of each chunk and keeps one
+below still and one above still on that worker, recapturing when the event,
+geometry, or caption set changes. A broken static promise prints
+`>> chunk-N static template <layout>: <reason>; using frames` or
+`>> chunk-N static scene <name>: <reason>; using frames`
+(`css animation`, `smil`, or `geometry`) and facts record `static-violations`
+(omitted when zero). The timings line includes `static-violations=` only
+when the count is positive. A geometry change that comes and goes between
+the two samples stays under the static promise.
+Layered eligibility needs constant slot geometry (integer or fractional)
+and radii whose computed value is a single `px` token; percent radii, scroll that changes per frame, and blend/transition
+chunks stay on the screenshot path. On both paths the track image sits in an
+integer-pixel rectangle inside the slot (`contain`/`cover`/`fill`; blend and
+morph still use `object-fit`).
+`decoder-start-seconds`
+covers opening the decoders; when a preview starts after frame 0 it also
+includes the first-frame peek and any packet count plus reopen. Facts `inputs`
+list plan entries plus files loaded by events that fall inside the rendered
+interval (template-fetched assets included). A second render of the same
+interval reuses encoded chunks; progress prints `>> chunk-N cached` on a hit.
+Changing an event's template file, layout, slots, narration, slotted tracks,
+or a file that event loaded invalidates that event's chunks and the incoming
+transition chunk of the next event. A global parameter change invalidates every
+chunk. Preview uses the same cache: `first`, `end` and `scale` are part of the
+key, so a scale-1 preview that covers whole chunks of a prior full export is a
+hit. Source and template input hashes stay the same;
+`builtin:runtime.html` changes when the host runtime changes.
+Measured draw includes what `draw` itself waits for — image load, host fonts,
+and a compositor paint — not pure canvas cost. `encode-seconds` overlaps that
+chunk's Chromium frame loop; it does not mean the encoder is the bottleneck. On a typical
+`complete` render the loop itself spends about 4.3 s in screenshot and
+3.7 s in draw of about 10 s total. Layered chunks skip that per-frame loop after
+a geometry probe; `composite-seconds` is the FFmpeg overlay encode and is not
+included in `encode-seconds`. A layered chunk records two screenshot samples
+unless a static event reuses a still from an earlier chunk on that worker.
 
 Visual reproducibility assumes fixed inputs, browser, fonts and tool versions;
-MP4 byte identity across environments is not promised. The renderer uses bounded
-frame buffers and lossless intermediate video on disk rather than storing a
-whole take as PNGs. Disk use can still be significant for long/high-resolution
-sources. Ctrl-C cancels work and removes intermediates.
+MP4 byte identity across environments is not promised. Prepared FFV1 tracks use
+`-g 1` so every frame is a seek point. Screenshots stay lossless PNG with
+`optimizeForSpeed`. Track prepare runs in parallel (at most one worker per
+CPU). Prepared tracks, the mixed soundtrack, and encoded timeline chunks are cached
+under the user cache directory (`backstage/render`). A warm render reuses those
+files when the source bytes, compiled cuts, fps, FFmpeg version, encode recipe,
+browser version and embedded runtime match. Thread counts are not part of the
+key. Warm and cold renders keep the same `inputs` hashes and the same composed
+frames; a full segment-cache hit copies the stored H.264 without Chromium.
+`backstage cache prune` drops least-recently-used track, audio and segment
+entries (default 10G).
+Project `render.threads` sets FFmpeg counts for that prepare and for
+libx264; each chunk encoder uses `max(1, encode/workers)` threads and runs at
+the same time as that chunk's Chromium frame loop, not after it.
+`render.workers` is Chromium concurrency (one browser per worker). `0`,
+`null` or an omitted key picks `max(1, min(NumCPU/2, memoryBudget/2GiB,
+nMiss))` where `memoryBudget` is MemAvailable minus a 2 GiB host reserve.
+An explicit `N` runs `N` workers, capped at the number of chunks that miss
+the segment cache. Chunks are cut at event boundaries and then into pieces of
+at most `max(16, 2*fps)` frames, measured from the event start and then clipped
+to the render interval, so a preview that covers whole interior pieces shares
+those cache keys with a full export. Chunks share prepared tracks and the mix,
+encode H.264 with `-video_track_timescale <fps>`, and join with the concat
+demuxer `-c copy` when there is more than one file. A worker keeps its browser
+and track decoders across consecutive misses; each miss still starts its own
+encoder. Joined output keeps PSNR-Y ≥ 40 dB (mean ≥ 45 dB)
+against a single-worker export, frame codes and 1/fps timestamps, and audio
+cross-correlation ≥ 0.95 with `|lag| ≤ 5 ms`. A faster encode is accepted when
+every decoded H.264 frame keeps PSNR-Y ≥ 40 dB against the previous thread
+count (mean ≥ 45 dB), and when frame count, timestamps, duration and audio stay
+aligned. The same PSNR-Y limits apply when a preview interval is compared to
+the matching frames of the full export (`select='between(n,first,end-1)'`,
+never `-ss` on H.264).
+`preview --from/--to/--scale` renders `[first, end)` at absolute `t = n/fps`
+and may screenshot at a clip scale; `render` stays the full film at scale 1.
+Interval audio is a sample-accurate `atrim` of the cached 48 kHz mix
+(`end_sample` exclusive). The player clock is `first/fps + currentTime`.
+The renderer uses
+bounded frame buffers and lossless intermediate video on disk rather than
+storing a whole take as PNGs. Disk use can still be significant for
+long/high-resolution sources. Ctrl-C cancels every chunk, removes
+intermediates, and leaves an existing MP4 in place. The chunk that returns
+the error prints `failed`; chunks cancelled because of it or because of
+Ctrl-C print `interrupted`.
 
 See [Templates](templates.md) for visual slots and animation timing.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/This-Is-NPC/backstage/internal/guest"
 )
@@ -30,6 +31,7 @@ func CheckContinuity(last *Continuity, project, after string, recording bool, se
 // Begin is called under the stage lock, before project hooks. Continuity is
 // consumed before any action so a failed or interrupted take cannot certify it.
 func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, project string, recording bool) (*guest.Guest, error) {
+	m.StartTimes = StartTimes{}
 	if err := m.Recover(ctx, r); err != nil {
 		return nil, err
 	}
@@ -40,14 +42,31 @@ func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, p
 		if snapshot == "" {
 			snapshot = "initial"
 		}
-		release, err := m.Store.LockMany("image-catalog")
-		if err != nil {
-			return nil, err
+		if recording {
+			if o, ok := originOf(r, snapshot); ok && o.Take == TakeRehearsal {
+				return nil, fmt.Errorf("cannot record from rehearsal snapshot %q", snapshot)
+			}
 		}
-		err = m.Restore(ctx, r, snapshot)
-		release()
-		if err != nil {
-			return nil, err
+		if m.canSkipRestore(ctx, r, snapshot, "") {
+			if err := m.clearAtState(r); err != nil {
+				return nil, err
+			}
+			skipped := true
+			m.StartTimes.RestoreSkipped = &skipped
+			m.logTiming(r, "restore-skipped", true)
+		} else {
+			if err := m.clearAtState(r); err != nil {
+				return nil, err
+			}
+			release, err := m.Store.LockWait(ctx, "image-catalog")
+			if err != nil {
+				return nil, err
+			}
+			err = m.Restore(ctx, r, snapshot)
+			release()
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	last := r.Continuity
@@ -64,9 +83,17 @@ func (m *Manager) Begin(ctx context.Context, r *Record, mode, snapshot, after, p
 			return nil, errors.New("continuation requires a running stage; it will not be booted automatically")
 		}
 	}
+	var booted time.Time
+	if state, err := m.State(ctx, r); err == nil && state != "running" {
+		booted = m.now()
+	}
 	g, err := m.Start(ctx, r)
 	if err != nil {
 		return nil, err
+	}
+	if !booted.IsZero() {
+		m.StartTimes.BootSeconds = secondsPtr(m.since(booted))
+		m.logTiming(r, "boot-seconds", *m.StartTimes.BootSeconds)
 	}
 	g.StartMode = mode
 	if mode == "clean" {

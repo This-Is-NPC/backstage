@@ -3,6 +3,7 @@ package presentation
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/This-Is-NPC/backstage/internal/scene"
+	"github.com/This-Is-NPC/backstage/internal/take"
 )
 
 type Source struct {
@@ -112,6 +114,20 @@ type Plan struct {
 	AudioParts                 []AudioPart
 	Width, Height, FPS, Frames int
 	Template                   string
+	leases                     []*take.Handle
+}
+
+// Close releases generation leases held for scene sources.
+func (p *Plan) Close() error {
+	if p == nil {
+		return nil
+	}
+	var err error
+	for _, h := range p.leases {
+		err = errors.Join(err, h.Close())
+	}
+	p.leases = nil
+	return err
 }
 
 func strictRead(path string, into any) error {
@@ -150,7 +166,7 @@ func sortedKeys[T any](m map[string]T) []string {
 	return keys
 }
 func (p *Plan) input(rel string) (string, error) {
-	path, err := p.Project.SafePath(rel)
+	path, err := p.Project.InputPath(rel)
 	if err != nil {
 		return "", err
 	}
@@ -161,7 +177,11 @@ func (p *Plan) input(rel string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("not a regular file: %s", rel)
 	}
-	p.Inputs[rel] = path
+	key, err := workspaceRel(p.Project, path)
+	if err != nil {
+		return "", err
+	}
+	p.Inputs[key] = path
 	return path, nil
 }
 func (p *Plan) loadScene(name string) (*scene.Scene, error) {
@@ -180,8 +200,9 @@ func (p *Plan) loadScene(name string) (*scene.Scene, error) {
 		return nil, err
 	}
 	p.Scenes[name] = s
-	rel, _ := filepath.Rel(p.Project.Dir, path)
-	p.Inputs[rel] = path
+	if rel, err := workspaceRel(p.Project, path); err == nil {
+		p.Inputs[rel] = path
+	}
 	if s.Type == "visual" {
 		if _, err = p.input(s.Entry); err != nil {
 			return nil, err
@@ -198,6 +219,11 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		return nil, rootErr
 	}
 	copyProject.Dir = root
+	workspace, err := filepath.Abs(p.WorkspaceRoot())
+	if err != nil {
+		return nil, err
+	}
+	copyProject.Workspace = workspace
 	p = &copyProject
 
 	ref, ok := p.Presentations[name]
@@ -205,6 +231,12 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		return nil, fmt.Errorf("unknown presentation %q", name)
 	}
 	plan := &Plan{Project: p, Name: name, Ref: ref, Tracks: map[string]CompiledTrack{}, Scenes: map[string]*scene.Scene{}, Inputs: map[string]string{}}
+	ready := false
+	defer func() {
+		if !ready {
+			_ = plan.Close()
+		}
+	}()
 	path, err := plan.input(ref.File)
 	if err != nil {
 		return nil, err
@@ -255,12 +287,43 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		}
 	}
 	sources := map[string]Media{}
+	opened := map[string]*take.Handle{}
+	var sceneNames []string
+	seenScene := map[string]bool{}
+	for _, id := range sortedKeys(d.Sources) {
+		src := d.Sources[id]
+		if src.Scene == "" || src.File != "" {
+			continue
+		}
+		s, e := plan.loadScene(src.Scene)
+		if e != nil {
+			return nil, e
+		}
+		if s.Type == "visual" {
+			return nil, fmt.Errorf("visual scene %q belongs in timeline", src.Scene)
+		}
+		if seenScene[s.Name] {
+			continue
+		}
+		seenScene[s.Name] = true
+		sceneNames = append(sceneNames, s.Name)
+	}
+	sort.Strings(sceneNames)
+	for _, name := range sceneNames {
+		h, e := take.Open(p, name)
+		if e != nil {
+			return nil, e
+		}
+		plan.leases = append(plan.leases, h)
+		opened[name] = h
+	}
 	for _, id := range sortedKeys(d.Sources) {
 		src := d.Sources[id]
 		if id == "" {
 			return nil, fmt.Errorf("source ID cannot be empty")
 		}
 		file := src.File
+		var path string
 		if src.Scene != "" {
 			s, e := plan.loadScene(src.Scene)
 			if e != nil {
@@ -270,17 +333,27 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 				return nil, fmt.Errorf("visual scene %q belongs in timeline", src.Scene)
 			}
 			if file == "" {
-				file = filepath.Join(p.Record.Out, s.Name+".mp4")
+				h := opened[s.Name]
+				if h == nil {
+					return nil, fmt.Errorf("scene %q was not opened", s.Name)
+				}
+				path = h.Clip
+				if e := plan.addInput(path); e != nil {
+					return nil, e
+				}
 			}
 		}
-		if file == "" {
-			return nil, fmt.Errorf("source %q requires file or scene", id)
+		if path == "" {
+			if file == "" {
+				return nil, fmt.Errorf("source %q requires file or scene", id)
+			}
+			resolved, e := plan.input(file)
+			if e != nil {
+				return nil, e
+			}
+			path = resolved
 		}
-		path, e := plan.input(file)
-		if e != nil {
-			return nil, e
-		}
-		media, e := probe(path)
+		media, e := inspectMedia(path)
 		if e != nil {
 			return nil, e
 		}
@@ -374,7 +447,24 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 	if err = plan.compileCaptions(); err != nil {
 		return nil, err
 	}
+	ready = true
 	return plan, nil
+}
+
+func (p *Plan) addInput(abs string) error {
+	info, err := os.Stat(abs)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file: %s", abs)
+	}
+	key, err := workspaceRel(p.Project, abs)
+	if err != nil {
+		return err
+	}
+	p.Inputs[key] = abs
+	return nil
 }
 
 func (p *Plan) cue(sceneName, track, cueID string) (scene.NarrationCue, error) {
@@ -475,7 +565,7 @@ func (p *Plan) Output(override string) (string, error) {
 	if out == "" {
 		out = filepath.Join("exports", p.Name+".mp4")
 	}
-	path, err := p.Project.SafePath(out)
+	path, err := p.Project.OutputPath(out)
 	if err != nil {
 		return "", err
 	}
@@ -485,6 +575,18 @@ func (p *Plan) Output(override string) (string, error) {
 	for _, input := range p.Inputs {
 		if input == path {
 			return "", fmt.Errorf("output would overwrite input")
+		}
+	}
+	for _, src := range p.Document.Sources {
+		if src.Scene == "" || src.File != "" {
+			continue
+		}
+		name := src.Scene
+		if s := p.Scenes[src.Scene]; s != nil && s.Name != "" {
+			name = s.Name
+		}
+		if err := take.OverwritesTake(p.Project, name, path); err != nil {
+			return "", err
 		}
 	}
 	return path, nil

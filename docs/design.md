@@ -153,8 +153,21 @@ them. Backstage says it first.
 
 ## Provenance
 
-Backstage writes a `.facts.json` file beside each guest clip. The file records
-the domain, the accounts, the address, and the Omarchy version.
+Backstage writes a `.facts.json` file beside every recorded clip, on the host
+and on a VM. The file records the Backstage version, when the take was made,
+`inputs-sha256` (what changes the picture: the scene without narration,
+resolved layout and VM entry, used aliases and transitions, the hook that
+runs, prop and declared input files, env, fps, speed, staging, and the
+start image or predecessor), and whether the take finished (`ok`), a step
+failed (`steps-failed`), or the clip came back short (`short`). A guest
+clip also records the domain, the accounts, the address, the Omarchy
+version, and, on a clean start, the restored image and snapshot name.
+A guest take may include a `timings` object (seconds to the millisecond,
+captured image bytes) for the phases that finished. `boot-seconds` only
+when Begin booted a stopped domain. Those numbers are
+not part of `inputs-sha256`.
+Narration is not an input. A missing declared file fails the take before
+the recorder starts.
 
 A film is evidence. That file is the difference between a take that you can
 produce again and a take that you can only record again.

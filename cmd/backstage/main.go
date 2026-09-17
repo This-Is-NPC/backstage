@@ -39,6 +39,6 @@ func main() {
 		return
 	}
 	if err := cli.Execute(version); err != nil {
-		os.Exit(1)
+		os.Exit(cli.ExitStatus(err))
 	}
 }
