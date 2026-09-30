@@ -42,14 +42,6 @@ func newDepsExec(out io.Writer, store *machine.Store, run sceneRun) (*depsExec, 
 	return &depsExec{Store: store, Out: out, Run: run}, nil
 }
 
-func runWithDeps(out io.Writer, scenePath string, opts engine.Options, store *machine.Store, run sceneRun) error {
-	d, err := newDepsExec(out, store, run)
-	if err != nil {
-		return err
-	}
-	return d.run(scenePath, opts)
-}
-
 func (d *depsExec) run(scenePath string, opts engine.Options) error {
 	kind := workspace.KindPlay
 	if !opts.Record {

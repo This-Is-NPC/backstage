@@ -1532,3 +1532,20 @@ func saveStageSpec(t *testing.T, store *machine.Store, name string, cpus int, me
 		t.Fatal(err)
 	}
 }
+
+type signalProc struct {
+	done chan error
+	mu   sync.Mutex
+	sigs int
+}
+
+func (p *signalProc) Wait() error {
+	return <-p.done
+}
+
+func (p *signalProc) Signal(os.Signal) error {
+	p.mu.Lock()
+	p.sigs++
+	p.mu.Unlock()
+	return nil
+}

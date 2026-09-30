@@ -639,3 +639,11 @@ func publishCLI(t *testing.T, dir string, store *machine.Store, name string, f f
 		t.Fatal(err)
 	}
 }
+
+func runWithDeps(out io.Writer, scenePath string, opts engine.Options, store *machine.Store, run sceneRun) error {
+	d, err := newDepsExec(out, store, run)
+	if err != nil {
+		return err
+	}
+	return d.run(scenePath, opts)
+}
