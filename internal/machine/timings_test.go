@@ -227,9 +227,9 @@ func TestTimingLogFailureDoesNotFailSnapshot(t *testing.T) {
 
 func stubBootGuest(t *testing.T) {
 	t.Helper()
-	prev := bootGuest
-	bootGuest = func(*guest.Guest, time.Duration) error { return nil }
-	t.Cleanup(func() { bootGuest = prev })
+	prev := BootGuest
+	BootGuest = func(*guest.Guest, time.Duration) error { return nil }
+	t.Cleanup(func() { BootGuest = prev })
 }
 
 func virshState(r *Record, state string, qemu func(dest string) error) runnerFunc {
@@ -384,12 +384,12 @@ func TestBeginBootExcludesRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 	failDefine = false
-	prevBoot := bootGuest
-	bootGuest = func(*guest.Guest, time.Duration) error {
+	prevBoot := BootGuest
+	BootGuest = func(*guest.Guest, time.Duration) error {
 		clock = clock.Add(time.Second)
 		return nil
 	}
-	t.Cleanup(func() { bootGuest = prevBoot })
+	t.Cleanup(func() { BootGuest = prevBoot })
 	if _, err := m.Begin(context.Background(), r, "reuse", "", "", "/p", true); err != nil {
 		t.Fatal(err)
 	}

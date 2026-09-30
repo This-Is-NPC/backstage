@@ -115,11 +115,12 @@ func groupConsumer() *scene.Scene {
 
 func TestGroupConsumerRestoresSilentsAndBootsFilmed(t *testing.T) {
 	var boots atomic.Int32
-	machine.SetBootGuest(func(*guest.Guest, time.Duration) error {
+	prevBoot := machine.BootGuest
+	machine.BootGuest = func(*guest.Guest, time.Duration) error {
 		boots.Add(1)
 		return nil
-	})
-	t.Cleanup(func() { machine.SetBootGuest(nil) })
+	}
+	t.Cleanup(func() { machine.BootGuest = prevBoot })
 	dir := t.TempDir()
 	e, _, restores, begins := groupEngine(t, dir)
 	if err := e.Run(groupConsumer(), Options{Speed: 0.0001}); err != nil {

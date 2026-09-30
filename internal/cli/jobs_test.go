@@ -249,8 +249,9 @@ func TestSameStageNeverOverlaps(t *testing.T) {
 }
 
 func TestSchedulerSameStageSkipRestore(t *testing.T) {
-	machine.SetBootGuest(func(*guest.Guest, time.Duration) error { return nil })
-	t.Cleanup(func() { machine.SetBootGuest(nil) })
+	prevBoot := machine.BootGuest
+	machine.BootGuest = func(*guest.Guest, time.Duration) error { return nil }
+	t.Cleanup(func() { machine.BootGuest = prevBoot })
 
 	m, r := cliLiveStage(t)
 	store := m.Store
