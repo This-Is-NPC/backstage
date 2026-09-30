@@ -525,7 +525,7 @@ func recordLiveTransition(p *scene.Project, t scene.Transition, v transition.Var
 	if stopErr != nil {
 		return stopErr
 	}
-	// Verify a non-empty clip landed, mirroring the offline transition.Render
+	// Verify a non-empty clip landed, mirroring the offline transition.VerifyOutput
 	// invariant: a prop that exits 0 with no/short recording must not pass silently.
 	fi, err := os.Stat(clip)
 	if err != nil {

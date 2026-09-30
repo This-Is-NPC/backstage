@@ -3,7 +3,6 @@ package transition
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -41,35 +40,30 @@ func TestSubstituteLiveArgsOmitsOut(t *testing.T) {
 	}
 }
 
-func TestRenderWritesClip(t *testing.T) {
+func TestBuildCommandWritesClip(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "clip.mp4")
 	// fake "renderer" just writes some bytes to {{out}}
-	err := Render(`printf 'fakevideo' > {{out}}`, Vars{Out: out}, os.Environ(), t.TempDir())
-	if err != nil {
-		t.Fatalf("Render: %v", err)
+	if err := BuildCommand(`printf 'fakevideo' > {{out}}`, Vars{Out: out}, os.Environ(), t.TempDir()).Run(); err != nil {
+		t.Fatalf("BuildCommand: %v", err)
+	}
+	if err := VerifyOutput(out); err != nil {
+		t.Fatalf("VerifyOutput: %v", err)
 	}
 	if b, _ := os.ReadFile(out); string(b) != "fakevideo" {
 		t.Errorf("clip not written, got %q", b)
 	}
 }
 
-func TestRenderErrors(t *testing.T) {
-	out := filepath.Join(t.TempDir(), "clip.mp4")
-
-	// command fails
-	if err := Render("exit 7", Vars{Out: out}, os.Environ(), t.TempDir()); err == nil {
-		t.Error("expected error on failing command")
-	}
-	// command succeeds but writes nothing to out
-	if err := Render("true", Vars{Out: out}, os.Environ(), t.TempDir()); err == nil {
+func TestVerifyOutputErrors(t *testing.T) {
+	dir := t.TempDir()
+	if err := VerifyOutput(filepath.Join(dir, "missing.mp4")); err == nil {
 		t.Error("expected error when no output produced")
 	}
-	// command writes an empty file
-	empty := filepath.Join(t.TempDir(), "empty.mp4")
-	if err := Render(":> {{out}}", Vars{Out: empty}, os.Environ(), t.TempDir()); err == nil {
-		t.Error("expected error on empty output")
+	empty := filepath.Join(dir, "empty.mp4")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.HasSuffix(out, ".mp4") { // guard against accidental edits
-		t.Fatal("test setup")
+	if err := VerifyOutput(empty); err == nil {
+		t.Error("expected error on empty output")
 	}
 }

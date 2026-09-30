@@ -68,16 +68,6 @@ func BuildCommand(cmd string, v Vars, env []string, dir string) *exec.Cmd {
 	return c
 }
 
-// Render substitutes placeholders, runs the command via the shell (so users can
-// use pipes/redirection), and verifies a non-empty mp4 landed at v.Out.
-func Render(cmd string, v Vars, env []string, dir string) error {
-	c := BuildCommand(cmd, v, env, dir)
-	if err := c.Run(); err != nil {
-		return fmt.Errorf("transition command failed: %w", err)
-	}
-	return VerifyOutput(v.Out)
-}
-
 // VerifyOutput checks that a transition command wrote a non-empty mp4.
 func VerifyOutput(out string) error {
 	fi, err := os.Stat(out)
