@@ -201,7 +201,7 @@ func trackCacheKey(srcHash string, segs []Segment, fps, gop int, ffmpeg string) 
 }
 
 func audioEncodeArgs() []string {
-	return []string{"-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "amix=normalize=0", "alimiter=limit=0.95:level=0:latency=1"}
+	return []string{"-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "amix=normalize=0", "asetnsamples=n=1024:p=1", "alimiter=limit=0.95:level=0:latency=1"}
 }
 
 func audioCacheKey(parts []audioKeyPart, duration, ffmpeg string) string {

@@ -301,7 +301,9 @@ func (p *Plan) mixDirect(ctx context.Context, dir string) (string, []namedSecond
 		filters = append(filters, f)
 		fmt.Fprintf(&inputs, "[%s]", label)
 	}
-	filters = append(filters, fmt.Sprintf("%samix=inputs=%d:normalize=0,alimiter=limit=0.95:level=0:latency=1,apad,atrim=duration=%s[mix]", inputs.String(), len(paths), num(p.Document.Duration)))
+	// amix frame sizes follow FFmpeg's demuxer thread timing, and alimiter's
+	// latency flush depends on them; fixed frames keep the mix reproducible.
+	filters = append(filters, fmt.Sprintf("%samix=inputs=%d:normalize=0,asetnsamples=n=1024:p=1,alimiter=limit=0.95:level=0:latency=1,apad,atrim=duration=%s[mix]", inputs.String(), len(paths), num(p.Document.Duration)))
 	path := filepath.Join(dir, "mix.wav")
 	args = append(args, "-filter_complex_threads", "1", "-filter_complex", strings.Join(filters, ";"), "-map", "[mix]", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-t", num(p.Document.Duration), path)
 	return path, parts, run(ctx, "ffmpeg", args...)
