@@ -97,10 +97,10 @@ func TestThreadCountsShareTrackKey(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
 	work := t.TempDir()
-	if _, _, err := c.prepareTrack(context.Background(), tr, work, "a", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, work, "a", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 8, 3, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 8, 3); err != nil {
 		t.Fatal(err)
 	}
 	got := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
@@ -119,10 +119,10 @@ func TestSameBytesDifferentPathShareKey(t *testing.T) {
 	if err := os.WriteFile(other, mustRead(t, clip), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.prepareTrack(context.Background(), tinyCompiled(t, clip), t.TempDir(), "a", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tinyCompiled(t, clip), t.TempDir(), "a", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.prepareTrack(context.Background(), tinyCompiled(t, other), t.TempDir(), "b", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tinyCompiled(t, other), t.TempDir(), "b", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	got := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
@@ -135,7 +135,7 @@ func TestClipCutFpsInvalidateOnlyThatEntry(t *testing.T) {
 	c := openTestCache(t)
 	clip := tinyClip(t)
 	tr := tinyCompiled(t, clip)
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	otherPath := filepath.Join(t.TempDir(), "other.mp4")
@@ -143,7 +143,7 @@ func TestClipCutFpsInvalidateOnlyThatEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := tinyCompiled(t, otherPath)
-	if _, _, err := c.prepareTrack(context.Background(), other, t.TempDir(), "b", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), other, t.TempDir(), "b", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	before := append([]string(nil), listExt(t, filepath.Join(c.root, "tracks"), ".mkv")...)
@@ -151,17 +151,17 @@ func TestClipCutFpsInvalidateOnlyThatEntry(t *testing.T) {
 		t.Fatal(before)
 	}
 	tr.Segments[0].To = 0.3
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "c", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "c", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.prepareTrack(context.Background(), other, t.TempDir(), "d", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), other, t.TempDir(), "d", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	after := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
 	if len(after) != 3 {
 		t.Fatalf("cut should add one key, keep the other: %v", after)
 	}
-	if _, _, err := c.prepareTrack(context.Background(), other, t.TempDir(), "e", 12, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), other, t.TempDir(), "e", 12, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(listExt(t, filepath.Join(c.root, "tracks"), ".mkv")); n != 4 {
@@ -184,7 +184,7 @@ func TestAudioInputInvalidatesOnlyAudio(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	tracksBefore := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
@@ -231,7 +231,7 @@ func TestCorruptMemoDoesNotFailRender(t *testing.T) {
 	var log bytes.Buffer
 	c.progress = &log
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(log.Bytes(), []byte("memo unreadable")) {
@@ -257,7 +257,7 @@ func TestInterruptedPrepareLeavesNoEntry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := c.prepareTrack(ctx, tr, work, "track-0", 10, 1, 1, 1)
+		_, err := c.prepareTrack(ctx, tr, work, "track-0", 10, 1, 1)
 		done <- err
 	}()
 	deadline := time.Now().Add(5 * time.Second)
@@ -292,7 +292,7 @@ func TestInterruptedPrepareLeavesNoEntry(t *testing.T) {
 func TestPruneSkipsSharedLockAndKeepsLockFile(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	mkv := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
@@ -317,7 +317,7 @@ func TestPruneSkipsSharedLockAndKeepsLockFile(t *testing.T) {
 func TestPruneNeverDeletesLockAndNextRenderWorks(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	_ = c.Close()
@@ -342,7 +342,7 @@ func TestPruneNeverDeletesLockAndNextRenderWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c2.Close()
-	if _, _, err = c2.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1, 1); err != nil {
+	if _, err = c2.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	if c2.misses.Tracks != 1 {
@@ -477,7 +477,7 @@ func TestNewTakeGenerationChangesKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	segs := []Segment{{From: 0, To: 0.4, Rate: 1}}
-	if trackCacheKey(h1, segs, 10, 1, c.ffmpeg) == trackCacheKey(h2, segs, 10, 1, c.ffmpeg) {
+	if trackCacheKey(h1, segs, 10, c.ffmpeg) == trackCacheKey(h2, segs, 10, c.ffmpeg) {
 		t.Fatal("new generation kept the old key")
 	}
 }
@@ -504,7 +504,7 @@ func TestConcurrentPrepareSameKey(t *testing.T) {
 				return
 			}
 			defer os.RemoveAll(work)
-			_, _, err = c.prepareTrack(context.Background(), tr, work, "t", 10, 1, 1, 1)
+			_, err = c.prepareTrack(context.Background(), tr, work, "t", 10, 1, 1)
 			errs <- err
 		}()
 	}
@@ -523,7 +523,7 @@ func TestConcurrentPrepareSameKey(t *testing.T) {
 func TestReadErrorRecomputes(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	mkv := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
@@ -532,7 +532,7 @@ func TestReadErrorRecomputes(t *testing.T) {
 	}
 	var log bytes.Buffer
 	c.progress = &log
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	if c.misses.Tracks < 2 {
@@ -543,7 +543,7 @@ func TestReadErrorRecomputes(t *testing.T) {
 func TestPruneDryRunJSONShape(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	_ = c.Close()
@@ -562,7 +562,7 @@ func TestPruneDryRunJSONShape(t *testing.T) {
 func TestSharedLockBlocksExclusive(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "t", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	mkv := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
@@ -581,7 +581,7 @@ func failCacheLink(_, _ string) error {
 func TestLinkFailureSharedKeepsEntry(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	mkv := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
@@ -595,7 +595,7 @@ func TestLinkFailureSharedKeepsEntry(t *testing.T) {
 	t.Cleanup(func() { linkCacheFile = prev })
 	var log bytes.Buffer
 	c.progress = &log
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	if c.misses.Tracks != 2 || c.hits.Tracks != 0 {
@@ -612,7 +612,7 @@ func TestLinkFailureSharedKeepsEntry(t *testing.T) {
 func TestLinkFailureExclusiveKeepsValidEntry(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	_ = c.Close()
@@ -638,7 +638,7 @@ func TestLinkFailureExclusiveKeepsValidEntry(t *testing.T) {
 	defer c2.Close()
 	var log bytes.Buffer
 	c2.progress = &log
-	if _, _, err = c2.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 1, 1, 1); err != nil {
+	if _, err = c2.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.Stat(dest)
@@ -656,7 +656,7 @@ func TestLinkFailureExclusiveKeepsValidEntry(t *testing.T) {
 func TestZeroSizeEntryRepublishes(t *testing.T) {
 	c := openTestCache(t)
 	tr := tinyCompiled(t, tinyClip(t))
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "a", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	mkv := listExt(t, filepath.Join(c.root, "tracks"), ".mkv")
@@ -667,7 +667,7 @@ func TestZeroSizeEntryRepublishes(t *testing.T) {
 	if err := os.WriteFile(dest, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tr, t.TempDir(), "b", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(dest)
@@ -678,14 +678,14 @@ func TestZeroSizeEntryRepublishes(t *testing.T) {
 
 func TestPruneCorruptMetaIsLeastUsed(t *testing.T) {
 	c := openTestCache(t)
-	if _, _, err := c.prepareTrack(context.Background(), tinyCompiled(t, tinyClip(t)), t.TempDir(), "a", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tinyCompiled(t, tinyClip(t)), t.TempDir(), "a", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	other := filepath.Join(t.TempDir(), "other.mp4")
 	if err := run(context.Background(), "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=160x90:d=1:r=10", "-pix_fmt", "yuv420p", other); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.prepareTrack(context.Background(), tinyCompiled(t, other), t.TempDir(), "b", 10, 1, 1, 1); err != nil {
+	if _, err := c.prepareTrack(context.Background(), tinyCompiled(t, other), t.TempDir(), "b", 10, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	_ = c.Close()
@@ -716,15 +716,15 @@ func TestPruneCorruptMetaIsLeastUsed(t *testing.T) {
 }
 
 func TestCacheKeyJSONOmitsThreadsAndPath(t *testing.T) {
-	a := trackCacheKey("abc", []Segment{{From: 0, To: 1, Rate: 1}}, 12, 1, "ffmpeg")
-	b := trackCacheKey("abc", []Segment{{From: 0, To: 1, Rate: 1}}, 12, 1, "ffmpeg")
+	a := trackCacheKey("abc", []Segment{{From: 0, To: 1, Rate: 1}}, 12, "ffmpeg")
+	b := trackCacheKey("abc", []Segment{{From: 0, To: 1, Rate: 1}}, 12, "ffmpeg")
 	if a != b {
 		t.Fatal(a, b)
 	}
 	body, _ := json.Marshal(trackKeyV1{
 		V: "v1", Kind: "track", Src: "abc",
 		Segments: []keySegment{{From: num(0), To: num(1), Rate: num(1)}},
-		FPS:      12, FFmpeg: "ffmpeg", Encode: trackEncodeArgs(1),
+		FPS:      12, FFmpeg: "ffmpeg", Encode: trackEncodeArgs(),
 	})
 	if bytes.Contains(body, []byte("thread")) || bytes.Contains(body, []byte("/tmp")) {
 		t.Fatalf("key material leaked: %s", body)

@@ -604,13 +604,26 @@ func resolveTrackTrim(ctx context.Context, path string, tr CompiledTrack, ch chu
 	return s, e, nil
 }
 
+// stillInput reads a still once and stillHold repeats it inside the graph: a
+// `-loop 1` input decodes the PNG again for every output frame. Timestamps are
+// integers in a 1/fps time base: setpts=N/fps/TB truncates 2.999… to 2 at
+// 10 fps and stamps two frames alike.
+func stillInput(fps int, path string) []string {
+	return []string{"-framerate", strconv.Itoa(fps), "-i", path}
+}
+
+func stillHold(fps int) string {
+	return fmt.Sprintf("loop=loop=-1:size=1,settb=1/%d,setpts=N", fps)
+}
+
 func layerGraph(boxes []slotBox, srcSizes [][2]int, haves []int, fps int, outLabel string) string {
 	if fps < 1 {
 		fps = 1
 	}
 	nTracks := len(boxes)
+	hold := stillHold(fps)
 	var b strings.Builder
-	fmt.Fprintf(&b, "[0:v]format=rgba[below];")
+	fmt.Fprintf(&b, "[0:v]format=rgba,%s[below];", hold)
 	cur := "[below]"
 	for i, box := range boxes {
 		have := haves[i]
@@ -618,13 +631,13 @@ func layerGraph(boxes []slotBox, srcSizes [][2]int, haves []int, fps int, outLab
 		fmt.Fprintf(&b, "[%d:v]trim=start_frame=0:end_frame=%d,setpts=N/%d/TB%s;", 1+i, have, fps, trimPad)
 		scaled := fmt.Sprintf("[s%d]", i)
 		fmt.Fprintf(&b, "%s%s%s;", trimPad, slotScaleFilter(box, srcSizes[i][0], srcSizes[i][1]), scaled)
-		fmt.Fprintf(&b, "[%d:v]format=gray[g%d];", 1+nTracks+i, i)
+		fmt.Fprintf(&b, "[%d:v]format=gray,%s[g%d];", 1+nTracks+i, hold, i)
 		fmt.Fprintf(&b, "%s[g%d]alphamerge[m%d];", scaled, i, i)
 		next := fmt.Sprintf("[o%d]", i)
 		fmt.Fprintf(&b, "%s[m%d]overlay=%d:%d:eof_action=repeat:format=rgb,format=rgba%s;", cur, i, box.CX, box.CY, next)
 		cur = next
 	}
-	fmt.Fprintf(&b, "[%d:v]format=rgba[above];%s[above]overlay=0:0:eof_action=repeat:format=rgb,format=rgba[%s]", 1+2*nTracks, cur, outLabel)
+	fmt.Fprintf(&b, "[%d:v]format=rgba,%s[above];%s[above]overlay=0:0:eof_action=repeat:format=rgb,format=rgba[%s]", 1+2*nTracks, hold, cur, outLabel)
 	return b.String()
 }
 
@@ -642,8 +655,7 @@ func compositeChunk(ctx context.Context, p *Plan, ch chunkRange, trackPaths map[
 	if err := write("above.png", above); err != nil {
 		return err
 	}
-	fr := strconv.Itoa(p.FPS)
-	args := []string{"-v", "error", "-y", "-loop", "1", "-framerate", fr, "-i", filepath.Join(dir, "below.png")}
+	args := append([]string{"-v", "error", "-y"}, stillInput(p.FPS, filepath.Join(dir, "below.png"))...)
 	sizes := make([][2]int, len(boxes))
 	haves := make([]int, len(boxes))
 	var maskFiles []string
@@ -679,23 +691,30 @@ func compositeChunk(ctx context.Context, p *Plan, ch chunkRange, trackPaths map[
 		maskFiles = append(maskFiles, filepath.Join(dir, name))
 	}
 	for _, path := range maskFiles {
-		args = append(args, "-loop", "1", "-framerate", fr, "-i", path)
+		args = append(args, stillInput(p.FPS, path)...)
 	}
-	args = append(args, "-loop", "1", "-framerate", fr, "-i", filepath.Join(dir, "above.png"))
-	graph := layerGraph(boxes, sizes, haves, p.FPS, "out")
+	args = append(args, stillInput(p.FPS, filepath.Join(dir, "above.png"))...)
+	return encodeGraph(ctx, p, args, layerGraph(boxes, sizes, haves, p.FPS, "out"), ch.First, nOut, encodeThreads, out, observe)
+}
+
+// encodeGraph encodes the [out] label of graph after the inputs in args, and
+// when observe is set also streams the same frames to it as PNG.
+func encodeGraph(ctx context.Context, p *Plan, args []string, graph string, first, nOut, encodeThreads int, out string, observe func(n int, png []byte) error) error {
+	enc := "[out]"
 	if observe != nil {
 		graph += ";[out]split=2[enc][png]"
+		enc = "[enc]"
 	}
-	args = append(args, "-filter_complex", graph)
+	args = append(args, "-filter_complex", graph, "-map", enc, "-frames:v", strconv.Itoa(nOut))
+	args = append(args, x264EncodeTail(p, encodeThreads, out)...)
 	if observe != nil {
-		args = append(args, "-map", "[enc]", "-frames:v", strconv.Itoa(nOut))
-		args = append(args, x264EncodeTail(p, encodeThreads, out)...)
 		args = append(args, "-map", "[png]", "-frames:v", strconv.Itoa(nOut), "-f", "image2pipe", "-c:v", "png", "-")
-	} else {
-		args = append(args, "-map", "[out]", "-frames:v", strconv.Itoa(nOut))
-		args = append(args, x264EncodeTail(p, encodeThreads, out)...)
 	}
 	noteRender(renderNote{EncodeThreads: encodeThreads, EncoderArgs: append([]string(nil), args...)})
+	return runComposedCommand(ctx, args, nOut, first, observe)
+}
+
+func runComposedCommand(ctx context.Context, args []string, nOut, first int, observe func(n int, png []byte) error) error {
 	cmd := command(ctx, "ffmpeg", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -719,7 +738,7 @@ func compositeChunk(ctx context.Context, p *Plan, ch chunkRange, trackPaths map[
 			_ = cmd.Wait()
 			return fmt.Errorf("composed frame %d: %w: %s", i, err, stderr.String())
 		}
-		if err = observe(ch.First+i, b); err != nil {
+		if err = observe(first+i, b); err != nil {
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
 			return err

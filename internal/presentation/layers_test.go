@@ -340,6 +340,9 @@ func TestLayerGraphOverlayAtContentOrigin(t *testing.T) {
 	if strings.Contains(g, "overlay=10:20:") {
 		t.Fatalf("overlay at box origin\n%s", g)
 	}
+	if n := strings.Count(g, stillHold(10)); n != 3 {
+		t.Fatalf("below, mask and above should each be held once, got %d\n%s", n, g)
+	}
 }
 
 func layerSlotPlan(t *testing.T, w, h, fps int, duration float64, layout, html string, captions []Caption) *Plan {
@@ -611,13 +614,9 @@ func TestLayerCaptionChangeIsFrames(t *testing.T) {
 	resetSeams()
 	defer resetSeams()
 	html := replaceFit(layerFillHTML, "fill")
-	plan := layerSlotPlan(t, 320, 180, 10, 2, "single", html, []Caption{
-		{Scene: "explain", Cue: "cue", Clock: "presentation", At: 0, Duration: 1, Slot: "subtitle"},
-		{Scene: "explain", Cue: "cue", Clock: "presentation", At: 1, Duration: 1, Slot: "subtitle"},
-	})
-	// two captions need two cue texts; writeVisual-style scene already has one cue.
-	if err := os.WriteFile(filepath.Join(plan.Project.Dir, "scenes", "explain.json"), []byte(`{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"cue","start":0,"end":1,"text":"ONE"}]}}`), 0o600); err != nil {
-		t.Fatal(err)
+	plan := layerCaptionSwapPlan(t, html, 0.1)
+	if len(planChunks(plan, 0, plan.Frames)) != 1 {
+		t.Fatalf("chunks %+v", planChunks(plan, 0, plan.Frames))
 	}
 	var log bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -628,6 +627,54 @@ func TestLayerCaptionChangeIsFrames(t *testing.T) {
 	if bytes.Contains(log.Bytes(), []byte("layered\n")) {
 		t.Fatal(log.String())
 	}
+}
+
+func TestLayerCaptionChangeSplitsChunks(t *testing.T) {
+	requireRenderTest(t)
+	resetSeams()
+	defer resetSeams()
+	html := replaceFit(layerFillHTML, "fill")
+	plan := layerCaptionSwapPlan(t, html, 1)
+	chunks := planChunks(plan, 0, plan.Frames)
+	if len(chunks) != 2 || chunks[1].First != 10 {
+		t.Fatalf("chunks %+v", chunks)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	paths := map[string]string{}
+	var log bytes.Buffer
+	for _, mode := range []string{"frames", "auto"} {
+		layerMode = mode
+		useTempCache(t)
+		paths[mode] = filepath.Join(t.TempDir(), mode+".mp4")
+		out := io.Writer(io.Discard)
+		if mode == "auto" {
+			out = &log
+		}
+		if err := Render(ctx, plan, paths[mode], out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ch := range chunks {
+		if !strings.Contains(log.String(), fmt.Sprintf(">> chunk-%d layered\n", ch.Index)) {
+			t.Fatalf("chunk %d not layered:\n%s", ch.Index, log.String())
+		}
+	}
+	minY, avgY, err := videoPSNR(paths["frames"], paths["auto"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minY < 40 || avgY < 45 {
+		t.Fatalf("PSNR-Y min=%.2f avg=%.2f", minY, avgY)
+	}
+}
+
+func layerCaptionSwapPlan(t *testing.T, html string, swap float64) *Plan {
+	t.Helper()
+	return layerSlotPlanScene(t, 320, 180, 10, 2, "single", html, []Caption{
+		{Scene: "explain", Cue: "one", Clock: "presentation", At: 0, Duration: swap, Slot: "subtitle"},
+		{Scene: "explain", Cue: "two", Clock: "presentation", At: swap, Duration: 2 - swap, Slot: "subtitle"},
+	}, `{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"one","start":0,"end":1,"text":"ONE"},{"id":"two","start":1,"end":2,"text":"TWO"}]}}`)
 }
 
 func TestLayerZOrderMatchesDraw(t *testing.T) {

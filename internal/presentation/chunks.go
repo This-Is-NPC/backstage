@@ -87,26 +87,6 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 		return fmt.Errorf("browser version: %w", err)
 	}
 	segs := newSegmentCache(cache, p, browserVer)
-	trackPaths, prepare, err := prepareTracks(ctx, p, work, progress, cache)
-	if err != nil {
-		return err
-	}
-	if len(prepare) > 0 {
-		timings.PrepareTrackSeconds = prepare
-	}
-	fmt.Fprintln(progress, ">> prepare audio")
-	mixAt := time.Now()
-	audio, parts, err := p.mix(ctx, work, cache)
-	if err != nil {
-		return err
-	}
-	if audio != "" {
-		sec := roundSec(time.Since(mixAt))
-		timings.AudioSeconds = &sec
-		if len(parts) > 0 {
-			timings.AudioPartSeconds = parts
-		}
-	}
 	nFrames := opts.End - opts.First
 	chunks := planChunks(p, opts.First, opts.End)
 	if len(chunks) == 0 {
@@ -116,6 +96,7 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 	files := map[string]string{}
 	results := make([]chunkResult, nChunks)
 	var miss []chunkJob
+	missFrames := 0
 	for _, ch := range chunks {
 		key, err := segs.cacheKey(opts, ch)
 		if err != nil {
@@ -132,14 +113,16 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 			continue
 		}
 		miss = append(miss, job)
+		missFrames += ch.End - ch.First
 	}
 	_, _, encodeAll := resolveRenderThreads(planThreadCfg(p), len(p.Tracks))
-	nWorkers, err := resolveWorkers(planWorkers(p), len(miss))
+	nWorkers, err := resolveWorkers(planWorkers(p), len(miss), missFrames, p.FPS)
 	if err != nil {
 		return err
 	}
-	timings.Workers = nWorkers
-	encodeThreads := chunkEncodeThreads(encodeAll, nWorkers)
+	slices := splitByFrames(miss, nWorkers)
+	timings.Workers = len(slices)
+	encodeThreads := chunkEncodeThreads(encodeAll, len(slices))
 	video := filepath.Join(work, "video.mp4")
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -147,24 +130,38 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 	var completed atomic.Int64
 	var fail firstFail
 	fail.cancel = cancel
-	if nWorkers > 0 {
-		slices := splitIndexSlices(len(miss), nWorkers)
-		var wg sync.WaitGroup
-		for _, sl := range slices {
-			part := append([]chunkJob(nil), miss[sl[0]:sl[1]]...)
-			wg.Add(1)
-			go func(part []chunkJob) {
-				defer wg.Done()
-				runChunkWorker(ctx, runCtx, p, work, trackPaths, progress, opts, part, nChunks, nFrames, encodeThreads, cache, segs, &completed, &fail, results, meta)
-			}(part)
-		}
-		wg.Wait()
+	tracks := startPrepareTracks(runCtx, p, work, progress, cache, &fail)
+	mix := startMix(runCtx, p, work, progress, cache, &fail)
+	var wg sync.WaitGroup
+	for _, sl := range slices {
+		part := append([]chunkJob(nil), miss[sl[0]:sl[1]]...)
+		wg.Add(1)
+		go func(part []chunkJob) {
+			defer wg.Done()
+			runChunkWorker(ctx, runCtx, p, work, tracks, progress, opts, part, nChunks, nFrames, encodeThreads, cache, segs, &completed, &fail, results, meta)
+		}(part)
 	}
+	wg.Wait()
+	<-tracks.done
+	<-mix.done
 	if err = ctx.Err(); err != nil {
 		return err
 	}
 	if fail.err != nil {
+		if fail.idx < 0 {
+			return fail.err
+		}
 		return fmt.Errorf("chunk %d: %w", fail.idx, fail.err)
+	}
+	if len(tracks.seconds) > 0 {
+		timings.PrepareTrackSeconds = tracks.seconds
+	}
+	audio := mix.path
+	if audio != "" {
+		timings.AudioSeconds = &mix.seconds
+		if len(mix.parts) > 0 {
+			timings.AudioPartSeconds = mix.parts
+		}
 	}
 	if nChunks > 1 {
 		concatAt := time.Now()
@@ -199,7 +196,7 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 	}
 	timings.CacheHits = cache.hits
 	timings.CacheMisses = cache.misses
-	collectWorkBytes(&timings, work, p, trackPaths)
+	collectWorkBytes(&timings, work, p, tracks.paths)
 	versions := map[string]string{filepath.Base(browser): browserVer, "ffmpeg": cache.ffmpeg}
 	if err = writeRenderFacts(ctx, p, work, files, &timings, started, versions); err != nil {
 		return err
@@ -209,6 +206,50 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 		return err
 	}
 	return os.Rename(filepath.Join(work, "facts.json"), strings.TrimSuffix(out, filepath.Ext(out))+".facts.json")
+}
+
+type trackPrep struct {
+	done    chan struct{}
+	paths   map[string]string
+	seconds map[string]float64
+}
+
+// startPrepareTracks runs alongside Chromium startup; workers wait on done
+// before their first chunk. A failure claims fail as index -1.
+func startPrepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer, cache *renderCache, fail *firstFail) *trackPrep {
+	t := &trackPrep{done: make(chan struct{})}
+	go func() {
+		defer close(t.done)
+		var err error
+		if t.paths, t.seconds, err = prepareTracks(ctx, p, work, progress, cache); err != nil {
+			fail.claim(-1, err)
+		}
+	}()
+	return t
+}
+
+type mixPrep struct {
+	done    chan struct{}
+	path    string
+	parts   []namedSeconds
+	seconds float64
+}
+
+// startMix runs alongside the chunks; only the final mux reads its result.
+func startMix(ctx context.Context, p *Plan, work string, progress io.Writer, cache *renderCache, fail *firstFail) *mixPrep {
+	m := &mixPrep{done: make(chan struct{})}
+	go func() {
+		defer close(m.done)
+		fmt.Fprintln(progress, ">> prepare audio")
+		started := time.Now()
+		var err error
+		if m.path, m.parts, err = p.mix(ctx, work, cache); err != nil {
+			fail.claim(-1, err)
+			return
+		}
+		m.seconds = roundSec(time.Since(started))
+	}()
+	return m
 }
 
 func muxAudioArgs(p *Plan, opts renderOpts, video, audio, final string) []string {
@@ -292,7 +333,7 @@ func ensureDecoder(ctx context.Context, decoders map[string]*decoder, id, path s
 	return nd, time.Since(started), nil
 }
 
-func runChunkWorker(parent, ctx context.Context, p *Plan, work string, trackPaths map[string]string, progress io.Writer, opts renderOpts, miss []chunkJob, nChunks, nFrames, encodeThreads int, cache *renderCache, segs *segmentCache, completed *atomic.Int64, fail *firstFail, results []chunkResult, meta *trackMeta) {
+func runChunkWorker(parent, ctx context.Context, p *Plan, work string, tracks *trackPrep, progress io.Writer, opts renderOpts, miss []chunkJob, nChunks, nFrames, encodeThreads int, cache *renderCache, segs *segmentCache, completed *atomic.Int64, fail *firstFail, results []chunkResult, meta *trackMeta) {
 	if len(miss) == 0 {
 		return
 	}
@@ -311,6 +352,11 @@ func runChunkWorker(parent, ctx context.Context, p *Plan, work string, trackPath
 	r.scale = opts.Scale
 	rendererStart := roundSec(time.Since(rendererAt))
 	defer r.Close()
+	<-tracks.done
+	if ctx.Err() != nil {
+		return
+	}
+	trackPaths := tracks.paths
 	decoders := map[string]*decoder{}
 	defer func() {
 		for _, d := range decoders {
@@ -415,20 +461,38 @@ func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, work string,
 		if observeChunkDecoders != nil {
 			observeChunkDecoders(ch.Index, sortedKeys(decoders))
 		}
-		layered, err := renderLayeredChunk(ctx, r, p, work, trackPaths, ch, nFrames, encodeThreads, completed, progress, out, &res, path.probes, path.caps, meta)
+		if failAtFrame != nil {
+			for n := ch.First; n < ch.End; n++ {
+				if err = failAtFrame(ch.Index, n); err != nil {
+					return res, setFail(err)
+				}
+			}
+		}
+		if path.stillFade {
+			err = renderStillFadeChunk(ctx, r, p, work, ch, encodeThreads, out, &res)
+		} else {
+			err = renderLayeredChunk(ctx, r, p, work, trackPaths, ch, encodeThreads, out, &res, path.probes, path.caps, meta)
+		}
 		if err != nil {
 			return res, setFail(err)
 		}
-		layered.wall = roundSec(time.Since(started))
-		layered.files = r.filesForEvents(chunkEvents(p, ch)...)
-		layered.rendered = true
-		layered.layered = true
-		return layered, nil
+		for n := ch.First; n < ch.End; n++ {
+			k := int(completed.Add(1) - 1)
+			if k%p.FPS == 0 {
+				fmt.Fprintf(progress, ">> render %d/%d frames\n", k, nFrames)
+			}
+		}
+		res.wall = roundSec(time.Since(started))
+		res.files = r.filesForEvents(chunkEvents(p, ch)...)
+		res.rendered = true
+		res.layered = true
+		return res, nil
 	}
 	return renderFramesChunk(ctx, r, p, trackPaths, decoders, progress, opts, ch, nFrames, encodeThreads, completed, setFail, started, out, res)
 }
 
 type chunkPath struct {
+	stillFade bool
 	probes    []probeFrame
 	dec       layerDecision
 	violation bool
@@ -436,6 +500,15 @@ type chunkPath struct {
 }
 
 func decideChunkPath(ctx context.Context, r *Renderer, p *Plan, opts renderOpts, ch chunkRange, mode string, res *chunkResult) (chunkPath, error) {
+	if mode != "frames" && opts.Scale == 1 && stillFadeCandidate(p, ch, r) {
+		dec, err := stillFadeEligible(r, p, ch, res)
+		if err != nil {
+			return chunkPath{}, err
+		}
+		if dec.Layered {
+			return chunkPath{dec: dec, stillFade: true}, nil
+		}
+	}
 	if mode == "frames" || skipLayerProbe(p, opts, ch) {
 		return chunkPath{dec: layerDecision{Reason: "not eligible"}}, nil
 	}
@@ -481,14 +554,7 @@ func decideChunkPath(ctx context.Context, r *Renderer, p *Plan, opts renderOpts,
 	return path, nil
 }
 
-func renderLayeredChunk(ctx context.Context, r *Renderer, p *Plan, work string, trackPaths map[string]string, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, progress io.Writer, out string, res *chunkResult, probes []probeFrame, caps string, meta *trackMeta) (chunkResult, error) {
-	if failAtFrame != nil {
-		for n := ch.First; n < ch.End; n++ {
-			if e := failAtFrame(ch.Index, n); e != nil {
-				return *res, e
-			}
-		}
-	}
+func renderLayeredChunk(ctx context.Context, r *Renderer, p *Plan, work string, trackPaths map[string]string, ch chunkRange, encodeThreads int, out string, res *chunkResult, probes []probeFrame, caps string, meta *trackMeta) error {
 	t := float64(ch.First) / float64(p.FPS)
 	var below, above []byte
 	var shotBelow, shotAbove time.Duration
@@ -511,45 +577,37 @@ func renderLayeredChunk(ctx context.Context, r *Renderer, p *Plan, work string, 
 		res.screenshotBytes += int64(len(below) + len(above))
 	}
 	if err != nil {
-		return *res, err
+		return err
 	}
 	boxes := make([]slotBox, len(probes[0].Geometry))
 	for i, g := range probes[0].Geometry {
 		boxes[i] = snapSlot(g)
 	}
-	observeMu.Lock()
-	frameObs := observeFrame
-	compObs := observeComposedFrame
-	observeMu.Unlock()
-	var observe func(n int, png []byte) error
-	if frameObs != nil || compObs != nil {
-		observe = func(n int, png []byte) error {
-			tt := float64(n) / float64(p.FPS)
-			observeMu.Lock()
-			if observeFrame != nil {
-				observeFrame(n, tt, png)
-			}
-			if observeComposedFrame != nil {
-				observeComposedFrame(n, tt, png)
-			}
-			observeMu.Unlock()
-			return nil
-		}
-	}
 	encodeAt := time.Now()
-	err = compositeChunk(ctx, p, ch, trackPaths, boxes, below, above, encodeThreads, work, out, meta, observe)
+	err = compositeChunk(ctx, p, ch, trackPaths, boxes, below, above, encodeThreads, work, out, meta, composedFrameObserver(p))
 	res.composite = roundSec(time.Since(encodeAt))
-	if err != nil {
-		return *res, err
+	return err
+}
+
+func composedFrameObserver(p *Plan) func(int, []byte) error {
+	observeMu.Lock()
+	have := observeFrame != nil || observeComposedFrame != nil
+	observeMu.Unlock()
+	if !have {
+		return nil
 	}
-	nOut := ch.End - ch.First
-	for i := 0; i < nOut; i++ {
-		k := int(completed.Add(1) - 1)
-		if k%p.FPS == 0 {
-			fmt.Fprintf(progress, ">> render %d/%d frames\n", k, nFrames)
+	return func(n int, png []byte) error {
+		t := float64(n) / float64(p.FPS)
+		observeMu.Lock()
+		if observeFrame != nil {
+			observeFrame(n, t, png)
 		}
+		if observeComposedFrame != nil {
+			observeComposedFrame(n, t, png)
+		}
+		observeMu.Unlock()
+		return nil
 	}
-	return *res, nil
 }
 
 func renderFramesChunk(ctx context.Context, r *Renderer, p *Plan, trackPaths map[string]string, decoders map[string]*decoder, progress io.Writer, opts renderOpts, ch chunkRange, nFrames, encodeThreads int, completed *atomic.Int64, setFail func(error) error, started time.Time, out string, res chunkResult) (chunkResult, error) {

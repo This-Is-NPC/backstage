@@ -310,7 +310,7 @@ func (p *Plan) mixDirect(ctx context.Context, dir string) (string, []namedSecond
 }
 
 // Prepare each selected track once. FFV1 retains frames without storing PNG sequences.
-func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps, threads, filterThreads, gop int) (string, []string, error) {
+func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps, threads, filterThreads int) (string, error) {
 	var filters []string
 	var labels strings.Builder
 	for i, s := range t.Segments {
@@ -320,12 +320,9 @@ func prepareTrack(ctx context.Context, t CompiledTrack, dir, id string, fps, thr
 	}
 	filters = append(filters, fmt.Sprintf("%sconcat=n=%d:v=1:a=0,fps=%d[v]", labels.String(), len(t.Segments), fps))
 	out := filepath.Join(dir, id+".mkv")
-	args := []string{"-v", "error", "-y", "-threads", strconv.Itoa(threads), "-i", t.Media.Path, "-filter_complex_threads", strconv.Itoa(filterThreads), "-filter_complex", strings.Join(filters, ";"), "-map", "[v]", "-an", "-c:v", "ffv1", "-threads", strconv.Itoa(threads)}
-	if gop > 0 {
-		args = append(args, "-g", strconv.Itoa(gop))
-	}
-	args = append(args, out)
-	return out, append([]string(nil), args...), run(ctx, "ffmpeg", args...)
+	args := []string{"-v", "error", "-y", "-threads", strconv.Itoa(threads), "-i", t.Media.Path, "-filter_complex_threads", strconv.Itoa(filterThreads), "-filter_complex", strings.Join(filters, ";"), "-map", "[v]", "-an"}
+	args = append(append(args, trackEncodeArgs()...), "-threads", strconv.Itoa(threads), out)
+	return out, run(ctx, "ffmpeg", args...)
 }
 
 func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer, cache *renderCache) (map[string]string, map[string]float64, error) {
@@ -342,14 +339,10 @@ func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer
 	if len(ids) < limit {
 		limit = len(ids)
 	}
-	if prepareSerial {
-		limit = 1
-	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	paths := make([]string, len(ids))
 	secs := make([]float64, len(ids))
-	prepArgs := make([][]string, len(ids))
 	var (
 		wg      sync.WaitGroup
 		errOnce sync.Once
@@ -374,13 +367,12 @@ func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer
 			started := time.Now()
 			var (
 				path string
-				args []string
 				err  error
 			)
 			if cache != nil {
-				path, args, err = cache.prepareTrack(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads, ffv1GOP)
+				path, err = cache.prepareTrack(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads)
 			} else {
-				path, args, err = prepareOne(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads, ffv1GOP)
+				path, err = prepareOne(ctx, p.Tracks[id], work, fmt.Sprintf("track-%d", i), p.FPS, prepThreads, filterThreads)
 			}
 			if err != nil {
 				errOnce.Do(func() {
@@ -390,7 +382,6 @@ func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer
 				return
 			}
 			paths[i] = path
-			prepArgs[i] = args
 			secs[i] = roundSec(time.Since(started))
 		}()
 	}
@@ -403,13 +394,11 @@ func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer
 	}
 	out := map[string]string{}
 	times := map[string]float64{}
-	var allArgs []string
 	for i, id := range ids {
 		out[id] = paths[i]
 		times[id] = secs[i]
-		allArgs = append(allArgs, prepArgs[i]...)
 	}
-	noteRender(renderNote{PrepareArgs: allArgs, PreparedPaths: out})
+	noteRender(renderNote{PreparedPaths: out})
 	return out, times, nil
 }
 

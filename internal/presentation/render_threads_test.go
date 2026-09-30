@@ -21,9 +21,7 @@ import (
 )
 
 func resetSeams() {
-	prepareSerial = false
 	screenshotOptimize = true
-	ffv1GOP = 1
 	screenshotObserver = nil
 	observeRender = nil
 	observeFrame = nil
@@ -76,15 +74,11 @@ func TestPrepareTrackSetsGOPOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := CompiledTrack{Track: Track{Segments: []Segment{{From: 0, To: 0.4, Rate: 1}}}, Media: Media{Path: clip, Duration: 1, HasVideo: true}}
-	_, args, err := prepareTrack(context.Background(), tr, dir, "track-0", 10, 1, 1, 1)
+	path, err := prepareTrack(context.Background(), tr, dir, "track-0", 10, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "-g 1") {
-		t.Fatalf("prepare missing -g 1: %s", joined)
-	}
-	if err := everyFrameKeyframe(filepath.Join(dir, "track-0.mkv")); err != nil {
+	if err := everyFrameKeyframe(path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -137,16 +131,16 @@ func TestPrepareErrorCancelsOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan string, 2)
-	prepareOne = func(ctx context.Context, _ CompiledTrack, _, id string, _, _, _, _ int) (string, []string, error) {
+	prepareOne = func(ctx context.Context, _ CompiledTrack, _, id string, _, _, _ int) (string, error) {
 		started <- id
 		if strings.HasPrefix(id, "track-0") {
-			return "", nil, fmt.Errorf("boom")
+			return "", fmt.Errorf("boom")
 		}
 		select {
 		case <-ctx.Done():
-			return "", nil, ctx.Err()
+			return "", ctx.Err()
 		case <-time.After(8 * time.Second):
-			return "", nil, fmt.Errorf("slow prepare was not cancelled")
+			return "", fmt.Errorf("slow prepare was not cancelled")
 		}
 	}
 	defer resetSeams()
@@ -223,30 +217,6 @@ func TestPrepareCancelKillsFFmpeg(t *testing.T) {
 	}
 }
 
-func TestFFV1GOPOneMatchesLegacyPixels(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg required")
-	}
-	resetSeams()
-	dir := t.TempDir()
-	clip := filepath.Join(dir, "clip.mp4")
-	if err := run(context.Background(), "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=10:duration=0.4", "-pix_fmt", "yuv420p", clip); err != nil {
-		t.Fatal(err)
-	}
-	tr := CompiledTrack{Track: Track{Segments: []Segment{{From: 0, To: 0.4, Rate: 1}}}, Media: Media{Path: clip, Duration: 0.4, HasVideo: true}}
-	oldPath, _, err := prepareTrack(context.Background(), tr, dir, "old", 10, 1, 1, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	newPath, _, err := prepareTrack(context.Background(), tr, dir, "new", 10, 1, 1, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = sameDecodedFrames(context.Background(), oldPath, newPath, 4); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestScreenshotUsesOptimizeForSpeed(t *testing.T) {
 	requireRenderTest(t)
 	resetSeams()
@@ -300,24 +270,11 @@ func TestEncodeThreadsHonorsConfig(t *testing.T) {
 	}
 }
 
-func TestComposedPixelsMatchLegacySeams(t *testing.T) {
+func TestOptimizedScreenshotsMatchPlain(t *testing.T) {
 	requireRenderTest(t)
 	resetSeams()
 	defer resetSeams()
 	plan := multiTrackPlan(t)
-	prepareSerial, ffv1GOP = true, 0
-	oldPrep, err := decodedTrackFrames(context.Background(), plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepareSerial, ffv1GOP = false, 1
-	newPrep, err := decodedTrackFrames(context.Background(), plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = sameFrameMaps(oldPrep, newPrep); err != nil {
-		t.Fatal(err)
-	}
 	shots, err := composedShotPairs(context.Background(), plan)
 	if err != nil {
 		t.Fatal(err)
@@ -391,55 +348,6 @@ func multiTrackPlan(t *testing.T) *Plan {
 type shotPair struct {
 	at          float64
 	plain, fast []byte
-}
-
-func decodedTrackFrames(ctx context.Context, p *Plan) (map[string][][]byte, error) {
-	work, err := os.MkdirTemp("", "backstage-tracks-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(work)
-	paths, _, err := prepareTracks(ctx, p, work, io.Discard, nil)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string][][]byte{}
-	for _, id := range sortedKeys(p.Tracks) {
-		d, e := newDecoder(ctx, paths[id], 0, p.FPS)
-		if e != nil {
-			return nil, e
-		}
-		var frames [][]byte
-		for n := 0; n < p.Frames; n++ {
-			b, e := d.get(n)
-			if e != nil {
-				d.close()
-				return nil, e
-			}
-			frames = append(frames, append([]byte(nil), b...))
-		}
-		d.close()
-		out[id] = frames
-	}
-	return out, nil
-}
-
-func sameFrameMaps(a, b map[string][][]byte) error {
-	if len(a) != len(b) {
-		return fmt.Errorf("tracks %d vs %d", len(a), len(b))
-	}
-	for id, frames := range a {
-		other, ok := b[id]
-		if !ok || len(other) != len(frames) {
-			return fmt.Errorf("track %s frames", id)
-		}
-		for i := range frames {
-			if err := samePixels(frames[i], other[i]); err != nil {
-				return fmt.Errorf("track %s frame %d: %w", id, i, err)
-			}
-		}
-	}
-	return nil
 }
 
 func composedShotPairs(ctx context.Context, p *Plan) ([]shotPair, error) {
@@ -530,33 +438,6 @@ func samePixels(a, b []byte) error {
 				}
 				return fmt.Errorf("pixel %d,%d (%d differ)", x, y, n)
 			}
-		}
-	}
-	return nil
-}
-
-func sameDecodedFrames(ctx context.Context, a, b string, frames int) error {
-	da, err := newDecoder(ctx, a, 0, 10)
-	if err != nil {
-		return err
-	}
-	defer da.close()
-	db, err := newDecoder(ctx, b, 0, 10)
-	if err != nil {
-		return err
-	}
-	defer db.close()
-	for i := 0; i < frames; i++ {
-		fa, err := da.get(i)
-		if err != nil {
-			return err
-		}
-		fb, err := db.get(i)
-		if err != nil {
-			return err
-		}
-		if err = samePixels(fa, fb); err != nil {
-			return fmt.Errorf("decoded frame %d: %w", i, err)
 		}
 	}
 	return nil

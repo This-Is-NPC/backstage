@@ -219,7 +219,7 @@ func (s *segmentCache) slottedTrackKeys(e Event, first, end int) ([]segmentTrack
 			return nil, err
 		}
 		out = append(out, segmentTrackV1{
-			Key:      trackCacheKey(src, tr.Segments, s.plan.FPS, ffv1GOP, s.cache.ffmpeg),
+			Key:      trackCacheKey(src, tr.Segments, s.plan.FPS, s.cache.ffmpeg),
 			From:     trackFrame(tr, first, s.plan.FPS),
 			To:       trackFrame(tr, end-1, s.plan.FPS),
 			OnEnd:    tr.OnEnd,
@@ -279,6 +279,11 @@ func (s *segmentCache) cacheKey(opts renderOpts, ch chunkRange) (string, error) 
 		Browser: s.browser,
 		Web:     s.web,
 		Event:   ev,
+	}
+	if opts.Scale == 1 {
+		if _, _, ok := stillFadeTimes(p, ch); ok {
+			key.V = cacheKeyVersion + "-still-fade-1"
+		}
 	}
 	if chunkTransition(p, ch) {
 		prev, err := s.eventKey(p.Document.Timeline[ch.Event-1], ch.First, ch.End)

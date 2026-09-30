@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -187,10 +188,10 @@ func TestSegmentColdWarmIdentical(t *testing.T) {
 				t.Fatal(err)
 			}
 			hits, misses := countChunkCache(warmLog.String())
-			if misses != 0 || hits != 4 {
+			if misses != 0 || hits != len(planChunks(plan, 0, plan.Frames)) {
 				t.Fatalf("warm hits=%d misses=%d\n%s", hits, misses, warmLog.String())
 			}
-			assertChunkKeyframes(t, warm, chunkStarts(plan), plan.FPS)
+			assertChunkKeyframes(t, warm, chunkStarts(plan))
 			if n := videoPackets(t, warm); n != plan.Frames {
 				t.Fatalf("frames %d want %d", n, plan.Frames)
 			}
@@ -225,18 +226,18 @@ func TestSegmentInvalidationTable(t *testing.T) {
 	for _, effect := range []string{"fade", "morph"} {
 		t.Run(effect, func(t *testing.T) {
 			cases := []struct {
-				name string
-				mut  func(*testing.T, *Plan)
-				want [4]bool // true = hit
+				name    string
+				mut     func(*testing.T, *Plan)
+				changed []int
 			}{
-				{"event1-entry", func(t *testing.T, p *Plan) { mutateEvent1Entry(t, p, effect) }, [4]bool{true, false, false, false}},
-				{"event1-layout", func(t *testing.T, p *Plan) { p.Document.Timeline[1].Layout = event1OtherLayout(effect) }, [4]bool{true, false, false, false}},
-				{"event1-slot", func(t *testing.T, p *Plan) { p.Document.Timeline[1].Slots = map[string]string{"center": "cam"} }, [4]bool{true, false, false, false}},
-				{"event1-narration", func(t *testing.T, p *Plan) { mutateEvent1Narration(t, p, effect) }, [4]bool{true, true, true, true}},
-				{"global-parameter", func(t *testing.T, p *Plan) { p.Document.Parameters["title"] = "Other" }, [4]bool{false, false, false, false}},
-				{"event1-track", func(t *testing.T, p *Plan) { swapEvent1Track(t, p) }, [4]bool{true, false, false, false}},
-				{"event2-asset", func(t *testing.T, p *Plan) { mutateEvent2Asset(t, p, effect) }, [4]bool{true, true, true, false}},
-				{"event0-layout", func(t *testing.T, p *Plan) { p.Document.Timeline[0].Layout = event1OtherLayout(effect) }, [4]bool{false, false, true, true}},
+				{"event1-entry", func(t *testing.T, p *Plan) { mutateEvent1Entry(t, p, effect) }, []int{1}},
+				{"event1-layout", func(t *testing.T, p *Plan) { p.Document.Timeline[1].Layout = event1OtherLayout(effect) }, []int{1}},
+				{"event1-slot", func(t *testing.T, p *Plan) { p.Document.Timeline[1].Slots = map[string]string{"center": "cam"} }, []int{1}},
+				{"event1-narration", func(t *testing.T, p *Plan) { mutateEvent1Narration(t, p, effect) }, nil},
+				{"global-parameter", func(t *testing.T, p *Plan) { p.Document.Parameters["title"] = "Other" }, []int{0, 1, 2}},
+				{"event1-track", func(t *testing.T, p *Plan) { swapEvent1Track(t, p) }, []int{1}},
+				{"event2-asset", func(t *testing.T, p *Plan) { mutateEvent2Asset(t, p, effect) }, []int{2}},
+				{"event0-layout", func(t *testing.T, p *Plan) { p.Document.Timeline[0].Layout = event1OtherLayout(effect) }, []int{0}},
 			}
 			for _, tc := range cases {
 				t.Run(tc.name, func(t *testing.T) {
@@ -255,9 +256,9 @@ func TestSegmentInvalidationTable(t *testing.T) {
 					if err := Render(ctx, plan, filepath.Join(t.TempDir(), "next.mp4"), &log); err != nil {
 						t.Fatal(err)
 					}
-					got := chunkHits(log.String(), 4)
-					if got != tc.want {
-						t.Fatalf("hits %v want %v\n%s", got, tc.want, log.String())
+					got, want := chunkHits(log.String(), plan), expectedHits(plan, tc.changed...)
+					if !slices.Equal(got, want) {
+						t.Fatalf("hits %v want %v\n%s", got, want, log.String())
 					}
 				})
 			}
@@ -284,7 +285,7 @@ func TestVisualEventEntryAndNarration(t *testing.T) {
 		if err := Render(ctx, plan, filepath.Join(t.TempDir(), "next.mp4"), &log); err != nil {
 			t.Fatal(err)
 		}
-		if chunkHits(log.String(), 4) != [4]bool{true, false, false, false} {
+		if !slices.Equal(chunkHits(log.String(), plan), expectedHits(plan, 1)) {
 			t.Fatal(log.String())
 		}
 	})
@@ -299,7 +300,7 @@ func TestVisualEventEntryAndNarration(t *testing.T) {
 		if err := Render(ctx, plan, filepath.Join(t.TempDir(), "next.mp4"), &log); err != nil {
 			t.Fatal(err)
 		}
-		if chunkHits(log.String(), 4) != [4]bool{true, false, false, false} {
+		if !slices.Equal(chunkHits(log.String(), plan), expectedHits(plan, 1)) {
 			t.Fatal(log.String())
 		}
 	})
@@ -359,7 +360,7 @@ func TestSegmentManifestAssetChange(t *testing.T) {
 	if err := Render(ctx, plan, filepath.Join(t.TempDir(), "next.mp4"), &log); err != nil {
 		t.Fatal(err)
 	}
-	if chunkHits(log.String(), 4) != [4]bool{true, true, true, false} {
+	if !slices.Equal(chunkHits(log.String(), plan), expectedHits(plan, 2)) {
 		t.Fatal(log.String())
 	}
 }
@@ -459,7 +460,7 @@ func TestThreeEventCodesAtBoundaries(t *testing.T) {
 	defer resetSeams()
 	plan := threeEventPlan(t, "fade")
 	starts := chunkStarts(plan)
-	maxW, err := resolveWorkers(0, len(starts))
+	maxW, err := resolveWorkers(0, len(starts), plan.Frames, plan.FPS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +491,7 @@ func TestThreeEventCodesAtBoundaries(t *testing.T) {
 					t.Fatalf("frame %d code %d", n, got)
 				}
 			}
-			assertChunkKeyframes(t, out, starts, plan.FPS)
+			assertChunkKeyframes(t, out, starts)
 		})
 	}
 }
@@ -513,10 +514,20 @@ func countChunkCache(log string) (hits, misses int) {
 	return hits, misses
 }
 
-func chunkHits(log string, n int) [4]bool {
-	var out [4]bool
-	for i := 0; i < n && i < 4; i++ {
-		out[i] = strings.Contains(log, ">> chunk-"+strconv.Itoa(i)+" cached\n")
+func chunkHits(log string, p *Plan) []bool {
+	chunks := planChunks(p, 0, p.Frames)
+	out := make([]bool, len(chunks))
+	for i, ch := range chunks {
+		out[i] = strings.Contains(log, ">> chunk-"+strconv.Itoa(ch.Index)+" cached\n")
+	}
+	return out
+}
+
+func expectedHits(p *Plan, changed ...int) []bool {
+	chunks := planChunks(p, 0, p.Frames)
+	out := make([]bool, len(chunks))
+	for i, ch := range chunks {
+		out[i] = !slices.Contains(changed, ch.Event) && (!chunkTransition(p, ch) || !slices.Contains(changed, ch.Event-1))
 	}
 	return out
 }
@@ -833,7 +844,7 @@ func TestDecoderReopensAcrossCacheGap(t *testing.T) {
 	useTempCache(t)
 	resetSeams()
 	defer resetSeams()
-	plan := codedLongPlan(t)
+	plan := codedPlan(t, 6)
 	plan.Project.Render.Workers = 1
 	layerMode = "frames"
 	chunks := planChunks(plan, 0, plan.Frames)

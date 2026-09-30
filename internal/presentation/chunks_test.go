@@ -32,7 +32,7 @@ func TestChunkComposedPixelsMatchSerial(t *testing.T) {
 		plan *Plan
 	}{
 		{"fade", multiTrackPlan(t)},
-		{"caption", twoChunkCaptionPlan(t)},
+		{"caption", captionPlan(t, 2)},
 		{"visual", longVisualPlan(t)},
 	}
 	for _, c := range cases {
@@ -70,7 +70,7 @@ func TestChunkCodedExport(t *testing.T) {
 	useTempCache(t)
 	resetSeams()
 	defer resetSeams()
-	plan := codedLongPlan(t)
+	plan := codedPlan(t, 6)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	serial := filepath.Join(t.TempDir(), "serial.mp4")
@@ -79,7 +79,7 @@ func TestChunkCodedExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	starts := chunkStarts(plan)
-	maxW, err := resolveWorkers(0, len(starts))
+	maxW, err := resolveWorkers(0, len(starts), plan.Frames, plan.FPS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestChunkCodedExport(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertCodedExport(t, out, plan)
-			assertChunkKeyframes(t, out, starts, plan.FPS)
+			assertChunkKeyframes(t, out, starts)
 			if w != 2 {
 				return
 			}
@@ -150,19 +150,11 @@ func TestOneWorkerFFmpegArgs(t *testing.T) {
 			encoder = args
 		}
 	}
-	mixAt, encAt := indexOfKind(kinds, "mix"), indexOfKind(kinds, "encoder")
-	if mixAt < 0 || encAt < 0 {
-		t.Fatalf("kinds %v", kinds)
+	if n := countKind(kinds, "mix"); n != 1 {
+		t.Fatalf("mix must run once for every chunk, got %d: %v", n, kinds)
 	}
-	if mixAt > encAt {
-		t.Fatalf("mix must run in shared prepare, before the chunk encoder: %v", kinds)
-	}
-	decoder := indexOfKind(kinds, "decoder")
-	if decoder < 0 {
+	if countKind(kinds, "decoder") == 0 {
 		t.Fatalf("missing decoder: %v", kinds)
-	}
-	if mixAt > decoder {
-		t.Fatalf("mix must run before the chunk decoder: %v", kinds)
 	}
 	if encoder == nil {
 		t.Fatal("missing encoder")
@@ -529,60 +521,6 @@ func longVisualPlan(t *testing.T) *Plan {
 	return plan
 }
 
-func twoChunkCaptionPlan(t *testing.T) *Plan {
-	t.Helper()
-	p := writeFixture(t, Document{
-		Version:  1,
-		Duration: 4,
-		Render:   scene.RenderCfg{W: 160, H: 90, FPS: 10},
-		Timeline: []Event{{At: 0, Scene: "explain"}},
-		Captions: []Caption{
-			{Scene: "explain", Cue: "one", Clock: "presentation", At: 0, Duration: 2, Slot: "subtitle"},
-			{Scene: "explain", Cue: "two", Clock: "presentation", At: 2, Duration: 2, Slot: "subtitle"},
-		},
-	})
-	if err := os.WriteFile(filepath.Join(p.Dir, "scenes", "explain.json"), []byte(`{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"one","start":0,"end":1,"text":"ONE"},{"id":"two","start":1,"end":2,"text":"TWO"}]}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	writeVisual(t, p.Dir)
-	plan, err := Load(p, "show")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return plan
-}
-
-func codedLongPlan(t *testing.T) *Plan {
-	t.Helper()
-	p := writeFixture(t, Document{
-		Version:  1,
-		Duration: 6,
-		Render:   scene.RenderCfg{W: 320, H: 180, FPS: 12},
-		Sources:  map[string]Source{"cam": {File: "coded.mp4"}},
-		Tracks:   map[string]Track{"cam": {Source: "cam"}},
-		Timeline: []Event{{At: 0, Layout: "single", Slots: map[string]string{"center": "cam"}}},
-		Audio:    []Audio{{ID: "noise", File: "noise.wav", From: 0, To: 6}},
-	})
-	writeCodedMP4(t, filepath.Join(p.Dir, "coded.mp4"), 320, 180, 12, 6)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=sin(2*PI*(200+1800*t)*t):s=48000:d=6", "-ac", "2", "-c:a", "pcm_s16le", filepath.Join(p.Dir, "noise.wav")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(p.Dir, "full.html"), []byte(fullBleedTemplate), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	p.Templates = map[string]scene.TemplateRef{"full": {Entry: "full.html"}}
-	ref := p.Presentations["show"]
-	ref.Template = "full"
-	p.Presentations["show"] = ref
-	plan, err := Load(p, "show")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return plan
-}
-
 func chunkStarts(p *Plan) []int {
 	chunks := planChunks(p, 0, p.Frames)
 	out := make([]int, len(chunks))
@@ -635,7 +573,7 @@ func assertCodedExport(t *testing.T, path string, plan *Plan) {
 	}
 }
 
-func assertChunkKeyframes(t *testing.T, path string, starts []int, fps int) {
+func assertChunkKeyframes(t *testing.T, path string, starts []int) {
 	t.Helper()
 	pkts := readVideoPackets(t, path)
 	for _, n := range starts {
@@ -704,13 +642,14 @@ func ffmpegKind(args []string) string {
 	}
 }
 
-func indexOfKind(kinds []string, want string) int {
-	for i, k := range kinds {
+func countKind(kinds []string, want string) int {
+	n := 0
+	for _, k := range kinds {
 		if k == want {
-			return i
+			n++
 		}
 	}
-	return -1
+	return n
 }
 
 func runtimeEncodeThreads(p *Plan) int {
