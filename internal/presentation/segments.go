@@ -1,6 +1,7 @@
 package presentation
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
@@ -22,6 +24,7 @@ type segmentKeyV1 struct {
 	First   int               `json:"first"`
 	End     int               `json:"end"`
 	Encode  []string          `json:"encode"`
+	Device  string            `json:"device,omitempty"`
 	FFmpeg  string            `json:"ffmpeg"`
 	Browser string            `json:"browser"`
 	Web     map[string]string `json:"web"`
@@ -75,6 +78,7 @@ type segmentCache struct {
 	plan    *Plan
 	project *scene.Project
 	browser string
+	device  string
 	web     map[string]string
 }
 
@@ -83,12 +87,13 @@ type chunkJob struct {
 	key string
 }
 
-func newSegmentCache(cache *renderCache, p *Plan, browser string) *segmentCache {
+func newSegmentCache(cache *renderCache, p *Plan, browser, device string) *segmentCache {
 	return &segmentCache{
 		cache:   cache,
 		plan:    p,
 		project: p.Project,
 		browser: browser,
+		device:  device,
 		web:     embeddedWebHashes(),
 	}
 }
@@ -110,28 +115,80 @@ func embeddedWebHashes() map[string]string {
 	return out
 }
 
-func x264CodecArgs() []string {
+func vaapiEncoder(p *Plan) bool {
+	return p.Project != nil && p.Project.Render.Encoder == "vaapi"
+}
+
+// encoderInit opens the GPU before the inputs so encoderUpload can reach it.
+func encoderInit(p *Plan) []string {
+	if vaapiEncoder(p) {
+		return []string{"-init_hw_device", "vaapi=va", "-filter_hw_device", "va"}
+	}
+	return nil
+}
+
+// encoderUpload ends the filter chain that feeds the encoder.
+func encoderUpload(p *Plan) string {
+	if vaapiEncoder(p) {
+		return "format=nv12,hwupload"
+	}
+	return ""
+}
+
+func codecArgs(p *Plan) []string {
+	if vaapiEncoder(p) {
+		return []string{"-an", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "20"}
+	}
 	return []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"}
 }
 
-func x264EncodeTail(p *Plan, encodeThreads int, out string) []string {
-	return append(x264CodecArgs(), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
+func encodeTail(p *Plan, encodeThreads int, out string) []string {
+	return append(codecArgs(p), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
 }
 
-func x264BaseArgs(p *Plan, opts renderOpts) []string {
-	args := []string{"-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-"}
+func framesBaseArgs(p *Plan, opts renderOpts) []string {
+	args := append(encoderInit(p), "-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-")
+	var vf []string
 	if opts.Scale != 1 {
-		args = append(args, "-vf", draftCropFilter())
+		vf = append(vf, draftCropFilter())
 	}
-	return append(args, x264CodecArgs()...)
+	if up := encoderUpload(p); up != "" {
+		vf = append(vf, up)
+	}
+	if len(vf) > 0 {
+		args = append(args, "-vf", strings.Join(vf, ","))
+	}
+	return append(args, codecArgs(p)...)
 }
 
 func segmentEncodeArgs(p *Plan, opts renderOpts) []string {
-	return append(x264BaseArgs(p, opts), "-video_track_timescale", strconv.Itoa(p.FPS))
+	return append(framesBaseArgs(p, opts), "-video_track_timescale", strconv.Itoa(p.FPS))
 }
 
 func encoderArgs(p *Plan, opts renderOpts, encodeThreads int, out string) []string {
-	return append(x264BaseArgs(p, opts), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
+	return append(framesBaseArgs(p, opts), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
+}
+
+// probeEncoder encodes one frame at the render size before any chunk starts
+// and returns the GPU driver, which the segment key records. libx264 needs no
+// probe and returns "".
+func probeEncoder(ctx context.Context, p *Plan) (string, error) {
+	if !vaapiEncoder(p) {
+		return "", nil
+	}
+	args := append(encoderInit(p), "-v", "verbose", "-f", "lavfi", "-i", fmt.Sprintf("color=s=%dx%d:r=%d:d=1", p.Width, p.Height, p.FPS), "-vf", encoderUpload(p))
+	args = append(args, codecArgs(p)...)
+	args = append(args, "-frames:v", "1", "-f", "null", "-")
+	b, err := command(ctx, "ffmpeg", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("render.encoder vaapi: %w: %s", err, strings.TrimSpace(string(b)))
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if _, driver, ok := strings.Cut(line, "VAAPI driver: "); ok {
+			return strings.TrimSpace(driver), nil
+		}
+	}
+	return "", fmt.Errorf("render.encoder vaapi: FFmpeg did not report the VAAPI driver")
 }
 
 func textSpanKeys(spans []TextSpan, first, end, fps int) []textKeyV1 {
@@ -275,6 +332,7 @@ func (s *segmentCache) cacheKey(opts renderOpts, ch chunkRange) (string, error) 
 		First:   ch.First,
 		End:     ch.End,
 		Encode:  segmentEncodeArgs(p, opts),
+		Device:  s.device,
 		FFmpeg:  s.cache.ffmpeg,
 		Browser: s.browser,
 		Web:     s.web,

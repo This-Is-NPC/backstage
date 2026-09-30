@@ -705,8 +705,12 @@ func encodeGraph(ctx context.Context, p *Plan, args []string, graph string, firs
 		graph += ";[out]split=2[enc][png]"
 		enc = "[enc]"
 	}
-	args = append(args, "-filter_complex", graph, "-map", enc, "-frames:v", strconv.Itoa(nOut))
-	args = append(args, x264EncodeTail(p, encodeThreads, out)...)
+	if up := encoderUpload(p); up != "" {
+		graph += ";" + enc + up + "[hw]"
+		enc = "[hw]"
+	}
+	args = append(append(encoderInit(p), args...), "-filter_complex", graph, "-map", enc, "-frames:v", strconv.Itoa(nOut))
+	args = append(args, encodeTail(p, encodeThreads, out)...)
 	if observe != nil {
 		args = append(args, "-map", "[png]", "-frames:v", strconv.Itoa(nOut), "-f", "image2pipe", "-c:v", "png", "-")
 	}

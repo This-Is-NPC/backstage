@@ -86,7 +86,11 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 	if err != nil {
 		return fmt.Errorf("browser version: %w", err)
 	}
-	segs := newSegmentCache(cache, p, browserVer)
+	device, err := probeEncoder(ctx, p)
+	if err != nil {
+		return err
+	}
+	segs := newSegmentCache(cache, p, browserVer, device)
 	nFrames := opts.End - opts.First
 	chunks := planChunks(p, opts.First, opts.End)
 	if len(chunks) == 0 {

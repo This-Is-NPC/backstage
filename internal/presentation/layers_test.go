@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -291,16 +292,40 @@ func TestTrackTrimFreeze(t *testing.T) {
 	}
 }
 
-func TestX264EncodeTail(t *testing.T) {
-	p := &Plan{FPS: 12}
-	got := x264EncodeTail(p, 3, "out.mp4")
-	want := []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "3", "-video_track_timescale", "12", "out.mp4"}
-	if !stringSliceEqual(got, want) {
-		t.Fatalf("%v", got)
+func TestEncodeTailPerEncoder(t *testing.T) {
+	cases := []struct {
+		encoder string
+		want    []string
+		init    []string
+		vf      string
+	}{
+		{"", []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "3", "-video_track_timescale", "12", "out.mp4"}, nil, ""},
+		{"libx264", []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "3", "-video_track_timescale", "12", "out.mp4"}, nil, ""},
+		{"vaapi", []string{"-an", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "20", "-threads", "3", "-video_track_timescale", "12", "out.mp4"}, []string{"-init_hw_device", "vaapi=va", "-filter_hw_device", "va"}, "format=nv12,hwupload"},
 	}
-	frames := encoderArgs(p, renderOpts{Scale: 1}, 3, "out.mp4")
-	if !stringSliceEqual(frames[len(frames)-len(want):], want) {
-		t.Fatalf("frames tail %v", frames)
+	for _, c := range cases {
+		p := &Plan{FPS: 12, Project: &scene.Project{Render: scene.RenderCfg{Encoder: c.encoder}}}
+		if got := encodeTail(p, 3, "out.mp4"); !stringSliceEqual(got, c.want) {
+			t.Fatalf("%q tail %v", c.encoder, got)
+		}
+		frames := encoderArgs(p, renderOpts{Scale: 1}, 3, "out.mp4")
+		if !stringSliceEqual(frames[len(frames)-len(c.want):], c.want) {
+			t.Fatalf("%q frames tail %v", c.encoder, frames)
+		}
+		if !stringSliceEqual(frames[:len(c.init)], c.init) {
+			t.Fatalf("%q frames init %v", c.encoder, frames)
+		}
+		wantVF := []string{draftCropFilter()}
+		if c.vf != "" {
+			wantVF = append(wantVF, c.vf)
+		}
+		draft := encoderArgs(p, renderOpts{Scale: 0.5}, 3, "out.mp4")
+		if i := slices.Index(draft, "-vf"); i < 0 || draft[i+1] != strings.Join(wantVF, ",") {
+			t.Fatalf("%q draft filter %v", c.encoder, draft)
+		}
+		if i := slices.Index(frames, "-vf"); (i >= 0) != (c.vf != "") || i >= 0 && frames[i+1] != c.vf {
+			t.Fatalf("%q frames filter %v", c.encoder, frames)
+		}
 	}
 }
 

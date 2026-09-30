@@ -39,6 +39,7 @@ func WriteConfigShow(w io.Writer, p *Project) error {
 	writeShowValue(w, p, "render.threads.prepare", p.Render.Threads.Prepare)
 	writeShowValue(w, p, "render.threads.filter", p.Render.Threads.Filter)
 	writeShowValue(w, p, "render.threads.encode", p.Render.Threads.Encode)
+	writeShowValue(w, p, "render.encoder", p.Render.Encoder)
 	writeShowValue(w, p, "hooks.setup", p.Hooks.Setup)
 	writeShowValue(w, p, "hooks.reset", p.Hooks.Reset)
 	writeShowMap(w, p, "env", stringMap(p.Env))

@@ -59,6 +59,11 @@ func (p *Project) ValidateConfig() error {
 	if p.Render.Workers < 0 {
 		return fmt.Errorf("render.workers must not be negative")
 	}
+	switch p.Render.Encoder {
+	case "", "libx264", "vaapi":
+	default:
+		return fmt.Errorf("render.encoder must be libx264 or vaapi")
+	}
 	return p.validateStateGroups()
 }
 

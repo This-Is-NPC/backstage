@@ -68,7 +68,7 @@ func TestThreeEventManifestListsMarks(t *testing.T) {
 
 func TestSegmentEntryValidRequiresManifest(t *testing.T) {
 	c := openTestCache(t)
-	s := newSegmentCache(c, &Plan{Project: &scene.Project{Dir: t.TempDir()}}, "Chromium")
+	s := newSegmentCache(c, &Plan{Project: &scene.Project{Dir: t.TempDir()}}, "Chromium", "")
 	dir := filepath.Join(c.root, "segments")
 	key := strings.Repeat("ab", 32)
 	dest := filepath.Join(dir, key+".mp4")
@@ -96,7 +96,7 @@ func TestSegmentEntryValidRequiresManifest(t *testing.T) {
 func TestSegmentMissingAssetHashInvalidates(t *testing.T) {
 	c := openTestCache(t)
 	proj := t.TempDir()
-	s := newSegmentCache(c, &Plan{Project: &scene.Project{Dir: proj}}, "Chromium")
+	s := newSegmentCache(c, &Plan{Project: &scene.Project{Dir: proj}}, "Chromium", "")
 	dir := filepath.Join(c.root, "segments")
 	key := strings.Repeat("ef", 32)
 	dest := filepath.Join(dir, key+".mp4")

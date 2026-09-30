@@ -522,6 +522,23 @@ func TestNegativeRenderWorkersRejected(t *testing.T) {
 	}
 }
 
+func TestRenderEncoderValues(t *testing.T) {
+	for encoder, ok := range map[string]bool{"libx264": true, "vaapi": true, "nvenc": false} {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "backstage.json"), `{
+			"layouts": {"solo": {"panes": [{"name": "t"}]}},
+			"render": {"encoder": "`+encoder+`"}
+		}`)
+		p, err := LoadProject(filepath.Join(dir, "backstage.json"))
+		if ok && (err != nil || p.Render.Encoder != encoder) {
+			t.Fatalf("render.encoder %s: %v", encoder, err)
+		}
+		if !ok && err == nil {
+			t.Fatalf("render.encoder %s should fail", encoder)
+		}
+	}
+}
+
 func TestRenderWorkersMergeFieldByField(t *testing.T) {
 	ws := t.TempDir()
 	leaf := filepath.Join(ws, "leaf")
