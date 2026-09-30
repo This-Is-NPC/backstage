@@ -180,19 +180,6 @@ func workspaceRel(p *scene.Project, abs string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-func eventAssetRel(prefix, urlPath string) (int, string, bool) {
-	if !strings.HasPrefix(urlPath, prefix) {
-		return 0, "", false
-	}
-	rest := strings.TrimPrefix(urlPath, prefix)
-	event, inner, ok := parseEventRest(rest)
-	if !ok {
-		return 0, "", false
-	}
-	rel, ok := assetRelFromInner(inner)
-	return event, rel, ok
-}
-
 func assetRelFromInner(inner string) (string, bool) {
 	if !strings.HasPrefix(inner, "asset/") {
 		return "", false
