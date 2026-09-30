@@ -333,8 +333,10 @@ Output defaults to the presentation's `out`, then `exports/NAME.mp4`. A companio
 HTML can still fail at a later frame after `--check` succeeds. Failed exports do
 not replace an existing MP4. Project `render.workers` is Chromium concurrency
 (one browser per worker); chunks are cut deterministically at event boundaries
-and then into pieces of at most `max(16, 2*fps)` frames. `0` picks a default
-from CPU, memory and the number of segment-cache misses. Ctrl-C cancels every
+and into pieces of at most `max(16, 2*fps)` frames. Transition ends and caption
+visibility changes split those pieces further, never leaving a piece shorter
+than 3 frames. `0` picks a default
+from CPU, memory and the frames that miss the segment cache. Ctrl-C cancels every
 chunk, removes intermediates, and leaves an existing MP4 in place. Progress is
 human lines only (`>> chunk-N …` and `>> render k/n frames`).
 

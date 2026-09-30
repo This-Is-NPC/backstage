@@ -205,8 +205,11 @@ geometry, or caption set changes. A broken static promise prints
 when the count is positive. A geometry change that comes and goes between
 the two samples stays under the static promise.
 Layered eligibility needs constant slot geometry (integer or fractional)
-and radii whose computed value is a single `px` token; percent radii, scroll that changes per frame, and blend/transition
-chunks stay on the screenshot path. On both paths the track image sits in an
+and radii whose computed value is a single `px` token. Percent radii and scroll
+that changes per frame use screenshots. A fade between two events declared
+`static`, with no slotted tracks or visible captions, captures each event once
+and blends the stills in FFmpeg. Other transition chunks use screenshots.
+On both paths the track image sits in an
 integer-pixel rectangle inside the slot (`contain`/`cover`/`fill`; blend and
 morph still use `object-fit`).
 `decoder-start-seconds`
@@ -248,11 +251,15 @@ libx264; each chunk encoder uses `max(1, encode/workers)` threads and runs at
 the same time as that chunk's Chromium frame loop, not after it.
 `render.workers` is Chromium concurrency (one browser per worker). `0`,
 `null` or an omitted key picks `max(1, min(NumCPU/2, memoryBudget/2GiB,
-nMiss))` where `memoryBudget` is MemAvailable minus a 2 GiB host reserve.
-An explicit `N` runs `N` workers, capped at the number of chunks that miss
-the segment cache. Chunks are cut at event boundaries and then into pieces of
-at most `max(16, 2*fps)` frames, measured from the event start and then clipped
-to the render interval, so a preview that covers whole interior pieces shares
+ceil(missFrames/max(16, 2*fps))))` where `memoryBudget` is MemAvailable minus
+a 2 GiB host reserve and `missFrames` counts frames in chunks that miss the
+segment cache. An explicit `N` runs `N` workers, capped at the number of those
+chunks. Each worker takes a contiguous run of missed chunks, split so the
+largest frame total is as small as possible. Browsers start while tracks are
+prepared, and the mix runs alongside the chunks. Chunks are cut at event boundaries and into pieces of at
+most `max(16, 2*fps)` frames, measured from the event start. Transition ends
+and caption visibility changes split those pieces further, without leaving
+a piece shorter than 3 frames, before they are clipped to the render interval, so a preview that covers whole interior pieces shares
 those cache keys with a full export. Chunks share prepared tracks and the mix,
 encode H.264 with `-video_track_timescale <fps>`, and join with the concat
 demuxer `-c copy` when there is more than one file. A worker keeps its browser

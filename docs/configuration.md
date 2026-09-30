@@ -246,7 +246,7 @@ The target geometry every clip is normalized to before concatenation.
 |-----|---------|---------|
 | `render.w` / `render.h` | output size | `0` = the first scene clip's size (monitor native) |
 | `render.fps` | output frame rate | falls back to `record.fps` |
-| `render.workers` | parallel presentation render workers (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, nMiss))` |
+| `render.workers` | parallel presentation render workers (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, ceil(missFrames/max(16, 2*fps))))` |
 | `render.threads.prepare` | FFmpeg/FFV1 threads while preparing each presentation track | `max(1, n/w)` (`n` = CPUs, `w` = parallel tracks) |
 | `render.threads.filter` | `-filter_complex_threads` for that prepare | `1` |
 | `render.threads.encode` | libx264 threads for each presentation chunk encoder | `n`, then `max(1, encode/workers)` per chunk |
