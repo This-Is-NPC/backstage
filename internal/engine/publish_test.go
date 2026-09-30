@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,7 +193,7 @@ func (r *statOnStopRec) Stop() (string, error) {
 func TestCleanupOnInterruptMovesPendingClipToAttempts(t *testing.T) {
 	dir := t.TempDir()
 	e := playEngine(t, dir, nil)
-	s, err := take.Begin(e.Project, "demo")
+	s, err := take.BeginContext(context.Background(), e.Project, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}

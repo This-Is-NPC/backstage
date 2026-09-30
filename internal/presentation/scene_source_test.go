@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/This-Is-NPC/backstage/internal/facts"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 	"github.com/This-Is-NPC/backstage/internal/take"
 )
@@ -52,14 +53,14 @@ func recordingProject(t *testing.T) *scene.Project {
 
 func publishDemo(t *testing.T, p *scene.Project, body string) take.Published {
 	t.Helper()
-	s, err := take.Begin(p, "demo")
+	s, err := take.BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(s.Clip(), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.FactsFile(), []byte(`{"result":"ok"}`), 0o644); err != nil {
+	if err := os.WriteFile(facts.Path(s.Clip()), []byte(`{"result":"ok"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	pub, err := s.Publish(context.Background())

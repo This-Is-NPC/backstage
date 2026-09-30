@@ -51,14 +51,9 @@ type Published struct {
 	StableFacts string
 }
 
-// Begin creates a pending directory and holds an exclusive flock on its lease.
-// The directory is created as .creating-<id>, leased, then renamed to
+// BeginContext creates a pending directory and holds an exclusive flock on its
+// lease. The directory is created as .creating-<id>, leased, then renamed to
 // .pending-<id> so play does not wait for the scene lock.
-func Begin(p *scene.Project, name string) (*Session, error) {
-	return BeginContext(context.Background(), p, name)
-}
-
-// BeginContext is Begin with a cancellable start.
 func BeginContext(ctx context.Context, p *scene.Project, name string) (*Session, error) {
 	paths, err := ForScene(p, name)
 	if err != nil {
@@ -114,13 +109,6 @@ func (s *Session) Clip() string {
 	return filepath.Join(s.dir, clipName)
 }
 
-// FactsFile is the sidecar path next to Clip.
-func (s *Session) FactsFile() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return filepath.Join(s.dir, factsName)
-}
-
 // Finished reports that the session published or moved to attempts.
 func (s *Session) Finished() bool {
 	s.mu.Lock()
@@ -137,14 +125,6 @@ func (s *Session) HasClip() bool {
 
 func (s *Session) hasClipLocked() bool {
 	st, err := os.Stat(filepath.Join(s.dir, clipName))
-	return err == nil && st.Size() > 0
-}
-
-// HasFacts reports that the sidecar was written.
-func (s *Session) HasFacts() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st, err := os.Stat(filepath.Join(s.dir, factsName))
 	return err == nil && st.Size() > 0
 }
 

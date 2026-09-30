@@ -14,7 +14,7 @@ import (
 func TestImportPublishesCopiedPair(t *testing.T) {
 	p, paths := testProject(t)
 	clip, facts := writeImportPair(t, t.TempDir(), "raw")
-	s, err := Import(p, "demo", clip, facts)
+	s, err := ImportContext(context.Background(), p, "demo", clip, facts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestImportNeverHardlinksOrRenamesSource(t *testing.T) {
 	old := cloneFile
 	cloneFile = copyOnly
 	t.Cleanup(func() { cloneFile = old })
-	s, err := Import(p, "demo", clip, facts)
+	s, err := ImportContext(context.Background(), p, "demo", clip, facts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestImportInterruptAfterLeaseKeepsAttempt(t *testing.T) {
 func TestPublishInterruptAfterImportLeavesValidState(t *testing.T) {
 	p, paths := testProject(t)
 	clip, facts := writeImportPair(t, t.TempDir(), "pub")
-	s, err := Import(p, "demo", clip, facts)
+	s, err := ImportContext(context.Background(), p, "demo", clip, facts, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestImportRejectsEmptySource(t *testing.T) {
 	if err := os.WriteFile(facts, []byte(`{"result":"ok"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Import(p, "demo", clip, facts); err == nil {
+	if _, err := ImportContext(context.Background(), p, "demo", clip, facts, nil); err == nil {
 		t.Fatal("empty clip accepted")
 	}
 }

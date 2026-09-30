@@ -136,10 +136,6 @@ func OverwritesTake(p *scene.Project, sceneName, output string) error {
 	return nil
 }
 
-func writeJSON(path string, v any) error {
-	return writeJSONTracked(path, v, nil)
-}
-
 func writeJSONTracked(path string, v any, track func(string)) error {
 	body, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {

@@ -144,11 +144,11 @@ func publish(t *testing.T, p *scene.Project, s *scene.Scene, rec *machine.Record
 	if s.VMEnd != nil && f.EndState == nil && rec != nil {
 		f.EndState = &facts.EndState{Snapshot: s.VMEnd.Snapshot, Image: rec.Snapshots[s.VMEnd.Snapshot]}
 	}
-	sess, err := take.Begin(p, s.Name)
+	sess, err := take.BeginContext(context.Background(), p, s.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := facts.Write(sess.FactsFile(), f); err != nil {
+	if err := facts.Write(facts.Path(sess.Clip()), f); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(sess.Clip(), []byte("clip-"+s.Name), 0o644); err != nil {
@@ -234,11 +234,11 @@ func TestStatusTable(t *testing.T) {
 			writeBaseProject(t, dir)
 			writeScene(t, dir, "host", hostScene("host"))
 			p, s := load(t, dir, "host")
-			sess, err := take.Begin(p, s.Name)
+			sess, err := take.BeginContext(context.Background(), p, s.Name)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := facts.Write(sess.FactsFile(), facts.Facts{Result: facts.ResultOK}); err != nil {
+			if err := facts.Write(facts.Path(sess.Clip()), facts.Facts{Result: facts.ResultOK}); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(sess.Clip(), []byte("clip"), 0o644); err != nil {
@@ -540,11 +540,11 @@ func TestAttemptsNeverReadAndLegacyFallback(t *testing.T) {
 	writeBaseProject(t, dir)
 	writeScene(t, dir, "host", hostScene("host"))
 	p, s := load(t, dir, "host")
-	sess, err := take.Begin(p, s.Name)
+	sess, err := take.BeginContext(context.Background(), p, s.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := facts.Write(sess.FactsFile(), facts.Facts{InputsSHA256: "dead", Result: facts.ResultStepsFailed}); err != nil {
+	if err := facts.Write(facts.Path(sess.Clip()), facts.Facts{InputsSHA256: "dead", Result: facts.ResultStepsFailed}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(sess.Clip(), []byte("attempt"), 0o644); err != nil {

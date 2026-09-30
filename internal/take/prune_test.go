@@ -17,7 +17,7 @@ import (
 
 func TestPruneAbandonedPendingWithoutFactsDeletes(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestPruneAbandonedPendingWithoutFactsDeletes(t *testing.T) {
 
 func TestPruneAbandonedPendingWithFactsMovesToAttempts(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestPruneAbandonedPendingWithFactsMovesToAttempts(t *testing.T) {
 
 func TestPruneSkipsPendingInUse(t *testing.T) {
 	p, _ := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestPruneSkipsPendingInUse(t *testing.T) {
 
 func TestPruneSkipsLeasedGeneration(t *testing.T) {
 	p, _ := testProject(t)
-	first, err := Begin(p, "demo")
+	first, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestPruneSkipsLeasedGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Begin(p, "demo")
+	second, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestPruneAgeUsesIDNotMtime(t *testing.T) {
 
 func TestPruneRepairsDivergentProjection(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestPruneRepairsDivergentProjection(t *testing.T) {
 
 func TestPruneNeverRemovesManifestGeneration(t *testing.T) {
 	p, _ := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func pendingLeft(entries []os.DirEntry) bool {
 
 func TestPruneInvalidManifestAbortsScene(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestPruneInvalidManifestAbortsScene(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(orphan, clipName), []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	other, err := Begin(p, "other")
+	other, err := BeginContext(context.Background(), p, "other")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestPruneInvalidManifestAbortsScene(t *testing.T) {
 
 func TestPruneUnreadableManifestAbortsScene(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestPruneUnreadableManifestAbortsScene(t *testing.T) {
 
 func TestPrunePendingWithClipMovesWithoutFacts(t *testing.T) {
 	p, _ := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestPruneMaxSizeSelectsByAgeAcrossScenes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(zeta.attemptDir(oldID), clipName), bytes.Repeat([]byte("z"), 200), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	first, err := Begin(p, "alpha")
+	first, err := BeginContext(context.Background(), p, "alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestPruneMaxSizeSelectsByAgeAcrossScenes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Begin(p, "alpha")
+	second, err := BeginContext(context.Background(), p, "alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestPruneMaxSizeSelectsByAgeAcrossScenes(t *testing.T) {
 
 func TestPruneDryRunMatchesRealAndCreatesNothing(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func samePathSet(a, b []string) bool {
 
 func TestPruneDryRunReadOnlyOutput(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +473,7 @@ func TestPruneDryRunReadOnlyOutput(t *testing.T) {
 
 func TestPruneHonorsContext(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +498,7 @@ func TestPruneHonorsContext(t *testing.T) {
 
 func TestPruneRemovesAbandonedTemps(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +550,7 @@ func TestPruneEscapingSceneDirAborts(t *testing.T) {
 	if err := os.Symlink(outside, paths.sceneDir()); err != nil {
 		t.Fatal(err)
 	}
-	other, err := Begin(p, "other")
+	other, err := BeginContext(context.Background(), p, "other")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +610,7 @@ func TestPruneIgnoresFreshCreatingAndReapsOld(t *testing.T) {
 
 func TestPruneDoesNotFollowAttemptsSymlink(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +642,7 @@ func TestPruneDoesNotFollowAttemptsSymlink(t *testing.T) {
 
 func TestPruneRepairRereadsCurrentGeneration(t *testing.T) {
 	p, paths := testProject(t)
-	first, err := Begin(p, "demo")
+	first, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +651,7 @@ func TestPruneRepairRereadsCurrentGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	afterCollectForTest = func() {
-		next, err := Begin(p, "demo")
+		next, err := BeginContext(context.Background(), p, "demo")
 		if err != nil {
 			t.Errorf("begin g2: %v", err)
 			return
@@ -723,7 +723,7 @@ func TestPruneMaxSizeExcludesSkippedSceneBytes(t *testing.T) {
 
 func TestPruneSkipsLeasedAttempt(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -756,7 +756,7 @@ func TestPruneSkipsLeasedAttempt(t *testing.T) {
 func TestPruneDoesNotHoldAllSceneLocks(t *testing.T) {
 	dir := t.TempDir()
 	p := &scene.Project{Dir: dir, Record: scene.RecordCfg{Out: "recordings"}}
-	alphaSess, err := Begin(p, "alpha")
+	alphaSess, err := BeginContext(context.Background(), p, "alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -856,7 +856,7 @@ func TestPruneDoesNotHoldAllSceneLocks(t *testing.T) {
 func TestPruneRepairSkipsUnreadableManifestAndContinues(t *testing.T) {
 	dir := t.TempDir()
 	p := &scene.Project{Dir: dir, Record: scene.RecordCfg{Out: "recordings"}}
-	first, err := Begin(p, "alpha")
+	first, err := BeginContext(context.Background(), p, "alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -864,7 +864,7 @@ func TestPruneRepairSkipsUnreadableManifestAndContinues(t *testing.T) {
 	if _, err := first.Publish(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	second, err := Begin(p, "beta")
+	second, err := BeginContext(context.Background(), p, "beta")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -304,7 +304,7 @@ func TestInterruptDuringCaptureWaitsForCleanup(t *testing.T) {
 	e.Managed = &machine.Manager{}
 	e.managedRec = &machine.Record{}
 	e.leafProject = dir
-	sess, err := take.Begin(e.Project, "demo")
+	sess, err := take.BeginContext(context.Background(), e.Project, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}

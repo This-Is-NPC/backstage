@@ -625,11 +625,11 @@ func publishCLI(t *testing.T, dir string, store *machine.Store, name string, f f
 	if s.VMEnd != nil && f.EndState == nil && rec != nil {
 		f.EndState = &facts.EndState{Snapshot: s.VMEnd.Snapshot, Image: rec.Snapshots[s.VMEnd.Snapshot]}
 	}
-	sess, err := take.Begin(p, s.Name)
+	sess, err := take.BeginContext(context.Background(), p, s.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := facts.Write(sess.FactsFile(), f); err != nil {
+	if err := facts.Write(facts.Path(sess.Clip()), f); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(sess.Clip(), []byte("clip-"+s.Name), 0o644); err != nil {
