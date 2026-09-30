@@ -247,7 +247,8 @@ frames; a full segment-cache hit copies the stored H.264 without Chromium.
 `backstage cache prune` drops least-recently-used track, audio and segment
 entries (default 10G).
 Project `render.threads` sets FFmpeg counts for that prepare and for
-libx264; each chunk encoder uses `max(1, encode/workers)` threads and runs at
+the chunk encoder (`render.encoder`: `libx264`, or `vaapi` for the GPU);
+each chunk encoder uses `max(1, encode/workers)` threads and runs at
 the same time as that chunk's Chromium frame loop, not after it.
 `render.workers` is Chromium concurrency (one browser per worker). `0`,
 `null` or an omitted key picks `max(1, min(NumCPU/2, memoryBudget/2GiB,

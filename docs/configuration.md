@@ -249,10 +249,17 @@ The target geometry every clip is normalized to before concatenation.
 | `render.workers` | parallel presentation render workers (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, ceil(missFrames/max(16, 2*fps))))` |
 | `render.threads.prepare` | FFmpeg/FFV1 threads while preparing each presentation track | `max(1, n/w)` (`n` = CPUs, `w` = parallel tracks) |
 | `render.threads.filter` | `-filter_complex_threads` for that prepare | `1` |
-| `render.threads.encode` | libx264 threads for each presentation chunk encoder | `n`, then `max(1, encode/workers)` per chunk |
+| `render.threads.encode` | FFmpeg threads for each presentation chunk encoder | `n`, then `max(1, encode/workers)` per chunk |
+| `render.encoder` | H.264 encoder for presentation chunks: `libx264` (CPU, CRF 20) or `vaapi` (GPU `h264_vaapi`, CQP 20) | `""` = `libx264` |
 
-`render.workers` and `render.threads` are read only by presentation `render` /
-`preview`. `produce` does not use these keys. `0`, `null` or an omitted field
+`render.workers`, `render.threads` and `render.encoder` are read only by
+presentation `render` / `preview`. `produce` does not use these keys.
+`vaapi` encodes one frame at the render size before any chunk starts; if
+FFmpeg cannot open the device or the size, the render fails there and leaves
+any existing output alone. The segment cache key records the VAAPI driver
+line, so a driver change re-encodes. The GPU frees CPU for the Chromium
+workers; its output is not bit-identical to `libx264` but keeps the same
+PSNR-Y limits (≥ 40 dB, mean ≥ 45 dB). `0`, `null` or an omitted field
 means the default. A negative value is a configuration error. A very large
 value is accepted as written (`workers` still capped at the number of missed chunks).
 

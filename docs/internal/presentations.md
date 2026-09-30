@@ -20,13 +20,15 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    the event start. Split those pieces at transition ends and caption visibility
    changes, skipping any cut that would leave fewer than `minSegmentFrames = 3`
    frames on either side, then clip to `[first, end)`. A split piece that the
-   clip shortens below 3 frames merges into its neighbor. libx264 gives
-   shorter encodes no B-frame DTS delay, and concatenating segments with and without
+   clip shortens below 3 frames merges into its neighbor. The H.264 encoders
+   give shorter encodes no B-frame DTS delay, and concatenating segments with and without
    that delay produces irregular timestamps. A piece that contains frames
    of event *i*'s incoming transition also hashes event *i−1*. Each chunk key
    (kind `segments`, `.mp4`) is SHA-256 of a JSON object: size, fps, scale,
    `[first,end)`, encoder args without `-threads` or the output path, FFmpeg
-   and browser versions (browser once per render), SHA-256 of the three
+   and browser versions (browser once per render), the VAAPI driver line when
+   `render.encoder` is `vaapi` (`probeEncoder` encodes one frame at the render
+   size before any chunk and fails the render if the device refuses), SHA-256 of the three
    embedded `web/` files, the event block (Event JSON, parameters, narration,
    intersecting captions, entry content hash, slotted tracks with
    `trackCacheKey`, `[from,to]`, `on-end`, `duration`), and for a
@@ -74,7 +76,8 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    stills read once at `-framerate fps` and repeated by
    `loop=loop=-1:size=1,settb=1/fps,setpts=N` (integer timestamps; `N/fps/TB`
    truncates to duplicate stamps at 10 fps), as in the static fade,
-   libx264 tail, `-frames:v`). The track image is an integer-pixel rectangle
+   encoder tail, `-frames:v`; `vaapi` opens the device before the inputs and
+   ends the graph with `format=nv12,hwupload`). The track image is an integer-pixel rectangle
    inside the snapped slot on both paths. When the event's template declares
    `static` for that layout (or `static: true` on a visual scene), the same
    overlay graph runs after probes at the chunk's **first and last** frames.
