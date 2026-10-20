@@ -49,6 +49,7 @@ type chunkResult struct {
 	rendererStart, decoderStart                float64
 	encode, wall, composite                    float64
 	staticViolations                           int
+	animatedOverlayFrames                      int
 	files                                      map[string]string
 }
 
@@ -86,7 +87,7 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 	if err != nil {
 		return fmt.Errorf("browser version: %w", err)
 	}
-	device, err := probeEncoder(ctx, p)
+	device, err := p.encoder().Probe(ctx, p.Width, p.Height, p.FPS)
 	if err != nil {
 		return err
 	}
@@ -119,7 +120,7 @@ func renderRange(ctx context.Context, p *Plan, out string, progress io.Writer, o
 		miss = append(miss, job)
 		missFrames += ch.End - ch.First
 	}
-	_, _, encodeAll := resolveRenderThreads(planThreadCfg(p), len(p.Tracks))
+	_, _, encodeAll := planThreadCfg(p).Resolve(len(p.Tracks))
 	nWorkers, err := resolveWorkers(planWorkers(p), len(miss), missFrames, p.FPS)
 	if err != nil {
 		return err
@@ -301,6 +302,7 @@ func mergeChunkResults(results []chunkResult, timings *renderTimings) map[string
 		timings.RendererStartSeconds += res.rendererStart
 		timings.DecoderStartSeconds += res.decoderStart
 		timings.CompositeSeconds += res.composite
+		timings.AnimatedOverlayFrames += res.animatedOverlayFrames
 		if res.layered {
 			timings.LayeredChunks++
 		} else if res.encode > encodeMax {
@@ -472,8 +474,10 @@ func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, work string,
 				}
 			}
 		}
-		if path.stillFade {
-			err = renderStillFadeChunk(ctx, r, p, work, ch, encodeThreads, out, &res)
+		if path.stillTransition {
+			err = renderStillTransitionChunk(ctx, r, p, work, ch, encodeThreads, out, &res)
+		} else if path.animated {
+			err = renderAnimatedChunk(ctx, r, p, work, trackPaths, ch, encodeThreads, out, &res, path.probes[0], meta)
 		} else {
 			err = renderLayeredChunk(ctx, r, p, work, trackPaths, ch, encodeThreads, out, &res, path.probes, path.caps, meta)
 		}
@@ -496,25 +500,29 @@ func renderChunk(parent, ctx context.Context, r *Renderer, p *Plan, work string,
 }
 
 type chunkPath struct {
-	stillFade bool
-	probes    []probeFrame
-	dec       layerDecision
-	violation bool
-	caps      string
+	animated        bool
+	stillTransition bool
+	probes          []probeFrame
+	dec             layerDecision
+	violation       bool
+	caps            string
 }
 
 func decideChunkPath(ctx context.Context, r *Renderer, p *Plan, opts renderOpts, ch chunkRange, mode string, res *chunkResult) (chunkPath, error) {
-	if mode != "frames" && opts.Scale == 1 && stillFadeCandidate(p, ch, r) {
-		dec, err := stillFadeEligible(r, p, ch, res)
+	if mode != "frames" && opts.Scale == 1 && stillTransitionCandidate(p, ch, r) {
+		dec, err := stillTransitionEligible(r, p, ch, res)
 		if err != nil {
 			return chunkPath{}, err
 		}
 		if dec.Layered {
-			return chunkPath{dec: dec, stillFade: true}, nil
+			return chunkPath{dec: dec, stillTransition: true}, nil
 		}
 	}
 	if mode == "frames" || skipLayerProbe(p, opts, ch) {
 		return chunkPath{dec: layerDecision{Reason: "not eligible"}}, nil
+	}
+	if r.eventStatic(ch.Event) && len(p.Document.Timeline[ch.Event].Slots) > 0 && chunkGraphicsMoving(p, ch) {
+		return animatedChunkPath(r, p, ch, res)
 	}
 	if r.eventStatic(ch.Event) {
 		firstN := ch.First
@@ -745,13 +753,8 @@ func writeRenderFacts(ctx context.Context, p *Plan, dir string, files map[string
 		}
 		hashes[rel] = hex.EncodeToString(h.Sum(nil))
 	}
-	for _, name := range []string{"runtime.html", "template.html", "visual.html"} {
-		b, err := web.ReadFile("web/" + name)
-		if err != nil {
-			return err
-		}
-		h := sha256.Sum256(b)
-		hashes["builtin:"+name] = hex.EncodeToString(h[:])
+	for name, hash := range embeddedWebHashes() {
+		hashes["builtin:"+name] = hash
 	}
 	if versions == nil {
 		versions = map[string]string{}

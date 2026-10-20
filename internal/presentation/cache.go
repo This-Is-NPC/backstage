@@ -91,17 +91,19 @@ type audioKeyV1 struct {
 }
 
 type audioKeyPart struct {
-	ID       string `json:"id"`
-	Src      string `json:"src"`
-	At       string `json:"at"`
-	From     string `json:"from"`
-	To       string `json:"to"`
-	Rate     string `json:"rate"`
-	Duration string `json:"duration"`
-	Volume   string `json:"volume"`
-	FadeIn   string `json:"fade-in"`
-	FadeOut  string `json:"fade-out"`
-	Loop     bool   `json:"loop"`
+	Duck      bool   `json:"duck,omitempty"`
+	Narration bool   `json:"narration,omitempty"`
+	ID        string `json:"id"`
+	Src       string `json:"src"`
+	At        string `json:"at"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Rate      string `json:"rate"`
+	Duration  string `json:"duration"`
+	Volume    string `json:"volume"`
+	FadeIn    string `json:"fade-in"`
+	FadeOut   string `json:"fade-out"`
+	Loop      bool   `json:"loop"`
 }
 
 type memoFile struct {
@@ -198,7 +200,7 @@ func trackCacheKey(srcHash string, segs []Segment, fps int, ffmpeg string) strin
 }
 
 func audioEncodeArgs() []string {
-	return []string{"-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "amix=normalize=0", "asetnsamples=n=1024:p=1", "alimiter=limit=0.95:level=0:latency=1"}
+	return []string{"-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "input-blocks=1024", "amix=normalize=0", "asetnsamples=n=1024:p=1", "alimiter=limit=0.95:level=0:latency=1"}
 }
 
 func audioCacheKey(parts []audioKeyPart, duration, ffmpeg string) string {
@@ -712,6 +714,7 @@ func (c *renderCache) mix(ctx context.Context, p *Plan, dir string) (string, []n
 			return "", nil, err
 		}
 		parts = append(parts, audioKeyPart{
+			Duck: a.Duck, Narration: a.Narration,
 			ID: a.ID, Src: src, At: num(a.At), From: num(a.From), To: num(a.To),
 			Rate: num(a.Rate), Duration: num(a.Duration), Volume: num(a.Volume),
 			FadeIn: num(a.FadeIn), FadeOut: num(a.FadeOut), Loop: a.Loop,

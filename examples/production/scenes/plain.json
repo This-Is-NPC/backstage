@@ -1,0 +1,10 @@
+{
+  "name": "plain",
+  "layout": "solo",
+  "steps": [
+    {
+      "action": "wait",
+      "hold": 8
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "speed",
+  "layout": "solo",
+  "steps": [
+    {
+      "action": "wait",
+      "hold": 8
+    }
+  ]
+}

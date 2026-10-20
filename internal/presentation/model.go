@@ -31,10 +31,12 @@ type Track struct {
 	Start    float64   `json:"start"`
 	Segments []Segment `json:"segments,omitempty"`
 	OnEnd    string    `json:"on-end,omitempty"`
+	Camera   Camera    `json:"camera,omitempty"`
 }
 type Transition struct {
-	Effect   string  `json:"effect"`
-	Duration float64 `json:"duration"`
+	Effect    string  `json:"effect"`
+	Duration  float64 `json:"duration"`
+	Direction string  `json:"direction,omitempty"`
 }
 type Event struct {
 	At         float64           `json:"at"`
@@ -42,11 +44,17 @@ type Event struct {
 	Slots      map[string]string `json:"slots,omitempty"`
 	Scene      string            `json:"scene,omitempty"`
 	Transition Transition        `json:"transition,omitempty"`
+	Card       *Card             `json:"card,omitempty"`
+	Sound      *Sound            `json:"sound,omitempty"`
+	Camera     map[string]Camera `json:"camera,omitempty"`
+	atRef      *TimeReference
 }
 
 // Audio selects a file, a track's original sound, or one narration cue.
 // Independent audio uses At/From/To/Rate; follow-video uses the track's cuts.
 type Audio struct {
+	Role    string   `json:"role,omitempty"`
+	Duck    bool     `json:"duck,omitempty"`
 	Asset   string   `json:"asset,omitempty"`
 	ID      string   `json:"id"`
 	File    string   `json:"file,omitempty"`
@@ -64,6 +72,7 @@ type Audio struct {
 	FadeOut float64  `json:"fade-out,omitempty"`
 	Loop    bool     `json:"loop,omitempty"`
 	TrimEnd bool     `json:"trim-end,omitempty"`
+	atRef   *TimeReference
 }
 type Caption struct {
 	Scene    string  `json:"scene,omitempty"`
@@ -74,8 +83,14 @@ type Caption struct {
 	At       float64 `json:"at,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
 	Slot     string  `json:"slot"`
+	Entrance Motion  `json:"entrance,omitempty"`
+	FontSize float64 `json:"font-size,omitempty"`
+	atRef    *TimeReference
 }
 type Document struct {
+	Release    *Release          `json:"release,omitempty"`
+	Actions    []ActionOverlay   `json:"actions,omitempty"`
+	Theme      *Theme            `json:"theme,omitempty"`
 	Version    int               `json:"version"`
 	Duration   float64           `json:"duration"`
 	Render     scene.RenderCfg   `json:"render,omitempty"`
@@ -90,6 +105,7 @@ type Media struct {
 	Path               string
 	Duration           float64
 	HasVideo, HasAudio bool
+	Width, Height      int
 }
 type CompiledTrack struct {
 	Track
@@ -97,10 +113,12 @@ type CompiledTrack struct {
 	Duration float64
 }
 type TextSpan struct {
-	At   float64 `json:"at"`
-	End  float64 `json:"end"`
-	Text string  `json:"text"`
-	Slot string  `json:"slot"`
+	At       float64 `json:"at"`
+	End      float64 `json:"end"`
+	Text     string  `json:"text"`
+	Slot     string  `json:"slot"`
+	Entrance Motion  `json:"entrance,omitempty"`
+	FontSize float64 `json:"font-size,omitempty"`
 }
 type Plan struct {
 	Project                    *scene.Project
@@ -112,6 +130,7 @@ type Plan struct {
 	Inputs                     map[string]string
 	Text                       []TextSpan
 	AudioParts                 []AudioPart
+	Actions                    []ActionSpan
 	Width, Height, FPS, Frames int
 	Template                   string
 	leases                     []*take.Handle
@@ -136,13 +155,20 @@ func strictRead(path string, into any) error {
 		return err
 	}
 	defer f.Close()
-	d := json.NewDecoder(f)
-	d.DisallowUnknownFields()
-	if err = d.Decode(into); err != nil {
+	if err := decodeJSON(f, into); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	if err = d.Decode(new(any)); err != io.EOF {
-		return fmt.Errorf("%s: expected one JSON document", path)
+	return nil
+}
+
+func decodeJSON(r io.Reader, into any) error {
+	d := json.NewDecoder(r)
+	d.DisallowUnknownFields()
+	if err := d.Decode(into); err != nil {
+		return err
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("expected one JSON document")
 	}
 	return nil
 }
@@ -203,7 +229,7 @@ func (p *Plan) loadScene(name string) (*scene.Scene, error) {
 	if rel, err := workspaceRel(p.Project, path); err == nil {
 		p.Inputs[rel] = path
 	}
-	if s.Type == "visual" {
+	if s.Type == "visual" && s.Entry != "" {
 		if _, err = p.input(s.Entry); err != nil {
 			return nil, err
 		}
@@ -391,6 +417,15 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		}
 		plan.Tracks[id] = CompiledTrack{Track: tr, Media: m, Duration: segmentDuration(tr.Segments)}
 	}
+	if err := plan.compileRelease(); err != nil {
+		return nil, err
+	}
+	if err := plan.resolveTimes(); err != nil {
+		return nil, err
+	}
+	if err := plan.compileCameras(); err != nil {
+		return nil, err
+	}
 	if len(d.Timeline) == 0 || d.Timeline[0].At != 0 {
 		return nil, fmt.Errorf("timeline must start at zero")
 	}
@@ -402,8 +437,8 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		if !validTime(e.At) || e.At >= end || end > d.Duration {
 			return nil, fmt.Errorf("invalid timeline event %d", i)
 		}
-		if (e.Layout == "") == (e.Scene == "") {
-			return nil, fmt.Errorf("event %d requires exactly one layout or scene", i)
+		if (e.Layout != "" && e.Scene != "") || (e.Layout == "" && e.Scene == "" && e.Card == nil) {
+			return nil, fmt.Errorf("event %d requires a layout, visual scene or card", i)
 		}
 		if e.Scene != "" {
 			s, er := plan.loadScene(e.Scene)
@@ -431,8 +466,8 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		if !validTime(t.Duration) || e.At+t.Duration > end {
 			return nil, fmt.Errorf("transition overlaps next event")
 		}
-		if t.Effect != "" && t.Effect != "fade" && t.Effect != "morph" {
-			return nil, fmt.Errorf("unknown transition %q", t.Effect)
+		if err := t.validate(); err != nil {
+			return nil, fmt.Errorf("event %d: %w", i, err)
 		}
 		if (t.Effect == "") != (t.Duration == 0) || (i == 0 && t.Duration > 0) {
 			return nil, fmt.Errorf("transition needs effect and positive duration, after first event")
@@ -440,6 +475,15 @@ func Load(p *scene.Project, name string) (*Plan, error) {
 		if t.Effect == "morph" && (e.Scene != "" || d.Timeline[i-1].Scene != "") {
 			return nil, fmt.Errorf("morph requires two layouts; use fade for visual scenes")
 		}
+	}
+	if err = plan.validateGraphics(); err != nil {
+		return nil, err
+	}
+	if err = plan.compileActions(); err != nil {
+		return nil, err
+	}
+	if err = plan.eventSounds(); err != nil {
+		return nil, err
 	}
 	if err = plan.compileAudio(); err != nil {
 		return nil, err
@@ -491,14 +535,18 @@ func (p *Plan) cue(sceneName, track, cueID string) (scene.NarrationCue, error) {
 }
 
 // mapSpan intersects a source interval with each selected segment, including repeats.
-func mapSpan(t CompiledTrack, start, end float64) [][3]float64 {
-	var spans [][3]float64
+type mappedSpan struct {
+	At, End, Rate, SourceStart, SourceEnd float64
+}
+
+func mapSpan(t CompiledTrack, start, end float64) []mappedSpan {
+	var spans []mappedSpan
 	elapsed := rat(t.Start)
 	pos := t.Start
 	for _, s := range t.Segments {
 		a, b := math.Max(start, s.From), math.Min(end, s.To)
 		if b > a {
-			spans = append(spans, [3]float64{pos + (a-s.From)/s.Rate, pos + (b-s.From)/s.Rate, s.Rate})
+			spans = append(spans, mappedSpan{pos + (a-s.From)/s.Rate, pos + (b-s.From)/s.Rate, s.Rate, a, b})
 		}
 		elapsed.Add(elapsed, new(big.Rat).Quo(new(big.Rat).Sub(rat(s.To), rat(s.From)), rat(s.Rate)))
 		pos, _ = elapsed.Float64()
@@ -522,7 +570,7 @@ func (p *Plan) compileCaptions() error {
 				return fmt.Errorf("source caption requires track")
 			}
 			for _, s := range mapSpan(tr, cue.Start, cue.End) {
-				spans = append(spans, [2]float64{s[0], s[1]})
+				spans = append(spans, [2]float64{s.At, s.End})
 			}
 		case "presentation":
 			if !validTime(c.At) || !finite(c.Duration) || c.Duration <= 0 {
@@ -551,7 +599,23 @@ func (p *Plan) compileCaptions() error {
 			if c.Clock == "presentation" && s[1] > p.Document.Duration {
 				return fmt.Errorf("caption exceeds presentation")
 			}
-			p.Text = append(p.Text, TextSpan{At: s[0], End: end, Text: cue.Text, Slot: c.Slot})
+			if err := c.Entrance.validate("none", end-s[0]); err != nil {
+				return err
+			}
+			fontSize := c.FontSize
+			if p.Document.Theme != nil || fontSize != 0 || c.Entrance.Effect != "none" {
+				t := p.Document.theme()
+				if fontSize == 0 {
+					fontSize = t.CaptionSize
+				}
+				if !finite(fontSize) || fontSize < t.MinFont {
+					return fmt.Errorf("caption font-size must be at least %.0f px", t.MinFont)
+				}
+				if err := t.readable(cue.Text, end-s[0]-c.Entrance.Duration, false); err != nil {
+					return err
+				}
+			}
+			p.Text = append(p.Text, TextSpan{At: s[0], End: end, Text: cue.Text, Slot: c.Slot, Entrance: c.Entrance, FontSize: fontSize})
 		}
 	}
 	return nil
@@ -572,9 +636,13 @@ func (p *Plan) Output(override string) (string, error) {
 	if strings.ToLower(filepath.Ext(path)) != ".mp4" {
 		return "", fmt.Errorf("output must be .mp4")
 	}
+	return path, p.checkOutput(path)
+}
+
+func (p *Plan) checkOutput(path string) error {
 	for _, input := range p.Inputs {
 		if input == path {
-			return "", fmt.Errorf("output would overwrite input")
+			return fmt.Errorf("output would overwrite input")
 		}
 	}
 	for _, src := range p.Document.Sources {
@@ -586,8 +654,8 @@ func (p *Plan) Output(override string) (string, error) {
 			name = s.Name
 		}
 		if err := take.OverwritesTake(p.Project, name, path); err != nil {
-			return "", err
+			return err
 		}
 	}
-	return path, nil
+	return nil
 }

@@ -358,7 +358,7 @@ func TestLayerGraphOverlayAtContentOrigin(t *testing.T) {
 		CX: 12, CY: 22, CW: 76, CH: 56,
 		InnerRadius: 14,
 	}
-	g := layerGraph([]slotBox{box}, [][2]int{{320, 180}}, []int{4}, 10, "out")
+	g := layerGraph([]slotBox{box}, [][2]int{{320, 180}}, []int{4}, 10, "out", false)
 	if !strings.Contains(g, "overlay=12:22:") {
 		t.Fatalf("want overlay at content origin\n%s", g)
 	}

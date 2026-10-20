@@ -4,16 +4,18 @@
 package production
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/encode"
 	"github.com/This-Is-NPC/backstage/internal/engine"
 	"github.com/This-Is-NPC/backstage/internal/facts"
 	"github.com/This-Is-NPC/backstage/internal/machine"
@@ -67,7 +69,7 @@ var teardownHost = func() error {
 	return (&stage.Hypr{}).Teardown()
 }
 
-var retimeClip = Retime
+var retimeClip = retime
 
 var importTake = take.ImportContext
 
@@ -80,6 +82,7 @@ type producer struct {
 	cleanup    func()
 	raw        []string
 	first      string
+	phases     facts.ProductionPhases
 }
 
 // plan flattens a production into an ordered list of scene/transition segments.
@@ -133,6 +136,10 @@ func AdHoc(scenes []string, trans string) scene.Production {
 
 // Run renders the production and returns the final mp4 path.
 func Run(opts Options) (string, error) {
+	started := time.Now()
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
 	p := opts.Project
 	if err := p.ValidateProduction(opts.Prod); err != nil {
 		return "", err
@@ -163,6 +170,12 @@ func Run(opts Options) (string, error) {
 	// fps/w/h share the in-scene resolver so the two paths can't drift; production
 	// then probes a recorded clip below to turn native (0) w/h into real pixels.
 	fps, _, _ := p.ResolveRenderDims()
+
+	if p.Render.W > 0 && p.Render.H > 0 {
+		if _, err := encode.Encoder(p.Render.Encoder).Probe(opts.Context, p.Render.W, p.Render.H, fps); err != nil {
+			return "", err
+		}
+	}
 
 	segDir, err := os.MkdirTemp("", "backstage-prod-*")
 	if err != nil {
@@ -211,15 +224,21 @@ func Run(opts Options) (string, error) {
 		if pr.first == "" {
 			return "", fmt.Errorf("production has no scene clips")
 		}
-		probeW, probeH, err := probeDims(pr.first)
+		info, err := probeVideo(pr.opts.Context, pr.first)
 		if err != nil {
 			return "", err
 		}
 		if w == 0 {
-			w = probeW
+			w = info.Width
 		}
 		if h == 0 {
-			h = probeH
+			h = info.Height
+		}
+	}
+
+	if p.Render.W == 0 || p.Render.H == 0 {
+		if _, err := encode.Encoder(p.Render.Encoder).Probe(opts.Context, w, h, fps); err != nil {
+			return "", err
 		}
 	}
 
@@ -233,6 +252,7 @@ func Run(opts Options) (string, error) {
 				return "", err
 			}
 		} else {
+			transitionStarted := time.Now()
 			clip := filepath.Join(segDir, fmt.Sprintf("%03d-%s.mp4", i, sg.kind))
 			t := p.Transitions[sg.name]
 			v := transition.Vars{Out: clip, W: w, H: h, FPS: fps, From: sg.from, To: sg.to}
@@ -248,21 +268,17 @@ func Run(opts Options) (string, error) {
 				}
 			}
 			pr.raw[i] = clip
+			pr.phases.Transitions += time.Since(transitionStarted).Seconds()
 		}
 	}
 
 	// 3. normalize each clip to the same geometry/fps/pixfmt so concat is clean.
-	var norm []string
-	for i, c := range pr.raw {
-		if c == "" {
-			return "", fmt.Errorf("segment %d produced no clip", i)
-		}
-		n := filepath.Join(segDir, fmt.Sprintf("n%03d.mp4", i))
-		if err := normalize(c, n, w, h, fps, cleanupSegmentsOnInterrupt); err != nil {
-			return "", err
-		}
-		norm = append(norm, n)
+	normalizeStarted := time.Now()
+	norm, err := normalizeClips(opts.Context, pr.raw, segDir, p.Render, w, h, fps, cleanupSegmentsOnInterrupt)
+	if err != nil {
+		return "", err
 	}
+	pr.phases.Normalize = time.Since(normalizeStarted).Seconds()
 
 	// 4. concat into the final video.
 	out := opts.OutPath
@@ -275,13 +291,21 @@ func Run(opts Options) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
 		return "", err
 	}
-	if err := concatFinal(norm, out, segDir, cleanupSegmentsOnInterrupt); err != nil {
+	concatStarted := time.Now()
+	if err := concatFinal(opts.Context, norm, out, segDir, cleanupSegmentsOnInterrupt); err != nil {
 		return "", err
 	}
+	pr.phases.Concat = time.Since(concatStarted).Seconds()
+	pr.phases.Total = time.Since(started).Seconds()
+	if err := facts.Write(facts.Path(out), facts.Facts{Backstage: opts.Version, Result: facts.ResultOK, ProductionPhases: &pr.phases}); err != nil {
+		return "", err
+	}
+	fmt.Printf(">> production timings: total=%.3f record=%.3f retime=%.3f transitions=%.3f normalize=%.3f concat=%.3f\n", pr.phases.Total, pr.phases.Record, pr.phases.Retime, pr.phases.Transitions, pr.phases.Normalize, pr.phases.Concat)
 	return out, nil
 }
 
 func (pr *producer) recordScene(i int, sg segment) error {
+	started := time.Now()
 	p := pr.opts.Project
 	clip := filepath.Join(pr.segDir, fmt.Sprintf("%03d-%s.mp4", i, sg.kind))
 	path, err := p.ScenePathSafe(sg.name)
@@ -332,12 +356,15 @@ func (pr *producer) recordScene(i int, sg segment) error {
 	// machine given less time, and the whole point of a long take is that
 	// the machine had every second of it.
 	shown := clip
+	pr.phases.Record += time.Since(started).Seconds()
 	if len(sg.speed) > 0 {
+		retimeStarted := time.Now()
 		fmt.Printf(">> scene %q → retimed\n", sg.name)
-		shown, err = retimeClip(clip, sg.speed, "")
+		shown, err = retimeClip(pr.opts.Context, clip, sg.speed, p.Render, pr.cleanup)
 		if err != nil {
 			return err
 		}
+		pr.phases.Retime += time.Since(retimeStarted).Seconds()
 	}
 	pr.raw[i] = shown
 	if pr.first == "" {
@@ -431,6 +458,11 @@ func renderOfflineTransition(cmdText string, v transition.Vars, env []string, di
 var runProductionCommand = runProductionCommandImpl
 
 func runProductionCommandImpl(cmd *exec.Cmd, onInterrupt func()) error {
+	var stderr bytes.Buffer
+	capture := cmd.Stderr == nil
+	if capture {
+		cmd.Stderr = &stderr
+	}
 	scene.SetProcessGroup(cmd)
 	cmdGuard := &engine.CommandGuard{}
 	guard := newInterruptGuard(func() error {
@@ -447,7 +479,11 @@ func runProductionCommandImpl(cmd *exec.Cmd, onInterrupt func()) error {
 		return err
 	}
 	defer cmdGuard.Done(cmd)
-	return cmd.Wait()
+	err := cmd.Wait()
+	if message := strings.TrimSpace(stderr.String()); err != nil && capture && message != "" {
+		return fmt.Errorf("%w: %s", err, message)
+	}
+	return err
 }
 
 // recordLiveTransition records the screen while a live prop drives the overlay,
@@ -537,47 +573,7 @@ func recordLiveTransition(p *scene.Project, t scene.Transition, v transition.Var
 	return nil
 }
 
-// probeDims returns a video's width and height via ffprobe.
-func probeDims(path string) (int, int, error) {
-	out, err := exec.Command("ffprobe", "-v", "error",
-		"-select_streams", "v:0", "-show_entries", "stream=width,height",
-		"-of", "csv=p=0:s=x", path).Output()
-	if err != nil {
-		return 0, 0, fmt.Errorf("ffprobe %s: %w", path, err)
-	}
-	parts := strings.Split(strings.TrimSpace(string(out)), "x")
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("ffprobe %s: unexpected %q", path, out)
-	}
-	w, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, fmt.Errorf("ffprobe %s: invalid width %q", path, parts[0])
-	}
-	h, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, fmt.Errorf("ffprobe %s: invalid height %q", path, parts[1])
-	}
-	if w == 0 || h == 0 {
-		return 0, 0, fmt.Errorf("ffprobe %s: zero dimensions", path)
-	}
-	return w, h, nil
-}
-
-// normalize re-encodes a clip to a fixed geometry/fps/pixfmt (audio dropped).
-func normalize(in, out string, w, h, fps int, onInterrupt func()) error {
-	vf := fmt.Sprintf(
-		"scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%d",
-		w, h, w, h, fps)
-	cmd := exec.Command("ffmpeg", "-y", "-i", in, "-vf", vf,
-		"-pix_fmt", "yuv420p", "-c:v", "libx264", "-an", out)
-	cmd.Stderr = os.Stderr
-	if err := runProductionCommand(cmd, onInterrupt); err != nil {
-		return fmt.Errorf("normalize %s: %w", in, err)
-	}
-	return nil
-}
-
-func concatFinal(clips []string, out, workDir string, onInterrupt func()) error {
+func concatFinal(ctx context.Context, clips []string, out, workDir string, onInterrupt func()) error {
 	outDir := filepath.Dir(out)
 	tmp, err := os.CreateTemp(outDir, ".production-*.mp4")
 	if err != nil {
@@ -594,7 +590,7 @@ func concatFinal(clips []string, out, workDir string, onInterrupt func()) error 
 		}
 		_ = os.Remove(tmpOut)
 	}
-	if err := concat(clips, tmpOut, workDir, cleanupConcatOnInterrupt); err != nil {
+	if err := concat(ctx, clips, tmpOut, workDir, cleanupConcatOnInterrupt); err != nil {
 		_ = os.Remove(tmpOut)
 		return err
 	}
@@ -606,7 +602,7 @@ func concatFinal(clips []string, out, workDir string, onInterrupt func()) error 
 }
 
 // concat joins normalized clips (same codec/geometry) via the concat demuxer.
-func concat(clips []string, out, workDir string, onInterrupt func()) error {
+func concat(ctx context.Context, clips []string, out, workDir string, onInterrupt func()) error {
 	list := filepath.Join(workDir, "concat.txt")
 	var b strings.Builder
 	for _, c := range clips {
@@ -619,9 +615,8 @@ func concat(clips []string, out, workDir string, onInterrupt func()) error {
 	if err := os.WriteFile(list, []byte(b.String()), 0o644); err != nil {
 		return err
 	}
-	cmd := exec.Command("ffmpeg", "-y", "-f", "concat", "-safe", "0",
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
 		"-i", list, "-c", "copy", out)
-	cmd.Stderr = os.Stderr
 	if err := runProductionCommand(cmd, onInterrupt); err != nil {
 		return fmt.Errorf("concat: %w", err)
 	}

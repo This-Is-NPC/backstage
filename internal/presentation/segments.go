@@ -1,7 +1,6 @@
 package presentation
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/This-Is-NPC/backstage/internal/encode"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
 
@@ -34,6 +34,10 @@ type segmentKeyV1 struct {
 }
 
 type eventKeyV1 struct {
+	Actions    []ActionSpan      `json:"actions,omitempty"`
+	Camera     map[string]Camera `json:"camera,omitempty"`
+	Theme      *Theme            `json:"theme,omitempty"`
+	Card       *Card             `json:"card,omitempty"`
 	At         string            `json:"at"`
 	Layout     string            `json:"layout"`
 	Slots      map[string]string `json:"slots"`
@@ -47,8 +51,9 @@ type eventKeyV1 struct {
 }
 
 type transitionKeyV1 struct {
-	Effect   string `json:"effect"`
-	Duration string `json:"duration"`
+	Effect    string `json:"effect"`
+	Duration  string `json:"duration"`
+	Direction string `json:"direction,omitempty"`
 }
 
 type overlapKeyV1 struct {
@@ -59,13 +64,16 @@ type overlapKeyV1 struct {
 }
 
 type textKeyV1 struct {
-	At   string `json:"at"`
-	End  string `json:"end"`
-	Text string `json:"text"`
-	Slot string `json:"slot"`
+	Entrance Motion  `json:"entrance,omitempty"`
+	FontSize float64 `json:"font-size,omitempty"`
+	At       string  `json:"at"`
+	End      string  `json:"end"`
+	Text     string  `json:"text"`
+	Slot     string  `json:"slot"`
 }
 
 type segmentTrackV1 struct {
+	Camera   Camera `json:"camera"`
 	Key      string `json:"key"`
 	From     int    `json:"from"`
 	To       int    `json:"to"`
@@ -104,7 +112,7 @@ func (s *segmentCache) dest(key string) string {
 
 func embeddedWebHashes() map[string]string {
 	out := map[string]string{}
-	for _, name := range []string{"runtime.html", "template.html", "visual.html"} {
+	for _, name := range []string{"runtime.html", "template.html", "visual.html", "graphics.js", "composition.html"} {
 		b, err := web.ReadFile("web/" + name)
 		if err != nil {
 			panic(err)
@@ -115,50 +123,30 @@ func embeddedWebHashes() map[string]string {
 	return out
 }
 
-func vaapiEncoder(p *Plan) bool {
-	return p.Project != nil && p.Project.Render.Encoder == "vaapi"
-}
-
-// encoderInit opens the GPU before the inputs so encoderUpload can reach it.
-func encoderInit(p *Plan) []string {
-	if vaapiEncoder(p) {
-		return []string{"-init_hw_device", "vaapi=va", "-filter_hw_device", "va"}
+func (p *Plan) encoder() encode.Encoder {
+	if p.Project == nil {
+		return ""
 	}
-	return nil
-}
-
-// encoderUpload ends the filter chain that feeds the encoder.
-func encoderUpload(p *Plan) string {
-	if vaapiEncoder(p) {
-		return "format=nv12,hwupload"
-	}
-	return ""
-}
-
-func codecArgs(p *Plan) []string {
-	if vaapiEncoder(p) {
-		return []string{"-an", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "20"}
-	}
-	return []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"}
+	return encode.Encoder(p.Project.Render.Encoder)
 }
 
 func encodeTail(p *Plan, encodeThreads int, out string) []string {
-	return append(codecArgs(p), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
+	return append(p.encoder().Args(), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
 }
 
 func framesBaseArgs(p *Plan, opts renderOpts) []string {
-	args := append(encoderInit(p), "-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-")
+	args := append(p.encoder().Init(), "-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-")
 	var vf []string
 	if opts.Scale != 1 {
 		vf = append(vf, draftCropFilter())
 	}
-	if up := encoderUpload(p); up != "" {
+	if up := p.encoder().Upload(); up != "" {
 		vf = append(vf, up)
 	}
 	if len(vf) > 0 {
 		args = append(args, "-vf", strings.Join(vf, ","))
 	}
-	return append(args, codecArgs(p)...)
+	return append(args, p.encoder().Args()...)
 }
 
 func segmentEncodeArgs(p *Plan, opts renderOpts) []string {
@@ -169,35 +157,13 @@ func encoderArgs(p *Plan, opts renderOpts, encodeThreads int, out string) []stri
 	return append(framesBaseArgs(p, opts), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
 }
 
-// probeEncoder encodes one frame at the render size before any chunk starts
-// and returns the GPU driver, which the segment key records. libx264 needs no
-// probe and returns "".
-func probeEncoder(ctx context.Context, p *Plan) (string, error) {
-	if !vaapiEncoder(p) {
-		return "", nil
-	}
-	args := append(encoderInit(p), "-v", "verbose", "-f", "lavfi", "-i", fmt.Sprintf("color=s=%dx%d:r=%d:d=1", p.Width, p.Height, p.FPS), "-vf", encoderUpload(p))
-	args = append(args, codecArgs(p)...)
-	args = append(args, "-frames:v", "1", "-f", "null", "-")
-	b, err := command(ctx, "ffmpeg", args...).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("render.encoder vaapi: %w: %s", err, strings.TrimSpace(string(b)))
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if _, driver, ok := strings.Cut(line, "VAAPI driver: "); ok {
-			return strings.TrimSpace(driver), nil
-		}
-	}
-	return "", fmt.Errorf("render.encoder vaapi: FFmpeg did not report the VAAPI driver")
-}
-
 func textSpanKeys(spans []TextSpan, first, end, fps int) []textKeyV1 {
 	chunkStart := float64(first) / float64(fps)
 	chunkEnd := float64(end) / float64(fps)
 	var out []textKeyV1
 	for _, s := range spans {
 		if s.At < chunkEnd && s.End > chunkStart {
-			out = append(out, textKeyV1{At: num(s.At), End: num(s.End), Text: s.Text, Slot: s.Slot})
+			out = append(out, textKeyV1{At: num(s.At), End: num(s.End), Text: s.Text, Slot: s.Slot, Entrance: s.Entrance, FontSize: s.FontSize})
 		}
 	}
 	return out
@@ -245,6 +211,9 @@ func (s *segmentCache) eventEntryHash(e Event) (string, error) {
 		if sc == nil {
 			return "", fmt.Errorf("unknown visual scene %q", e.Scene)
 		}
+		if sc.Composition != nil {
+			return hashJSON(sc.Composition), nil
+		}
 		abs, err := s.plan.Project.InputPath(sc.Entry)
 		if err != nil {
 			return "", err
@@ -276,6 +245,7 @@ func (s *segmentCache) slottedTrackKeys(e Event, first, end int) ([]segmentTrack
 			return nil, err
 		}
 		out = append(out, segmentTrackV1{
+			Camera:   tr.Camera,
 			Key:      trackCacheKey(src, tr.Segments, s.plan.FPS, s.cache.ffmpeg),
 			From:     trackFrame(tr, first, s.plan.FPS),
 			To:       trackFrame(tr, end-1, s.plan.FPS),
@@ -302,11 +272,14 @@ func (s *segmentCache) eventKey(e Event, first, end int) (eventKeyV1, error) {
 		}
 	}
 	return eventKeyV1{
+		Actions: s.plan.Actions,
+		Camera:  e.Camera,
+		Theme:   s.plan.Document.Theme, Card: e.Card,
 		At:         num(e.At),
 		Layout:     e.Layout,
 		Slots:      e.Slots,
 		Scene:      e.Scene,
-		Transition: transitionKeyV1{Effect: e.Transition.Effect, Duration: num(e.Transition.Duration)},
+		Transition: transitionKeyV1{Effect: e.Transition.Effect, Duration: num(e.Transition.Duration), Direction: e.Transition.Direction},
 		Parameters: s.plan.Document.Parameters,
 		Narration:  narration,
 		Text:       textSpanKeys(s.plan.Text, first, end, s.plan.FPS),
@@ -339,8 +312,8 @@ func (s *segmentCache) cacheKey(opts renderOpts, ch chunkRange) (string, error) 
 		Event:   ev,
 	}
 	if opts.Scale == 1 {
-		if _, _, ok := stillFadeTimes(p, ch); ok {
-			key.V = cacheKeyVersion + "-still-fade-1"
+		if _, _, ok := stillTransitionTimes(p, ch); ok {
+			key.V = cacheKeyVersion + "-still-transition-1"
 		}
 	}
 	if chunkTransition(p, ch) {

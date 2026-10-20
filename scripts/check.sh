@@ -12,7 +12,7 @@ echo ">> golangci-lint"; golangci-lint run
 echo ">> govulncheck";   ./scripts/check-vulnerabilities.sh
 
 echo ">> deadcode"
-# deadcode needs Go 1.26's go/types to load go-json-experiment without panicking.
+# Pin the analysis tool for reproducible reachability checks.
 dead="$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 ./...)"
 if [ -n "$dead" ]; then
   echo "FAIL: functions unreachable from main (move test-only helpers into _test.go):" >&2

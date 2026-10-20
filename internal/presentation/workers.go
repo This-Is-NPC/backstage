@@ -139,12 +139,33 @@ func planChunks(p *Plan, first, end int) []chunkRange {
 		if i > 0 && e.Transition.Duration > 0 {
 			addCut(e.At + e.Transition.Duration)
 		}
+		if e.Card != nil {
+			addCut(e.At + e.Card.Entrance.Duration)
+			if e.Card.Strike {
+				addCut(e.At + e.Card.Entrance.Duration + 0.35)
+			}
+		}
+		for _, id := range e.Slots {
+			for _, key := range p.eventCamera(i, id).Keyframes {
+				addCut(key.At)
+			}
+		}
 		for _, span := range p.Text {
+			if span.At < span.End && span.Entrance.Duration > 0 && span.Entrance.Effect != "none" {
+				addCut(span.At + span.Entrance.Duration)
+			}
 			if span.At >= span.End {
 				continue
 			}
 			for _, at := range [...]float64{span.At, span.End} {
 				addCut(at)
+			}
+		}
+		for _, span := range p.Actions {
+			addCut(span.At)
+			addCut(span.End)
+			if span.Pointer != nil && span.Pointer.Click {
+				addCut(span.At + 0.35)
 			}
 		}
 		sort.Ints(cuts)

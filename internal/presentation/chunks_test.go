@@ -653,7 +653,7 @@ func countKind(kinds []string, want string) int {
 }
 
 func runtimeEncodeThreads(p *Plan) int {
-	_, _, enc := resolveRenderThreads(planThreadCfg(p), len(p.Tracks))
+	_, _, enc := planThreadCfg(p).Resolve(len(p.Tracks))
 	return chunkEncodeThreads(enc, 1)
 }
 

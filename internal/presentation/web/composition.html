@@ -1,0 +1,48 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden}
+#composition{position:absolute;transform-origin:0 0;overflow:hidden}
+</style></head><body><div id="composition"></div><script>
+// This renderer only interprets data. Project files contain no executable code.
+const root = document.getElementById('composition');
+const intervals = [];
+let initialized = false;
+window.backstageTemplate = {version:1,captionSlots:[]};
+function createNode(node, svg = false) {
+  if (node.tag === '#text') return document.createTextNode(node.text || '');
+  const tag = node.tag || 'div';
+  svg = svg || tag === 'svg';
+  const el = svg ? document.createElementNS('http://www.w3.org/2000/svg', tag) : document.createElement(tag);
+  for (const [key,value] of Object.entries(node.attributes || {})) el.setAttribute(key,value);
+  for (const [key,value] of Object.entries(node.style || {})) {
+    if (key.includes('-')) el.style.setProperty(key,value);
+    else el.style[key] = value;
+  }
+  if (node.text) el.textContent = node.text;
+  for (const child of node.children || []) el.append(createNode(child,svg));
+  if (node.start || node.end) intervals.push({el,start:node.start || 0,end:node.end || Infinity,display:el.style.display});
+  for (const animation of node.animate || []) {
+    const keys = animation.keyframes, start = keys[0].at, duration = keys.at(-1).at-start;
+    const frames = keys.map(key => ({[animation.property]:key.value,offset:(key.at-start)/duration,easing:key.ease || 'linear'}));
+    const instance = el.animate(frames,{delay:start*1000,duration:duration*1000,fill:'both'});
+    instance.pause();
+  }
+  return el;
+}
+window.render = async context => {
+  const composition = context.composition;
+  if (!initialized) {
+    await Promise.all((composition.stylesheets || []).map(url => new Promise((resolve,reject) => {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet'; link.href = url;
+      link.onload = resolve; link.onerror = () => reject(Error('stylesheet load failed: '+url));
+      document.head.append(link);
+    })));
+    Object.assign(root.style,{width:composition.width+'px',height:composition.height+'px'});
+    for (const node of composition.nodes) root.append(createNode(node));
+    initialized = true;
+  }
+  root.style.transform = `scale(${Math.min(innerWidth/composition.width,innerHeight/composition.height)})`;
+  for (const item of intervals) item.el.style.display = context.localTime >= item.start && context.localTime < item.end ? item.display : 'none';
+};
+</script></body></html>

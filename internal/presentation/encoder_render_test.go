@@ -19,7 +19,7 @@ func requireVAAPI(t *testing.T, p *Plan) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := probeEncoder(ctx, p); err != nil {
+	if _, err := p.encoder().Probe(ctx, p.Width, p.Height, p.FPS); err != nil {
 		t.Skip(err)
 	}
 }

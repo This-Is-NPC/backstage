@@ -45,7 +45,7 @@ func TestResolveRenderThreadsDefaults(t *testing.T) {
 	if n < 1 {
 		n = 1
 	}
-	prep, filter, enc := resolveRenderThreads(scene.RenderThreads{}, 3)
+	prep, filter, enc := (scene.RenderThreads{}).Resolve(3)
 	w := 3
 	if w > n {
 		w = n
@@ -57,7 +57,7 @@ func TestResolveRenderThreadsDefaults(t *testing.T) {
 	if prep != wantPrep || filter != 1 || enc != n {
 		t.Fatalf("defaults prepare=%d filter=%d encode=%d want %d 1 %d", prep, filter, enc, wantPrep, n)
 	}
-	prep, filter, enc = resolveRenderThreads(scene.RenderThreads{Prepare: 7, Filter: 3, Encode: 5}, 8)
+	prep, filter, enc = (scene.RenderThreads{Prepare: 7, Filter: 3, Encode: 5}).Resolve(8)
 	if prep != 7 || filter != 3 || enc != 5 {
 		t.Fatalf("configured %+v", []int{prep, filter, enc})
 	}

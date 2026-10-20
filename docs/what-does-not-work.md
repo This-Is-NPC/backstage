@@ -7,17 +7,19 @@ item states what happens, and what to do until it is corrected.
 
 ## 1. Caption timing is not inferred from recording steps
 
-**What happens.** Backstage does not write each action's time beside the take.
-Narration cues need explicit times. Captions can now be added after recording
-through a presentation.
+**What happens.** Backstage records action start/end times in the take's facts.
+It does not generate narration text or cue intervals from those actions.
+Existing takes without step timings need to be recorded again for step anchors.
 
 **What to do.** Declare text and times in the scene's `narration.cues`, then
 select cue IDs and a clock in [presentation captions](presentations.md#captions).
-Do not assume action delays exactly identify the frames of an existing take.
+Use [step or cue anchors](presentations.md#editorial-graphics-and-recorded-timing)
+for placement when recorded evidence is available; action delays are not a
+substitute for that evidence.
 
 ---
 
-## 2. Legacy produce is sequential
+## 2. Productions record scenes sequentially
 
 **What happens.** `produce` records and joins scenes one after another. It does
 not position several clips inside the same frame.
@@ -53,11 +55,15 @@ several frames each second, and not thirty.
 scenes that the guest cannot record.
 
 **What it buys, and it is not nothing.** It measures the rate its grabs
-actually achieved and assembles at that rate, so a take is real time by
+actually achieved and remuxes at that rate, so a take is real time by
 construction and has no ending to lose -- which is the defect in section 6, and
 the framebuffer recorder does not have it. A measured take: a scene scripted at
 3069 seconds came back 3075.2 seconds long, 8574 frames at 2.8 a second, on a
 loaded guest.
+
+Screenshots now stream through memory into FFmpeg, followed by a remux using
+the measured capture clock. This removes screenshot-file I/O and lowers closing
+latency; libvirt screenshot acquisition still limits the frame rate.
 
 **What to do in the meantime.** Use `inside` for a scene whose picture moves,
 and where a coarse rate would show. Use `framebuffer` for a scene that ends its
@@ -173,3 +179,10 @@ extra field for it.
   enough time for the animation and a reading pause; inspect the final frame.
 - Long or high-resolution renders can need substantial intermediate disk space.
   Rendering does not require keeping every raw frame in memory.
+- Native JSON compositions uniformly scale their design coordinates. A new
+  output aspect does not automatically rearrange their elements, and `lint`
+  does not establish that arbitrary composition text fits or matches a reference.
+- `export-remotion` is an optional editable React starting point. Native layouts,
+  visual scenes and graphics remain metadata for the React implementation;
+  use native rendering to retain those visuals. There is no automatic Remotion
+  importer.

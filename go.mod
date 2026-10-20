@@ -1,6 +1,6 @@
 module github.com/This-Is-NPC/backstage
 
-go 1.25.13
+go 1.26.10
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327

@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "duration": 16,
+  "render": {
+    "w": 1280,
+    "h": 720,
+    "fps": 30
+  },
+  "theme": {
+    "accent": "#f7768e",
+    "title-size": 64,
+    "text-size": 32
+  },
+  "timeline": [
+    {
+      "at": 0,
+      "card": {
+        "type": "title",
+        "title": "Meet Backstage",
+        "subtitle": "Record once. Compose again."
+      }
+    },
+    {
+      "at": 3,
+      "card": {
+        "type": "statement",
+        "title": "Repeated manual editing",
+        "strike": true
+      }
+    },
+    {
+      "at": 6,
+      "card": {
+        "type": "badge",
+        "title": "NEW",
+        "entrance": {
+          "effect": "scale"
+        }
+      }
+    },
+    {
+      "at": 8,
+      "card": {
+        "type": "lower-third",
+        "title": "Declarative video",
+        "subtitle": "Reusable scenes and a shared theme",
+        "entrance": {
+          "effect": "type"
+        }
+      }
+    },
+    {
+      "at": 11,
+      "card": {
+        "type": "cta",
+        "title": "Make your next demo",
+        "subtitle": "Start with a recorded scene",
+        "url": "example.com",
+        "entrance": {
+          "effect": "fade"
+        }
+      }
+    }
+  ]
+}

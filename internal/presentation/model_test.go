@@ -12,7 +12,7 @@ import (
 func TestSourceSpanRepeatsAndCuts(t *testing.T) {
 	tr := CompiledTrack{Track: Track{Start: 1, Segments: []Segment{{From: 0, To: 4, Rate: 2}, {From: 2, To: 4, Rate: 1}}}}
 	spans := mapSpan(tr, 1, 3)
-	want := [][3]float64{{1.5, 2.5, 2}, {3, 4, 1}}
+	want := []mappedSpan{{1.5, 2.5, 2, 1, 3}, {3, 4, 1, 2, 3}}
 	if len(spans) != len(want) {
 		t.Fatal(spans)
 	}

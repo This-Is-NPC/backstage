@@ -2,6 +2,10 @@
 
 Reference for HTML/CSS/SVG used by [presentations](presentations.md).
 
+Native JSON `composition` scenes use the built-in renderer and do not need this
+custom template contract. See [Create a declarative video](how-to-create-a-declarative-video.md)
+for elements, visibility and keyframes without a project-specific script.
+
 ```bash
 backstage template init household
 ```
@@ -32,7 +36,7 @@ geometry do not change with time (track images and captions still may).
 matches a scene. `initialize` rejects any other type, and a non-string list
 entry, with `static must be true or an array of layout names`, and a name
 that is not a key of `layouts` with `unknown layout <name>`. The built-in
-template does not declare `static`. Each static chunk probes its first and
+template declares `static: true`. Each static chunk probes its first and
 last frame; the worker keeps one below still and one above still and
 recaptures when the event, slot geometry, or (for above) the chunk caption
 set changes. A live CSS or SMIL animation, or first/last geometry that do
@@ -48,7 +52,8 @@ layout before resolving. Set `data-fit="cover"` to crop a video to its slot,
 `contain` to preserve the entire screen, or `fill` to stretch. Only those
 three values exist: any other `data-fit` (including `none` and `scale-down`)
 is an error at initialize; the message names the slot and the value. The built-in template provides `single` (`center`), `two-screens` (`left`, `right`) and
-`three-screens` (`left`, `right-top`, `right-bottom`).
+`three-screens` (`left`, `right-top`, `right-bottom`), plus `release` (`center`)
+with responsive source cropping.
 
 Slots describe axis-aligned screen rectangles. Their border, background,
 rounded corners and shadow are carried with the rendered screen; CSS controls

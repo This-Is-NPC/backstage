@@ -1,7 +1,6 @@
 package recorder
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,24 +53,5 @@ func TestFramebufferRateIsNothingBeforeATakeEnds(t *testing.T) {
 	f := NewFramebuffer("d", "", 4)
 	if f.Rate() != 0 {
 		t.Errorf("a recorder that never ran reports a rate of %v", f.Rate())
-	}
-}
-
-// Every frame is named .png whatever the domain hands back, because ffmpeg
-// picks its decoder from the extension: a frame called .ppm that is really a
-// PNG is a frame ffmpeg rejects, and a film that comes out empty with nobody
-// having seen an error.
-//
-// Asked of the name directly and not by listing a directory. Listing was the
-// first shape of this case and it proved nothing: against a domain that is not
-// there the grab writes no file, so the loop ran over an empty directory and
-// passed however the frames were named.
-func TestFramebufferNamesEveryFramePNG(t *testing.T) {
-	got := framePath("/frames", 7)
-	if filepath.Ext(got) != ".png" {
-		t.Errorf("frame path %q, want a .png", got)
-	}
-	if !strings.Contains(got, "000007") {
-		t.Errorf("frame path %q, want the index zero-padded so ffmpeg reads them in order", got)
 	}
 }

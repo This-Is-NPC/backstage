@@ -289,10 +289,20 @@ func (g *Guest) Session() string {
 
 // InSession runs a command inside the account's own session.
 func (g *Guest) InSession(command string) (string, error) {
+	return g.SSH(g.sessionCommand(command))
+}
+
+// SessionCommand builds a cancellable streaming command with the same SSH and
+// session policy as InSession. The caller owns its pipes and Wait.
+func (g *Guest) SessionCommand(ctx context.Context, command string) *exec.Cmd {
+	return exec.CommandContext(ctx, "ssh", g.sshArgs(g.sessionCommand(command))...)
+}
+
+func (g *Guest) sessionCommand(command string) string {
 	// As the filmed account, through sudo, because the ssh belongs to the admin
 	// and the session does not.
 	quoted := strings.ReplaceAll(command, "'", `'\''`)
-	return g.Root(fmt.Sprintf("-u %s bash -lc '%s; %s'", g.User, g.Session(), quoted))
+	return fmt.Sprintf("sudo -u %s bash -lc '%s; %s'", g.User, g.Session(), quoted)
 }
 
 // AssertOmarchy refuses a guest this package cannot drive.

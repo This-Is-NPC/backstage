@@ -8,6 +8,10 @@ Write the flow one time. Backstage opens the environment, drives the tools,
 shows the narration on the screen, and records the result as an `.mp4`. When the
 product changes, play the same scene again and get a new tutorial.
 
+For authored visuals, describe elements, interface states and animations in JSON.
+Backstage renders them with optional recordings, captions and audio, using local
+assets and its built-in renderer.
+
 No manual screen recording. No forgotten steps. No stale visual documentation.
 
 ---
@@ -50,14 +54,15 @@ A Backstage project is a scripted production.
 | Term | Meaning |
 | :--- | :--- |
 | **Stage** | the environment that the workflow runs in |
-| **Scene** | the script: what to type, what to press, and when |
+| **Scene** | recording steps or visual elements with their timing and animation |
+| **Presentation** | a timeline combining visual scenes and optional recordings |
 | **Prompter** | the narration box, typed like a person explains a step |
 | **Prop** | a script that a scene calls |
 | **Rehearsal** | a fast run that validates the flow before a take |
 
 You direct the scene. Backstage performs it and records the take.
 
-## How it works
+## How recording works
 
 1. Create a project with a `backstage.json` file.
 2. Define a layout: one terminal, several panes, or a virtual machine.
@@ -96,6 +101,11 @@ New here? Start with
 | `backstage takes prune` | it removes abandoned or old recorded takes |
 | `backstage rehearse SCENE` | it runs the scene fast, with no recorder |
 | `backstage produce PRODUCTION` | it joins clips and transitions into one video |
+| `backstage render NAME` | it renders declarative visuals and existing media |
+| `backstage render NAME --check` | it validates the presentation before export |
+| `backstage lint NAME` | it checks editorial typography and reading time |
+| `backstage preview NAME` | it renders a preview with playback and seek controls |
+| `backstage export-remotion NAME` | it exports media and timing for optional React authoring |
 | `backstage setup --stage LAYOUT` | it stages a layout and stops |
 | `backstage kill` | it strikes the set |
 | `backstage stage create NAME` | it creates a shared Omarchy VM ready to record |
@@ -152,13 +162,15 @@ This links the Backstage skill into `~/.agents/skills`. Run
 
 ## Declarative presentations
 
-Compose existing recordings with `backstage render`: multiple screens, HTML
-layouts, animated SVG scenes, captions and selected audio. A presentation changes
-the montage without recording another take. `preview` renders first, then opens
-playback controls. Rendering needs Chromium, FFmpeg and ffprobe.
+Create native JSON scenes with HTML/SVG elements, visibility intervals and CSS
+property keyframes. These scenes need no project-specific JavaScript, React,
+Node.js build step or recording. A presentation can combine them with recorded
+screens, cards, camera moves, captions and selected audio. `preview` renders
+first, then opens playback controls. Rendering needs Chromium, FFmpeg and ffprobe.
 
-[Follow the walkthrough](docs/how-to-compose-presentations.md) or
-[run the example](examples/presentation/README.md).
+[Create a declarative video](docs/how-to-create-a-declarative-video.md),
+[compose existing recordings](docs/how-to-compose-presentations.md), or
+[run the visual examples](examples/visual/README.md).
 
 ## Learn more
 
@@ -173,5 +185,6 @@ Full documentation is in [`docs/`](docs/README.md).
 
 ---
 
-<sub>Built for Hyprland. Needs Go, tmux, ghostty, gpu-screen-recorder, and ffmpeg.
-A virtual machine stage also needs libvirt and an Omarchy guest.</sub>
+<sub>Recording targets Hyprland and uses tmux, Ghostty, gpu-screen-recorder and
+FFmpeg. VM recording also needs libvirt and an Omarchy guest. Presentation
+rendering uses Chromium, FFmpeg and ffprobe; building from source needs Go.</sub>

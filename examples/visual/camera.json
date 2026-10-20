@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "duration": 8,
+  "render": {"w": 1280, "h": 720, "fps": 30},
+  "sources": {"demo": {"file": "demo.mp4"}},
+  "tracks": {
+    "demo": {
+      "source": "demo",
+      "camera": {"keyframes": [
+        {"at": 0, "region": {"x": 0, "y": 0, "w": 1, "h": 1}},
+        {"at": 2, "region": {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}},
+        {"at": 4, "region": {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}},
+        {"at": 6, "region": {"x": 0.5, "y": 0.5, "w": 0.5, "h": 0.5}, "ease": "ease-in-out"}
+      ]}
+    }
+  },
+  "timeline": [{"at": 0, "layout": "single", "slots": {"center": "demo"}}]
+}

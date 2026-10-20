@@ -1,7 +1,6 @@
 package presentation
 
 import (
-	"runtime"
 	"sync"
 
 	"github.com/This-Is-NPC/backstage/internal/scene"
@@ -40,34 +39,4 @@ func planThreadCfg(p *Plan) scene.RenderThreads {
 		return scene.RenderThreads{}
 	}
 	return p.Project.Render.Threads
-}
-
-func resolveRenderThreads(cfg scene.RenderThreads, tracks int) (prepare, filter, encode int) {
-	n := runtime.NumCPU()
-	if n < 1 {
-		n = 1
-	}
-	w := tracks
-	if w < 1 {
-		w = 1
-	}
-	if w > n {
-		w = n
-	}
-	prepare = cfg.Prepare
-	if prepare == 0 {
-		prepare = n / w
-		if prepare < 1 {
-			prepare = 1
-		}
-	}
-	filter = cfg.Filter
-	if filter == 0 {
-		filter = 1
-	}
-	encode = cfg.Encode
-	if encode == 0 {
-		encode = n
-	}
-	return
 }

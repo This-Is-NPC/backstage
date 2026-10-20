@@ -34,26 +34,77 @@ type EndState struct {
 
 // Facts records what a take was made against, beside the clip.
 type Facts struct {
-	Stage        string        `json:"stage,omitempty"`
-	Origin       string        `json:"origin,omitempty"`
-	StartMode    string        `json:"vm-start,omitempty"`
-	Snapshot     string        `json:"snapshot,omitempty"`
-	ISOVersion   string        `json:"iso-version,omitempty"`
-	ISOChecksum  string        `json:"iso-sha256,omitempty"`
-	Recipe       string        `json:"recipe,omitempty"`
-	Domain       string        `json:"domain,omitempty"`
-	User         string        `json:"user,omitempty"`
-	Omarchy      string        `json:"omarchy,omitempty"`
-	Address      string        `json:"address,omitempty"`
-	Made         string        `json:"made,omitempty"`
-	Backstage    string        `json:"backstage,omitempty"`
-	StartImage   string        `json:"start-image,omitempty"`
-	StartState   *StartState   `json:"start-state,omitempty"`
-	InputsSHA256 string        `json:"inputs-sha256,omitempty"`
-	EndState     *EndState     `json:"end-state,omitempty"`
-	GroupMembers []GroupMember `json:"group-members,omitempty"`
-	Result       string        `json:"result,omitempty"`
-	Timings      *Timings      `json:"timings,omitempty"`
+	Stage            string            `json:"stage,omitempty"`
+	Origin           string            `json:"origin,omitempty"`
+	StartMode        string            `json:"vm-start,omitempty"`
+	Snapshot         string            `json:"snapshot,omitempty"`
+	ISOVersion       string            `json:"iso-version,omitempty"`
+	ISOChecksum      string            `json:"iso-sha256,omitempty"`
+	Recipe           string            `json:"recipe,omitempty"`
+	Domain           string            `json:"domain,omitempty"`
+	User             string            `json:"user,omitempty"`
+	Omarchy          string            `json:"omarchy,omitempty"`
+	Address          string            `json:"address,omitempty"`
+	Made             string            `json:"made,omitempty"`
+	Backstage        string            `json:"backstage,omitempty"`
+	StartImage       string            `json:"start-image,omitempty"`
+	StartState       *StartState       `json:"start-state,omitempty"`
+	InputsSHA256     string            `json:"inputs-sha256,omitempty"`
+	EndState         *EndState         `json:"end-state,omitempty"`
+	GroupMembers     []GroupMember     `json:"group-members,omitempty"`
+	Result           string            `json:"result,omitempty"`
+	Timings          *Timings          `json:"timings,omitempty"`
+	ProductionPhases *ProductionPhases `json:"production-phases,omitempty"`
+	Steps            []Step            `json:"steps,omitempty"`
+	PointerTrace     []PointerSample   `json:"pointer-trace,omitempty"`
+}
+
+// PointerSample uses the recording clock. A nil position marks an observation gap.
+type PointerSample struct {
+	At      float64  `json:"at"`
+	Pointer *Pointer `json:"pointer"`
+}
+
+// Step records the action interval on the captured video's clock.
+type Step struct {
+	ID      string   `json:"step,omitempty"`
+	Action  string   `json:"action"`
+	Target  string   `json:"target,omitempty"`
+	Start   float64  `json:"start"`
+	End     float64  `json:"end"`
+	Keys    []string `json:"keys,omitempty"`
+	Region  *Region  `json:"region,omitempty"`
+	Pointer *Pointer `json:"pointer,omitempty"`
+}
+
+// Pointer is an observed source position, rather than an editorial guess.
+type Pointer struct {
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	Click bool    `json:"click,omitempty"`
+}
+
+type VisualState struct {
+	Region  *Region
+	Pointer *Pointer
+}
+
+// Region is a rectangle in normalized source-video coordinates.
+type Region struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
+}
+
+// ProductionPhases measures completed work in a production, in wall seconds.
+type ProductionPhases struct {
+	Record      float64 `json:"record-seconds"`
+	Retime      float64 `json:"retime-seconds"`
+	Transitions float64 `json:"transition-seconds"`
+	Normalize   float64 `json:"normalize-seconds"`
+	Concat      float64 `json:"concat-seconds"`
+	Total       float64 `json:"total-seconds"`
 }
 
 // GroupMember is one stage restored for a group start.

@@ -60,14 +60,15 @@ var inspectMedia = probe
 func probe(path string) (Media, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	b, err := command(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path).Output()
+	b, err := command(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height", "-of", "json", path).Output()
 	if err != nil {
 		return Media{}, fmt.Errorf("probe %s: %w", path, err)
 	}
 	var v struct {
 		Format  struct{ Duration string }
 		Streams []struct {
-			CodecType string `json:"codec_type"`
+			CodecType     string `json:"codec_type"`
+			Width, Height int
 		}
 	}
 	if err = json.Unmarshal(b, &v); err != nil {
@@ -81,11 +82,15 @@ func probe(path string) (Media, error) {
 	for _, s := range v.Streams {
 		m.HasAudio = m.HasAudio || s.CodecType == "audio"
 		m.HasVideo = m.HasVideo || s.CodecType == "video"
+		if s.CodecType == "video" && m.Width == 0 {
+			m.Width, m.Height = s.Width, s.Height
+		}
 	}
 	return m, nil
 }
 
 type AudioPart struct {
+	Duck, Narration                                       bool
 	ID, Path                                              string
 	At, From, To, Rate, Duration, Volume, FadeIn, FadeOut float64
 	Loop                                                  bool
@@ -94,6 +99,15 @@ type AudioPart struct {
 func (p *Plan) compileAudio() error {
 	ids := map[string]bool{}
 	for _, a := range p.Document.Audio {
+		if a.Role == "" && a.Cue != "" {
+			a.Role = "narration"
+		}
+		if a.Role != "" && a.Role != "music" && a.Role != "narration" && a.Role != "effect" {
+			return fmt.Errorf("audio %q: role must be music, narration or effect", a.ID)
+		}
+		if a.Duck && (a.Role == "narration" || a.Role == "effect") {
+			return fmt.Errorf("audio %q: only music can be ducked", a.ID)
+		}
 		if a.ID == "" || ids[a.ID] {
 			return fmt.Errorf("audio needs unique ID")
 		}
@@ -198,6 +212,8 @@ func (p *Plan) compileAudio() error {
 				part.Volume = volume
 				part.FadeIn = math.Min(a.FadeIn, part.Duration)
 				part.FadeOut = math.Min(a.FadeOut, part.Duration)
+				part.Duck = a.Duck
+				part.Narration = a.Role == "narration"
 				p.AudioParts = append(p.AudioParts, part)
 			}
 			return nil
@@ -269,7 +285,6 @@ func (p *Plan) mix(ctx context.Context, dir string, cache *renderCache) (string,
 
 func (p *Plan) mixDirect(ctx context.Context, dir string) (string, []namedSeconds, error) {
 	args := []string{"-v", "error", "-y", "-threads", "1"}
-	var paths []string
 	var parts []namedSeconds
 	for i, a := range p.AudioParts {
 		path := filepath.Join(dir, fmt.Sprintf("audio-%d.wav", i))
@@ -283,10 +298,8 @@ func (p *Plan) mixDirect(ctx context.Context, dir string) (string, []namedSecond
 			args = append(args, "-stream_loop", "-1")
 		}
 		args = append(args, "-i", path)
-		paths = append(paths, path)
 	}
 	var filters []string
-	var inputs strings.Builder
 	for i, a := range p.AudioParts {
 		delay := int64(math.Round(a.At * 48000))
 		label := fmt.Sprintf("a%d", i)
@@ -297,13 +310,15 @@ func (p *Plan) mixDirect(ctx context.Context, dir string) (string, []namedSecond
 		if a.FadeOut > 0 {
 			f += ",afade=t=out:st=" + num(a.Duration-a.FadeOut) + ":d=" + num(a.FadeOut)
 		}
-		f += fmt.Sprintf(",adelay=%dS:all=1[%s]", delay, label)
+		// Align every branch before sidechain compression as well as the final
+		// limiter; demuxer scheduling must not change filter block boundaries.
+		f += fmt.Sprintf(",adelay=%dS:all=1,apad,atrim=duration=%s,asetnsamples=n=1024:p=1[%s]", delay, num(p.Document.Duration), label)
 		filters = append(filters, f)
-		fmt.Fprintf(&inputs, "[%s]", label)
 	}
+	filters, labels := duckMix(p.AudioParts, filters)
 	// amix frame sizes follow FFmpeg's demuxer thread timing, and alimiter's
 	// latency flush depends on them; fixed frames keep the mix reproducible.
-	filters = append(filters, fmt.Sprintf("%samix=inputs=%d:normalize=0,asetnsamples=n=1024:p=1,alimiter=limit=0.95:level=0:latency=1,apad,atrim=duration=%s[mix]", inputs.String(), len(paths), num(p.Document.Duration)))
+	filters = append(filters, fmt.Sprintf("%samix=inputs=%d:normalize=0,asetnsamples=n=1024:p=1,alimiter=limit=0.95:level=0:latency=1,apad,atrim=duration=%s[mix]", strings.Join(labels, ""), len(labels), num(p.Document.Duration)))
 	path := filepath.Join(dir, "mix.wav")
 	args = append(args, "-filter_complex_threads", "1", "-filter_complex", strings.Join(filters, ";"), "-map", "[mix]", "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "-t", num(p.Document.Duration), path)
 	return path, parts, run(ctx, "ffmpeg", args...)
@@ -331,7 +346,7 @@ func prepareTracks(ctx context.Context, p *Plan, work string, progress io.Writer
 		noteRender(renderNote{PreparedPaths: map[string]string{}})
 		return nil, nil, nil
 	}
-	prepThreads, filterThreads, _ := resolveRenderThreads(planThreadCfg(p), len(ids))
+	prepThreads, filterThreads, _ := planThreadCfg(p).Resolve(len(ids))
 	limit := runtime.NumCPU()
 	if limit < 1 {
 		limit = 1

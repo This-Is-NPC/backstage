@@ -95,13 +95,17 @@ func TestProduceRunMintsOneGenerationForGroupScenes(t *testing.T) {
 		StateGroups: map[string][]string{"household": {"laptop", "server"}},
 	}
 	var got []string
+	video, err := os.ReadFile(madeClip(t, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
 	prevEng := runEngine
 	runEngine = func(_ *scene.Project, s *scene.Scene, opts engine.Options) error {
 		got = append(got, opts.StateGeneration)
 		if err := os.MkdirAll(filepath.Dir(opts.OutPath), 0o700); err != nil {
 			return err
 		}
-		if err := os.WriteFile(opts.OutPath, []byte(s.Name), 0o644); err != nil {
+		if err := os.WriteFile(opts.OutPath, video, 0o644); err != nil {
 			return err
 		}
 		return facts.Write(facts.Path(opts.OutPath), facts.Facts{Result: facts.ResultOK, Backstage: "t"})
@@ -121,7 +125,7 @@ func TestProduceRunMintsOneGenerationForGroupScenes(t *testing.T) {
 		runProductionCommand = prevCmd
 	})
 
-	_, err := Run(Options{
+	_, err = Run(Options{
 		Project: p, Prod: scene.Production{Scenes: []scene.SceneRef{
 			{Scene: "make-laptop"}, {Scene: "make-server"},
 		}},

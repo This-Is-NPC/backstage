@@ -234,11 +234,40 @@ invalidation), and one-worker ffmpeg args
 The generator uses tones and numbered
 frames, so no VM, speech provider or externally recorded footage is required.
 
-The quality gate builds govulncheck with Go 1.26.8 because Go 1.25's `go/types`
-panics while analyzing chromedp's JSON dependency. The scanner still loads the
-project using its Go environment; the project targets Go 1.25.13. The first run
-requires downloading the scanner toolchain. Source-level vulnerability analysis
-remains enabled. See [the upstream issue](https://github.com/golang/go/issues/73871).
+The project and release builds require Go 1.26.10. The quality gate runs the
+pinned govulncheck and deadcode tools on that supported toolchain, without a
+separate scanner runtime. The scanner is installed into a temporary directory.
+Go 1.26.10 includes the current security fixes for this release branch; see the
+[official release history](https://go.dev/doc/devel/release#go1.26.10).
 
 Public contracts: [Presentations](../presentations.md), [Templates](../templates.md)
 and [Scenes](../scenes.md).
+
+`remotion.go` exports an optional portable React project. It shares track
+preparation, audio mixing, output protection and source-span mapping with the
+native renderer. Original media/facts are deduplicated; prepared streams retain
+their decoded pixels in lossless H.264. Step/cue times are already resolved,
+including repeated cuts. The exported `stage.jsx` receives those intervals as
+active props; it does not reconstruct timings or duplicate native HTML layout
+rendering. Existing destinations are refused and cancellation removes temporary
+exports. Integration coverage checks native browser playback as well as exact
+prepared frame PTS and pixels.
+
+## Declarative visual compositions
+
+A visual scene can own a `composition` instead of an HTML entry. Scene
+validation checks the element tags, attributes, visibility intervals and CSS
+property keyframes. `timelineEvents` resolves local stylesheet and image paths
+on a copy, then selects the embedded `composition.html` renderer. The runtime
+passes the composition through the same scene context as HTML visuals.
+
+The renderer creates HTML/SVG nodes once, applies scene-clock visibility and
+creates paused Web Animations. The common runtime assigns their current time on
+every draw, including backward seeks. No project script or application bundle
+is evaluated. Composition coordinates scale uniformly to the output viewport.
+
+Segment entry hashes include the authored composition data; embedded renderer
+hashes include `composition.html`. Stylesheets, fonts and images loaded through
+the event asset route enter the existing resource manifest, so changes invalidate
+cached chunks and appear in export facts. The original scene object retains its
+portable project-relative resource paths.

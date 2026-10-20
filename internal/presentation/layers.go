@@ -69,6 +69,9 @@ type slotBox struct {
 	X, Y, W, H       int
 	CX, CY, CW, CH   int
 	InnerRadius      float64
+	Camera           Camera
+	CameraAt         float64
+	CameraFPS        int
 }
 
 type layerDecision struct {
@@ -84,7 +87,7 @@ func currentLayerMode() string {
 }
 
 func skipLayerProbe(p *Plan, opts renderOpts, ch chunkRange) bool {
-	return chunkTransition(p, ch) || opts.Scale != 1
+	return chunkTransition(p, ch) || opts.Scale != 1 || !p.cameraChunkStableAspect(ch)
 }
 
 func snapEdges(x, span float64) (origin, size int) {
@@ -177,9 +180,15 @@ func visibleCaptions(text []TextSpan, t float64) []probeCaption {
 }
 
 func chunkCaptionsStable(p *Plan, ch chunkRange) (string, bool) {
-	key := captionKey(visibleCaptions(p.Text, float64(ch.First)/float64(p.FPS)))
+	for n := ch.First; n < ch.End; n++ {
+		if p.graphicsMoving(float64(n) / float64(p.FPS)) {
+			return "", false
+		}
+	}
+	keyAt := func(t float64) string { return captionKey(visibleCaptions(p.Text, t)) + p.actionKey(t) }
+	key := keyAt(float64(ch.First) / float64(p.FPS))
 	for n := ch.First + 1; n < ch.End; n++ {
-		if captionKey(visibleCaptions(p.Text, float64(n)/float64(p.FPS))) != key {
+		if keyAt(float64(n)/float64(p.FPS)) != key {
 			return key, false
 		}
 	}
@@ -238,6 +247,9 @@ func geometryEligible(g probeGeo) layerDecision {
 }
 
 func chunkEligible(p *Plan, ch chunkRange, probes []probeFrame) layerDecision {
+	if _, stable := chunkCaptionsStable(p, ch); !stable {
+		return layerDecision{Reason: "moving graphics"}
+	}
 	if len(probes) != ch.End-ch.First {
 		return layerDecision{Reason: "probe count"}
 	}
@@ -294,26 +306,30 @@ func chunkEligible(p *Plan, ch chunkRange, probes []probeFrame) layerDecision {
 }
 
 func staticChunkEligible(p *Plan, ch chunkRange, first, last probeFrame) (layerDecision, string) {
-	if d := tracksVisibleAll(p, ch); !d.Layered {
-		return d, ""
-	}
 	caps, ok := chunkCaptionsStable(p, ch)
 	if !ok {
 		return layerDecision{Reason: "captions"}, ""
 	}
+	return stableSlotGeometry(p, ch, first, last), caps
+}
+
+func stableSlotGeometry(p *Plan, ch chunkRange, first, last probeFrame) layerDecision {
+	if d := tracksVisibleAll(p, ch); !d.Layered {
+		return d
+	}
 	ev := p.Document.Timeline[ch.Event]
 	if first.Event != ch.Event || last.Event != ch.Event {
-		return layerDecision{Reason: "event"}, caps
+		return layerDecision{Reason: "event"}
 	}
 	if len(first.Geometry) != len(ev.Slots) {
-		return layerDecision{Reason: "geometry count"}, caps
+		return layerDecision{Reason: "geometry count"}
 	}
 	for _, g := range first.Geometry {
 		if d := geometryEligible(g); !d.Layered {
-			return d, caps
+			return d
 		}
 	}
-	return layerDecision{Layered: true}, caps
+	return layerDecision{Layered: true}
 }
 
 func staticGuard(first, last probeFrame) (ok bool, reason string) {
@@ -380,6 +396,9 @@ func scaleFilter(destW, destH int) string {
 }
 
 func imageRect(box slotBox, srcW, srcH int) (x, y, w, h int) {
+	if len(box.Camera.Keyframes) > 0 {
+		srcW, srcH = cameraSourceSize(srcW, srcH, box.Camera.region(box.CameraAt))
+	}
 	switch box.Fit {
 	case "cover":
 		return 0, 0, box.CW, box.CH
@@ -392,6 +411,9 @@ func imageRect(box slotBox, srcW, srcH int) (x, y, w, h int) {
 }
 
 func slotScaleFilter(box slotBox, srcW, srcH int) string {
+	if len(box.Camera.Keyframes) > 0 {
+		return cameraScaleFilter(box, srcW, srcH)
+	}
 	switch box.Fit {
 	case "cover":
 		tw, th, cx, cy := coverPad(srcW, srcH, box.CW, box.CH)
@@ -616,7 +638,7 @@ func stillHold(fps int) string {
 	return fmt.Sprintf("loop=loop=-1:size=1,settb=1/%d,setpts=N", fps)
 }
 
-func layerGraph(boxes []slotBox, srcSizes [][2]int, haves []int, fps int, outLabel string) string {
+func layerGraph(boxes []slotBox, srcSizes [][2]int, haves []int, fps int, outLabel string, animated bool) string {
 	if fps < 1 {
 		fps = 1
 	}
@@ -628,7 +650,11 @@ func layerGraph(boxes []slotBox, srcSizes [][2]int, haves []int, fps int, outLab
 	for i, box := range boxes {
 		have := haves[i]
 		trimPad := fmt.Sprintf("[t%d]", i)
-		fmt.Fprintf(&b, "[%d:v]trim=start_frame=0:end_frame=%d,setpts=N/%d/TB%s;", 1+i, have, fps, trimPad)
+		holdTrack := ""
+		if len(box.Camera.Keyframes) > 0 {
+			holdTrack = ",tpad=stop_mode=clone:stop=-1"
+		}
+		fmt.Fprintf(&b, "[%d:v]trim=start_frame=0:end_frame=%d,setpts=N/%d/TB%s%s;", 1+i, have, fps, holdTrack, trimPad)
 		scaled := fmt.Sprintf("[s%d]", i)
 		fmt.Fprintf(&b, "%s%s%s;", trimPad, slotScaleFilter(box, srcSizes[i][0], srcSizes[i][1]), scaled)
 		fmt.Fprintf(&b, "[%d:v]format=gray,%s[g%d];", 1+nTracks+i, hold, i)
@@ -637,11 +663,24 @@ func layerGraph(boxes []slotBox, srcSizes [][2]int, haves []int, fps int, outLab
 		fmt.Fprintf(&b, "%s[m%d]overlay=%d:%d:eof_action=repeat:format=rgb,format=rgba%s;", cur, i, box.CX, box.CY, next)
 		cur = next
 	}
-	fmt.Fprintf(&b, "[%d:v]format=rgba,%s[above];%s[above]overlay=0:0:eof_action=repeat:format=rgb,format=rgba[%s]", 1+2*nTracks, hold, cur, outLabel)
+	aboveTime := hold
+	if animated {
+		aboveTime = fmt.Sprintf("settb=1/%d,setpts=N", fps)
+	}
+	fmt.Fprintf(&b, "[%d:v]format=rgba,%s[above];%s[above]overlay=0:0:eof_action=repeat:format=rgb,format=rgba[%s]", 1+2*nTracks, aboveTime, cur, outLabel)
 	return b.String()
 }
 
 func compositeChunk(ctx context.Context, p *Plan, ch chunkRange, trackPaths map[string]string, boxes []slotBox, below, above []byte, encodeThreads int, work, out string, meta *trackMeta, observe func(n int, png []byte) error) error {
+	return compositeLayers(ctx, p, ch, trackPaths, boxes, layerImages{Below: below, Above: above}, encodeThreads, work, out, meta, observe)
+}
+
+type layerImages struct {
+	Below, Above  []byte
+	AboveSequence string
+}
+
+func compositeLayers(ctx context.Context, p *Plan, ch chunkRange, trackPaths map[string]string, boxes []slotBox, images layerImages, encodeThreads int, work, out string, meta *trackMeta, observe func(n int, png []byte) error) error {
 	nOut := ch.End - ch.First
 	dir := filepath.Join(work, fmt.Sprintf("layer-%d", ch.Index))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -649,17 +688,22 @@ func compositeChunk(ctx context.Context, p *Plan, ch chunkRange, trackPaths map[
 	}
 	defer os.RemoveAll(dir)
 	write := func(name string, b []byte) error { return os.WriteFile(filepath.Join(dir, name), b, 0o644) }
-	if err := write("below.png", below); err != nil {
+	if err := write("below.png", images.Below); err != nil {
 		return err
 	}
-	if err := write("above.png", above); err != nil {
-		return err
+	if images.AboveSequence == "" {
+		if err := write("above.png", images.Above); err != nil {
+			return err
+		}
 	}
 	args := append([]string{"-v", "error", "-y"}, stillInput(p.FPS, filepath.Join(dir, "below.png"))...)
 	sizes := make([][2]int, len(boxes))
 	haves := make([]int, len(boxes))
 	var maskFiles []string
 	for i, box := range boxes {
+		box.Camera = p.eventCamera(ch.Event, box.Track)
+		box.CameraAt, box.CameraFPS = float64(ch.First)/float64(p.FPS), p.FPS
+		boxes[i] = box
 		path := trackPaths[box.Track]
 		tr, ok := p.Tracks[box.Track]
 		if !ok {
@@ -693,8 +737,12 @@ func compositeChunk(ctx context.Context, p *Plan, ch chunkRange, trackPaths map[
 	for _, path := range maskFiles {
 		args = append(args, stillInput(p.FPS, path)...)
 	}
-	args = append(args, stillInput(p.FPS, filepath.Join(dir, "above.png"))...)
-	return encodeGraph(ctx, p, args, layerGraph(boxes, sizes, haves, p.FPS, "out"), ch.First, nOut, encodeThreads, out, observe)
+	if images.AboveSequence != "" {
+		args = append(args, "-framerate", strconv.Itoa(p.FPS), "-i", images.AboveSequence)
+	} else {
+		args = append(args, stillInput(p.FPS, filepath.Join(dir, "above.png"))...)
+	}
+	return encodeGraph(ctx, p, args, layerGraph(boxes, sizes, haves, p.FPS, "out", images.AboveSequence != ""), ch.First, nOut, encodeThreads, out, observe)
 }
 
 // encodeGraph encodes the [out] label of graph after the inputs in args, and
@@ -705,11 +753,11 @@ func encodeGraph(ctx context.Context, p *Plan, args []string, graph string, firs
 		graph += ";[out]split=2[enc][png]"
 		enc = "[enc]"
 	}
-	if up := encoderUpload(p); up != "" {
+	if up := p.encoder().Upload(); up != "" {
 		graph += ";" + enc + up + "[hw]"
 		enc = "[hw]"
 	}
-	args = append(append(encoderInit(p), args...), "-filter_complex", graph, "-map", enc, "-frames:v", strconv.Itoa(nOut))
+	args = append(append(p.encoder().Init(), args...), "-filter_complex", graph, "-map", enc, "-frames:v", strconv.Itoa(nOut))
 	args = append(args, encodeTail(p, encodeThreads, out)...)
 	if observe != nil {
 		args = append(args, "-map", "[png]", "-frames:v", strconv.Itoa(nOut), "-f", "image2pipe", "-c:v", "png", "-")

@@ -16,6 +16,8 @@ import (
 type Guest struct {
 	Box      *guest.Guest
 	KeyDelay time.Duration
+	// NativePixels selects the untransformed libvirt framebuffer coordinate space.
+	NativePixels bool
 }
 
 // NewGuest returns a driver for one guest.

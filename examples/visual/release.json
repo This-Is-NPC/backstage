@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "duration": 20,
+  "render": {"w": 1280, "h": 720, "fps": 30},
+  "theme": {"accent": "#f7768e"},
+  "sources": {"demo": {"file": "demo.mp4"}},
+  "tracks": {"demo": {"source": "demo"}},
+  "release": {
+    "statements": ["Too many clicks", "Too much waiting"],
+    "title": {"title": "Meet the update", "subtitle": "A simpler workflow"},
+    "demos": [{"track": "demo", "duration": 8, "title": "See it work"}],
+    "cta": {"title": "Try it today", "text": "Keep your work moving", "url": "example.com"}
+  }
+}

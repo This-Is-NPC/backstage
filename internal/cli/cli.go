@@ -1,5 +1,4 @@
-// Package cli wires the backstage verbs (list/play/rehearse/produce/setup/kill)
-// onto cobra.
+// Package cli wires recording, composition and project commands onto Cobra.
 package cli
 
 import (
@@ -46,7 +45,7 @@ func Execute(version string) error {
 	}
 	root.PersistentFlags().StringVar(&projectFlag, "project", "",
 		"project dir (default: search up from cwd)")
-	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd(), renderCmd(), previewCmd(), templateCmd(), configCmd(), takesCmd(), cacheCmd(), statusCmd())
+	root.AddCommand(listCmd(), playCmd(), rehearseCmd(), produceCmd(), setupCmd(), killCmd(), stageCmd(), renderCmd(), previewCmd(), lintCmd(), templateCmd(), exportRemotionCmd(), configCmd(), takesCmd(), cacheCmd(), statusCmd())
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return root.ExecuteContext(ctx)

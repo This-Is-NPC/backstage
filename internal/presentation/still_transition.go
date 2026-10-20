@@ -3,17 +3,26 @@ package presentation
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-func stillFadeTimes(p *Plan, ch chunkRange) (before, after float64, ok bool) {
+func stillTransitionTimes(p *Plan, ch chunkRange) (before, after float64, ok bool) {
 	if !chunkTransition(p, ch) || ch.Event < 1 {
 		return 0, 0, false
 	}
 	e := p.Document.Timeline[ch.Event]
-	if e.Transition.Effect != "fade" || len(e.Slots) > 0 || len(p.Document.Timeline[ch.Event-1].Slots) > 0 {
+	if e.Transition.xfadeName() != "" {
+		for _, at := range []float64{e.At, e.Transition.Duration} {
+			frames := at * float64(p.FPS)
+			if math.Abs(frames-math.Round(frames)) > 1e-7 {
+				return 0, 0, false
+			}
+		}
+	}
+	if (e.Transition.Effect != "fade" && e.Transition.xfadeName() == "") || len(e.Slots) > 0 || len(p.Document.Timeline[ch.Event-1].Slots) > 0 {
 		return 0, 0, false
 	}
 	before = e.At - 1/float64(p.FPS)
@@ -28,12 +37,15 @@ func stillFadeTimes(p *Plan, ch chunkRange) (before, after float64, ok bool) {
 	return before, after, true
 }
 
-func stillFadeCandidate(p *Plan, ch chunkRange, r *Renderer) bool {
-	_, _, ok := stillFadeTimes(p, ch)
+func stillTransitionCandidate(p *Plan, ch chunkRange, r *Renderer) bool {
+	_, _, ok := stillTransitionTimes(p, ch)
 	if !ok || !r.eventStatic(ch.Event-1) || !r.eventStatic(ch.Event) {
 		return false
 	}
 	for n := ch.First; n < ch.End; n++ {
+		if p.graphicsMoving(float64(n) / float64(p.FPS)) {
+			return false
+		}
 		if len(visibleCaptions(p.Text, float64(n)/float64(p.FPS))) > 0 {
 			return false
 		}
@@ -41,8 +53,8 @@ func stillFadeCandidate(p *Plan, ch chunkRange, r *Renderer) bool {
 	return true
 }
 
-func stillFadeEligible(r *Renderer, p *Plan, ch chunkRange, res *chunkResult) (layerDecision, error) {
-	before, after, _ := stillFadeTimes(p, ch)
+func stillTransitionEligible(r *Renderer, p *Plan, ch chunkRange, res *chunkResult) (layerDecision, error) {
+	before, after, _ := stillTransitionTimes(p, ch)
 	for _, t := range []float64{before, after} {
 		pr, dur, err := r.probeTimed(t)
 		if err != nil {
@@ -56,13 +68,15 @@ func stillFadeEligible(r *Renderer, p *Plan, ch chunkRange, res *chunkResult) (l
 	return layerDecision{Layered: true}, nil
 }
 
-func renderStillFadeChunk(ctx context.Context, r *Renderer, p *Plan, work string, ch chunkRange, encodeThreads int, out string, res *chunkResult) error {
-	before, after, _ := stillFadeTimes(p, ch)
-	old, d1, err := r.captureOneLayer(before, "below")
+func renderStillTransitionChunk(ctx context.Context, r *Renderer, p *Plan, work string, ch chunkRange, encodeThreads int, out string, res *chunkResult) error {
+	before, after, _ := stillTransitionTimes(p, ch)
+	old, firstTimes, err := r.frameTimed(before, nil)
+	d1 := firstTimes.screenshot
 	if err != nil {
 		return err
 	}
-	now, d2, err := r.captureOneLayer(after, "below")
+	now, secondTimes, err := r.frameTimed(after, nil)
+	d2 := secondTimes.screenshot
 	if err != nil {
 		return err
 	}
@@ -70,12 +84,12 @@ func renderStillFadeChunk(ctx context.Context, r *Renderer, p *Plan, work string
 	res.shot.add(d2)
 	res.screenshotBytes += int64(len(old) + len(now))
 	start := time.Now()
-	err = composeStillFade(ctx, p, ch, old, now, encodeThreads, work, out, composedFrameObserver(p))
+	err = composeStillTransition(ctx, p, ch, old, now, encodeThreads, work, out, composedFrameObserver(p))
 	res.composite = roundSec(time.Since(start))
 	return err
 }
 
-func composeStillFade(ctx context.Context, p *Plan, ch chunkRange, old, now []byte, encodeThreads int, work, out string, observe func(int, []byte) error) error {
+func composeStillTransition(ctx context.Context, p *Plan, ch chunkRange, old, now []byte, encodeThreads int, work, out string, observe func(int, []byte) error) error {
 	dir := filepath.Join(work, fmt.Sprintf("fade-%d", ch.Index))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -95,5 +109,8 @@ func composeStillFade(ctx context.Context, p *Plan, ch chunkRange, old, now []by
 	alpha := fmt.Sprintf("min(1,max(0,(T+%s)/%s))", num(offset), num(e.Transition.Duration))
 	hold := stillHold(p.FPS)
 	graph := fmt.Sprintf("[0:v]format=gbrp,%s[a];[1:v]format=gbrp,%s[b];[a][b]blend=all_expr='A*pow(1-%s,2)+B*%s'[out]", hold, hold, alpha, alpha)
+	if effect := e.Transition.xfadeName(); effect != "" {
+		graph = fmt.Sprintf("[0:v]format=gbrp,%s[a];[1:v]format=gbrp,%s[b];[a][b]xfade=transition=%s:duration=%s:offset=0,trim=start=%s,setpts=PTS-STARTPTS[out]", hold, hold, effect, num(e.Transition.Duration), num(offset))
+	}
 	return encodeGraph(ctx, p, args, graph, ch.First, ch.End-ch.First, encodeThreads, out, observe)
 }

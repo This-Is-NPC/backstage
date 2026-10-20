@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "duration": 8,
+  "render": {"w": 1280, "h": 720, "fps": 30},
+  "sources": {"demo": {"file": "demo.mp4"}},
+  "tracks": {"demo": {"source": "demo"}},
+  "timeline": [{"at": 0, "layout": "single", "slots": {"center": "demo"}}],
+  "actions": [{"track": "demo", "keys": true, "highlight": "outline", "cursor": true}]
+}

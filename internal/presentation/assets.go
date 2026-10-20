@@ -87,7 +87,7 @@ func recordEventFile(files map[int]map[string]string, mu *sync.Mutex, event int,
 }
 
 func serveBuiltin(w http.ResponseWriter, req *http.Request, name string) {
-	if name != "runtime.html" && name != "template.html" && name != "visual.html" {
+	if name != "runtime.html" && name != "template.html" && name != "visual.html" && name != "graphics.js" && name != "composition.html" {
 		http.NotFound(w, req)
 		return
 	}
@@ -96,7 +96,11 @@ func serveBuiltin(w http.ResponseWriter, req *http.Request, name string) {
 		http.NotFound(w, req)
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if strings.HasSuffix(name, ".js") {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	}
 	_, _ = w.Write(b)
 }
 
@@ -113,22 +117,51 @@ func timelineEvents(p *Plan, baseURL string) ([]map[string]any, error) {
 			u = asset
 		}
 		var narration any
+		var composition *scene.Composition
 		if e.Scene != "" {
 			s := p.Scenes[e.Scene]
 			if s == nil {
 				return nil, fmt.Errorf("unknown visual scene %q", e.Scene)
 			}
-			abs, err := p.Project.InputPath(s.Entry)
-			if err != nil {
-				return nil, fmt.Errorf("visual scene %s: %w", e.Scene, err)
-			}
-			u, err = workspaceAssetURL(p.Project, eventBase, abs)
-			if err != nil {
-				return nil, fmt.Errorf("visual scene %s: %w", e.Scene, err)
+			if s.Composition != nil {
+				var err error
+				composition, err = compositionAssets(p.Project, eventBase, s.Composition)
+				if err != nil {
+					return nil, err
+				}
+				u = eventBase + "builtin/composition.html"
+			} else {
+				abs, err := p.Project.InputPath(s.Entry)
+				if err != nil {
+					return nil, fmt.Errorf("visual scene %s: %w", e.Scene, err)
+				}
+				u, err = workspaceAssetURL(p.Project, eventBase, abs)
+				if err != nil {
+					return nil, fmt.Errorf("visual scene %s: %w", e.Scene, err)
+				}
 			}
 			narration = s.Narration
 		}
-		events = append(events, map[string]any{"at": e.At, "layout": e.Layout, "slots": e.Slots, "transition": e.Transition, "url": u, "narration": narration})
+		var card *Card
+		if e.Card != nil {
+			c := *e.Card
+			card = &c
+			if c.Logo != "" {
+				abs, err := p.Project.InputPath(c.Logo)
+				if err != nil {
+					return nil, err
+				}
+				card.Logo, err = workspaceAssetURL(p.Project, eventBase, abs)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		cameras := map[string]Camera{}
+		for _, id := range e.Slots {
+			cameras[id] = p.eventCamera(i, id)
+		}
+		events = append(events, map[string]any{"composition": composition, "camera": cameras, "card": card, "at": e.At, "layout": e.Layout, "slots": e.Slots, "transition": e.Transition, "url": u, "narration": narration})
 	}
 	return events, nil
 }

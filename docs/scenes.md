@@ -1,7 +1,7 @@
 # Scenes
 
-A scene is either a recording script (`recording`, the default) or an HTML/SVG
-visual (`visual`). Both can own narration text and audio. The example below
+A scene is either a recording script (`recording`, the default) or a
+visual (`visual`), authored as JSON elements or an HTML/SVG entry. Both can own narration text and audio. The example below
 records ordered steps against a staged layout.
 
 ```json
@@ -23,7 +23,8 @@ records ordered steps against a staged layout.
 | Field | Meaning |
 |---|---|
 | `type` | `recording` (default) or `visual` |
-| `entry` | leaf-relative HTML entry, required for visual scenes; `..` may reach the workspace |
+| `entry` | leaf-relative HTML entry for a visual scene; mutually exclusive with `composition` |
+| `composition` | declarative visual elements and keyframes; see [JSON compositions](presentations.md#json-compositions) |
 | `duration` | available duration in seconds, required for visual scenes |
 | `narration` | language and named text/audio cues |
 | `audio` | named reusable audio assets: `{ "name": { "file": "assets/sound.wav" } }` |
@@ -151,7 +152,8 @@ costs, and what happens next.
 
 ## Visual scenes and editorial content
 
-A visual scene requires `entry` and a positive `duration`. It cannot declare
+A visual scene requires a positive `duration` and either `entry` or a JSON
+`composition`. It cannot declare
 `layout`, `vm`, `vm-start`, `vm-end`, `steps`, `recorder`, `fresh` or `reset`. Use it in a
 presentation with `render` or `preview`; recording commands reject it.
 
@@ -201,3 +203,29 @@ for visual scenes. It is authored explicitly, not inferred from `steps` or
 The presentation selects cue IDs, optional scene audio assets and their timing.
 It can follow video cuts and rates or place speech independently in the final
 film. See [audio](presentations.md#audio) and [captions](presentations.md#captions).
+## Recorded step timing
+
+Give an action a unique `step` label to address its timing from a presentation.
+Successful and failed actions record their resolved action, target, key commands,
+and start/end seconds in the take's `.facts.json`. The clock begins when the
+recorder reports that it is ready. The interval includes the action and its
+post-action delay, excluding `delay-before`. Rehearsals do not create timing
+records. Labels must be nonempty and unique within the scene.
+
+With `record.observations: true`, step facts also record a normalized `region`
+and boundary `pointer` position when the input driver exposes that evidence.
+The host Ghostty stage resolves the target's actual tmux pane from reported
+cell pixels and the staged content origin. Other terminals or incompatible
+metrics retain the observed window region. The guest observes its active
+window. Monitor origin, scale and all eight output transforms are applied in
+the recorder's pixel space. Ambiguous monitors or an unavailable compositor
+leave observations absent without failing the take. Boundary queries have a
+two-second total timeout and occur before the action interval.
+
+A continuous `pointer-trace` is stored once per take, with recording-clock
+`at` times and normalized `pointer` positions at up to 30 Hz. Null positions
+mark gaps. Readable pointer input devices supply actual mouse presses as
+`click: true`; missing permission leaves positions usable without invented
+clicks. The observer needs Python 3 on the filmed machine and uses one
+persistent SSH connection for a guest. Keyboard events are not serialized.
+Typed `type`/`run` input remains in step `keys`; `run` includes its Enter key.

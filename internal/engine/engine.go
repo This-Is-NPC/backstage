@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/encode"
 	"github.com/This-Is-NPC/backstage/internal/facts"
 	"github.com/This-Is-NPC/backstage/internal/guest"
 	"github.com/This-Is-NPC/backstage/internal/machine"
@@ -68,23 +69,26 @@ type Engine struct {
 	Speed float64
 	// PaneDriver overrides the default tmux driver. A vm stage sets it,
 	// because on that stage a target names a computer and not a pane.
-	PaneDriver    pane.Driver
-	pane          pane.Driver
-	rehearsing    bool
-	cmdGuard      *CommandGuard
-	startImage    string
-	startSnapshot string
-	inputsSHA256  string
-	takeSess      atomic.Pointer[take.Session]
-	stateSaved    bool
-	capturing     atomic.Bool
-	captureMu     sync.Mutex
-	captureDone   chan struct{}
-	managedRec    *machine.Record
-	leafProject   string
-	endFacts      endFactsWrite
-	timings       facts.Timings
-	groupMembers  []facts.GroupMember
+	PaneDriver       pane.Driver
+	pane             pane.Driver
+	rehearsing       bool
+	cmdGuard         *CommandGuard
+	startImage       string
+	startSnapshot    string
+	inputsSHA256     string
+	takeSess         atomic.Pointer[take.Session]
+	stateSaved       bool
+	capturing        atomic.Bool
+	captureMu        sync.Mutex
+	captureDone      chan struct{}
+	managedRec       *machine.Record
+	leafProject      string
+	endFacts         endFactsWrite
+	timings          facts.Timings
+	groupMembers     []facts.GroupMember
+	recordingStarted time.Time
+	steps            []facts.Step
+	pointerTrace     []facts.PointerSample
 }
 
 // ErrCaptureFailed is returned when vm-end cannot commit a snapshot.
@@ -203,12 +207,17 @@ func NewForScene(p *scene.Project, s *scene.Scene) (*Engine, error) {
 	case "", "inside":
 		e.Rec = recorder.NewWF(box, p.Record.FPS)
 	case "framebuffer":
-		e.Rec = recorder.NewFramebuffer(cfg.Domain, cfg.URI, p.Record.FPS)
+		fb := recorder.NewFramebuffer(cfg.Domain, cfg.URI, p.Record.FPS)
+		fb.Encoder = encode.Encoder(p.Render.Encoder)
+		fb.Threads = p.Render.Threads
+		e.Rec = fb
 	default:
 		return nil, fmt.Errorf("scene %q asks for recorder %q; say `inside` or `framebuffer`",
 			s.Name, which)
 	}
-	e.PaneDriver = pane.NewGuest(box)
+	driver := pane.NewGuest(box)
+	driver.NativePixels = which == "framebuffer"
+	e.PaneDriver = driver
 	return e, nil
 }
 
@@ -234,6 +243,9 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	e.leafProject = ""
 	e.endFacts = endFactsWrite{}
 	e.groupMembers = nil
+	e.recordingStarted = time.Time{}
+	e.pointerTrace = nil
+	e.steps = nil
 	ensureProducerGeneration(s, &opts)
 	prevRehearsing := e.rehearsing
 	e.rehearsing = !opts.Record
@@ -273,6 +285,7 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 	// When the recorder became warm, so a take can be weighed against the
 	// window it was filmed in. See checkTake.
 	var recArmedAt time.Time
+	var stopPointer func() []facts.PointerSample
 	stopRec := func() error {
 		recMu.Lock()
 		if !opts.Record || !recArmed || recStopped {
@@ -280,6 +293,10 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 			return nil
 		}
 		recStopped = true
+		if stopPointer != nil {
+			e.pointerTrace = stopPointer()
+			stopPointer = nil
+		}
 		recMu.Unlock()
 		fmt.Println(">> stop recording")
 		_, err := e.Rec.Stop()
@@ -441,6 +458,16 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		}
 		recMu.Lock()
 		recArmedAt = time.Now()
+		e.recordingStarted = recArmedAt
+		if e.Project.Record.Observations && !recStopped {
+			observer, ok := e.PaneDriver.(pane.PointerObserver)
+			if !ok && s.VM == "" {
+				observer = &pane.Tmux{Monitor: e.Project.Record.Monitor}
+			}
+			if observer != nil {
+				stopPointer = observer.TracePointer(ctx, recArmedAt)
+			}
+		}
 		recMu.Unlock()
 		return nil
 	}
@@ -467,7 +494,10 @@ func (e *Engine) Run(s *scene.Scene, opts Options) (runErr error) {
 		if e.PaneDriver != nil {
 			e.pane = e.PaneDriver
 		} else {
-			e.pane = pane.NewTmux(m)
+			driver := pane.NewTmux(m)
+			driver.Monitor = e.Project.Record.Monitor
+			driver.WindowClass = stage.LayoutClass
+			e.pane = driver
 		}
 		e.sleep(stageWarm)
 	} else {
@@ -569,6 +599,8 @@ func (e *Engine) writeClipFacts(clip string, s *scene.Scene, version, result str
 		Result:       result,
 		Made:         time.Now().Format(time.RFC3339),
 		InputsSHA256: e.inputsSHA256,
+		Steps:        e.steps,
+		PointerTrace: e.pointerTrace,
 	}
 	if src, ok := e.Stager.(recordingGuest); ok {
 		g, omarchy := src.RecordingGuest()
