@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0](https://github.com/This-Is-NPC/backstage/compare/v0.7.0...v0.8.0) (2026-10-20)
+
+
+### Features
+
+* add native video authoring and streamline media pipelines ([63cce47](https://github.com/This-Is-NPC/backstage/commit/63cce4778aeaf97c8774273d23ed56a459f614d3))
+* add native video authoring and streamline media pipelines ([0c2282c](https://github.com/This-Is-NPC/backstage/commit/0c2282cdbea96884a121de8c4e08890bb90927d6))
+* **presentation:** add VAAPI hardware encoding ([dd8f1b9](https://github.com/This-Is-NPC/backstage/commit/dd8f1b999be00721c8207446ed67468761aa839a))
+
+
+### Bug Fixes
+
+* **presentation:** make the audio mix reproducible ([06ae403](https://github.com/This-Is-NPC/backstage/commit/06ae4039cb832f7fee0028e2a4196ec07921072f))
+
+
+### Performance Improvements
+
+* **presentation:** cut render work in the chunk pipeline ([a8fce3d](https://github.com/This-Is-NPC/backstage/commit/a8fce3dd5e0a62b2ceeb8e7f071bce9ff8a88bc9))
+
 ## [0.7.0](https://github.com/This-Is-NPC/backstage/compare/v0.6.0...v0.7.0) (2026-09-17)
 
 
