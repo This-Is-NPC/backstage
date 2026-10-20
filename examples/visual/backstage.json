@@ -1,0 +1,24 @@
+{
+  "presentations": {
+    "release": {
+      "file": "release.json",
+      "out": "exports/release.mp4"
+    },
+    "actions": {
+      "file": "actions.json",
+      "out": "exports/actions.mp4"
+    },
+    "camera": {
+      "file": "camera.json",
+      "out": "exports/camera.mp4"
+    },
+    "cards": {
+      "file": "cards.json",
+      "out": "exports/cards.mp4"
+    },
+    "declarative": {
+      "file": "declarative.json",
+      "out": "exports/declarative.mp4"
+    }
+  }
+}

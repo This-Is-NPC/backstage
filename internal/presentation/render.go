@@ -115,7 +115,11 @@ func NewRenderer(ctx context.Context, p *Plan) (*Renderer, error) {
 	if err = chromedp.Run(r.ctx, emulation.SetDeviceMetricsOverride(int64(p.Width), int64(p.Height), 1, false), chromedp.Navigate(r.url+"builtin/runtime.html")); err != nil {
 		return fail(err)
 	}
-	config := map[string]any{"events": events, "parameters": p.Document.Parameters, "text": p.Text, "duration": p.Document.Duration}
+	sizes := map[string][2]int{}
+	for id, tr := range p.Tracks {
+		sizes[id] = [2]int{tr.Media.Width, tr.Media.Height}
+	}
+	config := map[string]any{"actions": p.Actions, "sizes": sizes, "events": events, "parameters": p.Document.Parameters, "text": p.Text, "duration": p.Document.Duration, "theme": p.Document.theme()}
 	if err = r.evalValue("initialize", config, &r.staticAt); err != nil {
 		return fail(err)
 	}
@@ -245,9 +249,13 @@ func (r *Renderer) frameTimed(t float64, frames map[string][]byte) ([]byte, fram
 }
 
 func (r *Renderer) probeTimed(t float64) (probeFrame, time.Duration, error) {
+	return r.probeAt(t, r.plan.graphicsMoving(t))
+}
+
+func (r *Renderer) probeAt(t float64, moving bool) (probeFrame, time.Duration, error) {
 	var pr probeFrame
 	t0 := time.Now()
-	err := r.evalValue("probe", map[string]any{"time": t}, &pr)
+	err := r.evalValue("probe", map[string]any{"time": t, "moving": moving}, &pr)
 	return pr, time.Since(t0), err
 }
 
@@ -308,6 +316,23 @@ func (r *Renderer) captureEventLayers(t float64, event int, geo []probeGeo, caps
 
 // Check exercises template initialization and a frame at every transition boundary.
 func Check(ctx context.Context, p *Plan) error {
+	return inspectTemplates(ctx, p, false)
+}
+
+// Lint applies the theme's reading and typography rubric as well as validation.
+func Lint(ctx context.Context, p *Plan) error {
+	return inspectTemplates(ctx, p, true)
+}
+
+func inspectTemplates(ctx context.Context, p *Plan, rubric bool) error {
+	if rubric {
+		t := p.Document.theme()
+		for _, span := range p.Text {
+			if err := t.readable(span.Text, span.End-span.At-span.Entrance.Duration, false); err != nil {
+				return err
+			}
+		}
+	}
 	r, err := NewRenderer(ctx, p)
 	if err != nil {
 		return err
@@ -316,6 +341,15 @@ func Check(ctx context.Context, p *Plan) error {
 	for _, e := range p.Document.Timeline {
 		if _, err = r.frame(e.At, map[string][]byte{}); err != nil {
 			return err
+		}
+	}
+	if rubric {
+		var problems []string
+		if err := r.evalValue("lintTypography", nil, &problems); err != nil {
+			return err
+		}
+		if len(problems) > 0 {
+			return fmt.Errorf("presentation rubric: %s", strings.Join(problems, "; "))
 		}
 	}
 	return nil

@@ -17,16 +17,11 @@ const (
 	afterImportLease = "after-import-lease"
 )
 
-// Import copies an existing clip and facts into a pending session under
+// ImportContext copies an existing clip and facts into a pending session under
 // record.out. The sources may live on another filesystem: the files are
 // cloned or copied, never hardlinked and never renamed across devices.
-func Import(p *scene.Project, name, clip, facts string) (*Session, error) {
-	return ImportContext(context.Background(), p, name, clip, facts, nil)
-}
-
-// ImportContext is Import with a cancellable start. bind, if set, receives
-// the session as soon as the creating directory exists, so an interrupt
-// during the copy can apply Session.Interrupt.
+// bind, if set, receives the session as soon as the creating directory
+// exists, so an interrupt during the copy can apply Session.Interrupt.
 func ImportContext(ctx context.Context, p *scene.Project, name, clip, facts string, bind func(*Session)) (*Session, error) {
 	paths, err := ForScene(p, name)
 	if err != nil {

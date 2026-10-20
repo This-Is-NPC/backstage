@@ -14,7 +14,7 @@ Use one term for each meaning. These are the terms.
 | **stage** | the environment that a scene runs in |
 | **layout** | a named set of panes, from `backstage.json` |
 | **pane** | one target that a step types into |
-| **scene** | a recording script or HTML visual with editorial content |
+| **scene** | a recording script or JSON/HTML visual with editorial content |
 | **step** | one action in a scene |
 | **prompter** | the narration box on the screen |
 | **prop** | a script of the project that a step calls |
@@ -22,7 +22,7 @@ Use one term for each meaning. These are the terms.
 | **take** | one run of `play` |
 | **clip** | the `.mp4` that one take produces |
 | **production** | scenes recorded and concatenated by `produce` |
-| **presentation** | existing media composed by a JSON timeline |
+| **presentation** | authored visuals and optional media composed by a JSON timeline |
 | **template** | HTML/CSS layouts, screen slots and caption styling |
 | **track** | an instance of a media source with its own cuts and start time |
 | **cue** | a named narration text with source times and optional audio |
@@ -130,6 +130,11 @@ frames each second gets fewer.
 Backstage counts the frames and divides by the elapsed time. It assembles the
 clip at that rate. The film is then real time.
 
+Screenshots stream to FFmpeg in memory. Capture uses a nominal encoder clock;
+the final remux reconstructs presentation and decode frame numbers on the
+measured clock, retaining B-frame order and matching the MP4 frame timebase.
+No screenshot sequence is written to disk, and the remux does not re-encode.
+
 A clip assembled at the rate that you asked for plays fast. It plays fast by
 the same fraction that the loop missed, and it gives no error.
 
@@ -173,12 +178,13 @@ A film is evidence. That file is the difference between a take that you can
 produce again and a take that you can only record again.
 
 
-## Presentations reuse recordings
+## Presentations compose visuals and recordings
 
 A presentation consumes files and scene editorial content. It does not invoke
 the recording engine. Its track clocks select source moments; its timeline
-selects layouts or visual scenes. HTML receives global and local time, allowing
-an animation to be reconstructed at the requested instant.
+selects layouts, cards or visual scenes. A native visual `composition` declares
+elements and keyframes as JSON. Custom HTML receives global and local time.
+Both reconstruct animation at the requested instant without recording again.
 
 Preview plays the same rendered output after an initial wait. Changing layouts,
 captions or selected audio does not require recording another take. See

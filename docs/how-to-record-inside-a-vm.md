@@ -121,6 +121,14 @@ stop it. It survives a logout, a compositor restart, and a reboot.
 
 The rate is lower. Each frame is a full grab.
 
+Screenshots pass directly through memory into FFmpeg, without PNG files on disk.
+One temporary encoded clip holds the recording. When capture stops, a remux
+applies the rate actually achieved, preserving frame order and elapsed time
+without another lossy encode. The finished clip replaces the output atomically.
+Failed captures preserve an existing output, and stopping also cancels a grab
+that is still starting. This reduces temporary image I/O and closing latency;
+it does not make libvirt screenshots equivalent to a high-frame-rate recorder.
+
 ---
 
 ## Read the length the run reports

@@ -91,17 +91,19 @@ type audioKeyV1 struct {
 }
 
 type audioKeyPart struct {
-	ID       string `json:"id"`
-	Src      string `json:"src"`
-	At       string `json:"at"`
-	From     string `json:"from"`
-	To       string `json:"to"`
-	Rate     string `json:"rate"`
-	Duration string `json:"duration"`
-	Volume   string `json:"volume"`
-	FadeIn   string `json:"fade-in"`
-	FadeOut  string `json:"fade-out"`
-	Loop     bool   `json:"loop"`
+	Duck      bool   `json:"duck,omitempty"`
+	Narration bool   `json:"narration,omitempty"`
+	ID        string `json:"id"`
+	Src       string `json:"src"`
+	At        string `json:"at"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Rate      string `json:"rate"`
+	Duration  string `json:"duration"`
+	Volume    string `json:"volume"`
+	FadeIn    string `json:"fade-in"`
+	FadeOut   string `json:"fade-out"`
+	Loop      bool   `json:"loop"`
 }
 
 type memoFile struct {
@@ -181,27 +183,24 @@ func hashJSON(v any) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func trackEncodeArgs(gop int) []string {
-	args := []string{"-c:v", "ffv1"}
-	if gop > 0 {
-		args = append(args, "-g", fmt.Sprintf("%d", gop))
-	}
-	return args
+// trackEncodeArgs stores prepared tracks intra-only so chunks seek to any frame.
+func trackEncodeArgs() []string {
+	return []string{"-c:v", "ffv1", "-g", "1"}
 }
 
-func trackCacheKey(srcHash string, segs []Segment, fps, gop int, ffmpeg string) string {
+func trackCacheKey(srcHash string, segs []Segment, fps int, ffmpeg string) string {
 	keys := make([]keySegment, 0, len(segs))
 	for _, s := range segs {
 		keys = append(keys, keySegment{From: num(s.From), To: num(s.To), Rate: num(s.Rate)})
 	}
 	return hashJSON(trackKeyV1{
 		V: cacheKeyVersion, Kind: "track", Src: srcHash,
-		Segments: keys, FPS: fps, FFmpeg: ffmpeg, Encode: trackEncodeArgs(gop),
+		Segments: keys, FPS: fps, FFmpeg: ffmpeg, Encode: trackEncodeArgs(),
 	})
 }
 
 func audioEncodeArgs() []string {
-	return []string{"-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "amix=normalize=0", "alimiter=limit=0.95:level=0:latency=1"}
+	return []string{"-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", "input-blocks=1024", "amix=normalize=0", "asetnsamples=n=1024:p=1", "alimiter=limit=0.95:level=0:latency=1"}
 }
 
 func audioCacheKey(parts []audioKeyPart, duration, ffmpeg string) string {
@@ -689,26 +688,22 @@ func (c *renderCache) getOrFill(ctx context.Context, kind, key, destExt, workPat
 	return false, nil
 }
 
-func (c *renderCache) prepareTrack(ctx context.Context, t CompiledTrack, work, id string, fps, threads, filterThreads, gop int) (string, []string, error) {
+func (c *renderCache) prepareTrack(ctx context.Context, t CompiledTrack, work, id string, fps, threads, filterThreads int) (string, error) {
 	src, err := c.hashFile(t.Media.Path)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	key := trackCacheKey(src, t.Segments, fps, gop, c.ffmpeg)
+	key := trackCacheKey(src, t.Segments, fps, c.ffmpeg)
 	workPath := filepath.Join(work, id+".mkv")
 	hit, err := c.getOrFill(ctx, "tracks", key, ".mkv", workPath, id, nil, func(tmp string) (map[string]string, error) {
-		_, _, err := prepareOne(ctx, t, filepath.Dir(tmp), strings.TrimSuffix(filepath.Base(tmp), ".mkv"), fps, threads, filterThreads, gop)
+		_, err := prepareOne(ctx, t, filepath.Dir(tmp), strings.TrimSuffix(filepath.Base(tmp), ".mkv"), fps, threads, filterThreads)
 		return nil, err
 	})
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	c.note(hit, "tracks")
-	args := []string{"-v", "error", "-y", "-threads", fmt.Sprintf("%d", threads), "-i", t.Media.Path, "-filter_complex_threads", fmt.Sprintf("%d", filterThreads), "-c:v", "ffv1"}
-	if gop > 0 {
-		args = append(args, "-g", fmt.Sprintf("%d", gop))
-	}
-	return workPath, args, nil
+	return workPath, nil
 }
 
 func (c *renderCache) mix(ctx context.Context, p *Plan, dir string) (string, []namedSeconds, error) {
@@ -719,6 +714,7 @@ func (c *renderCache) mix(ctx context.Context, p *Plan, dir string) (string, []n
 			return "", nil, err
 		}
 		parts = append(parts, audioKeyPart{
+			Duck: a.Duck, Narration: a.Narration,
 			ID: a.ID, Src: src, At: num(a.At), From: num(a.From), To: num(a.To),
 			Rate: num(a.Rate), Duration: num(a.Duration), Volume: num(a.Volume),
 			FadeIn: num(a.FadeIn), FadeOut: num(a.FadeOut), Loop: a.Loop,

@@ -246,13 +246,33 @@ The target geometry every clip is normalized to before concatenation.
 |-----|---------|---------|
 | `render.w` / `render.h` | output size | `0` = the first scene clip's size (monitor native) |
 | `render.fps` | output frame rate | falls back to `record.fps` |
-| `render.workers` | parallel presentation render workers (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, nMiss))` |
+| `render.workers` | parallel presentation render workers (one Chromium each) | `0` = `max(1, min(NumCPU/2, memoryBudget/2GiB, ceil(missFrames/max(16, 2*fps))))` |
 | `render.threads.prepare` | FFmpeg/FFV1 threads while preparing each presentation track | `max(1, n/w)` (`n` = CPUs, `w` = parallel tracks) |
 | `render.threads.filter` | `-filter_complex_threads` for that prepare | `1` |
-| `render.threads.encode` | libx264 threads for each presentation chunk encoder | `n`, then `max(1, encode/workers)` per chunk |
+| `render.threads.encode` | Total FFmpeg encoding thread budget, divided across concurrent chunks or production clips | CPU count |
+| `render.encoder` | Shared H.264 encoder: `libx264` (CPU, CRF 20) or `vaapi` (GPU `h264_vaapi`, CQP 20) | `""` = `libx264` |
 
-`render.workers` and `render.threads` are read only by presentation `render` /
-`preview`. `produce` does not use these keys. `0`, `null` or an omitted field
+`produce` uses the same encoder and thread settings for normalization and retime;
+the framebuffer recorder also uses them. Guest recording keeps its own encoder.
+Production normalization remains sequential: the measured parallel version was
+slower and was removed. CPU normalization retains `medium` / CRF 23 because
+changing it to `veryfast` / CRF 20 failed the visual-difference threshold.
+Retiming and framebuffer encoding use `veryfast` / CRF 20. Omitted encoding and
+filter thread counts retain FFmpeg automatic sizing. CPU retiming groups pieces
+into one FFmpeg invocation, with at most half the host CPU count and two GiB of
+available memory per concurrent piece, after the host memory reserve. Missing
+memory information, explicit encoding/filter thread limits, or VAAPI keep
+retiming sequential. Each piece retains its own input seek, output clock and
+encoder settings; normalization remains a separate pass.
+Clips with matching H.264 configuration, dimensions, frame rate,
+timebase, aspect ratio and color metadata are remuxed without a new encode.
+If any clip differs, the batch uses one common encoding configuration.
+`vaapi` encodes one frame at the render size before any chunk starts; if
+FFmpeg cannot open the device or the size, the render fails there and leaves
+any existing output alone. The segment cache key records the VAAPI driver
+line, so a driver change re-encodes. The GPU frees CPU for the Chromium
+workers; its output is not bit-identical to `libx264` but keeps the same
+PSNR-Y limits (≥ 40 dB, mean ≥ 45 dB). `0`, `null` or an omitted field
 means the default. A negative value is a configuration error. A very large
 value is accepted as written (`workers` still capped at the number of missed chunks).
 
@@ -378,7 +398,7 @@ The take on disk does not change. See
 A presentation's `render` fields override the corresponding project `render`
 values. Unset dimensions default to 1920×1080 for presentations; fps falls back
 to project `render.fps`, then 30. Project `render.fps` itself defaults to
-`record.fps`. These defaults do not change legacy production sizing.
+`record.fps`. These defaults do not change production sizing.
 
 JSON resource paths in a scene stay relative to the leaf and may use `..` to
 reach a file in the workspace. Inherited template and presentation files are
@@ -388,6 +408,24 @@ working. Paths cannot leave the workspace through traversal or symlinks;
 outputs cannot leave the leaf.
 
 `layouts` still configures recording panes. HTML templates define presentation
-layouts. Visual HTML is referenced by a `visual` scene; there is no `slides`
-registry. See [Presentations](presentations.md), [Templates](templates.md), or the
+layouts. A `visual` scene selects either a native JSON `composition` or an HTML
+`entry`; there is no `slides` registry. See [Presentations](presentations.md), [Templates](templates.md), or the
 [composition walkthrough](how-to-compose-presentations.md).
+
+Set `record.observations: true` to sample window bounds at action boundaries
+and record a continuous pointer trace at up to 30 samples per second. This
+optional observer needs Python 3 on the filmed machine; it uses native Hyprland
+IPC and one persistent SSH connection for guests. Mouse button presses are read
+from accessible pointer input devices without grabbing them or changing permissions.
+When device access is unavailable, positions remain usable without click pulses.
+Unavailable positions are recorded as gaps. It defaults to false. Step timings
+are recorded independently of this option. An observed
+host Ghostty stage launches with zero padding, no decorations and no scrollbar.
+It combines the target pane's reported tmux cell positions and pixel sizes with
+the recorded monitor geometry, including DPI scale and a top or bottom status
+line. Other terminals, unavailable metrics, multiple clients or incompatible
+viewports retain the observed window region instead of estimating pane pixels.
+All eight Wayland output transforms are mapped in the recorder's coordinate
+space: oriented pixels for desktop recording and native pixels for libvirt's
+raw framebuffer capture. Multiple guest monitors remain ambiguous and omit
+observations rather than guessing which display was filmed.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -92,8 +93,16 @@ func (h *Hypr) Setup(layout scene.Layout, p *scene.Project) (*scene.Manifest, er
 	if term == "" {
 		term = "ghostty"
 	}
-	if err := exec.Command(term, "--class="+LayoutClass,
-		"-e", "tmux", "attach", "-t", sessionName).Start(); err != nil {
+	args := []string{"--class=" + LayoutClass}
+	if p.Record.Observations && filepath.Base(term) == "ghostty" {
+		// A known cell origin plus tmux's reported pixel metrics makes pane
+		// bounds measurable without estimating terminal padding or decorations.
+		args = append(args, "--window-padding-x=0", "--window-padding-y=0",
+			"--window-padding-balance=false", "--window-decoration=none", "--scrollbar=never")
+		m.ContentOrigin = &[2]int{0, 0}
+	}
+	args = append(args, "-e", "tmux", "attach", "-t", sessionName)
+	if err := exec.Command(term, args...).Start(); err != nil {
 		return nil, fmt.Errorf("spawn layout terminal: %w", err)
 	}
 

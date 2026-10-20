@@ -3,6 +3,10 @@
 **The task:** show three recorded screens together, change to two, then explain
 an idea with an animated SVG. Changing the montage does not re-record the takes.
 
+For a video made from JSON elements and keyframes, start with
+[Create a declarative video](how-to-create-a-declarative-video.md). The walkthrough
+below demonstrates recorded tracks and a custom HTML entry.
+
 ## Before you start
 
 - Have three video files in `recordings/`: `parent.mp4`, `laptop.mp4` and `browser.mp4`.

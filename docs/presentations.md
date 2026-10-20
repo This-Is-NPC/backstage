@@ -1,6 +1,7 @@
 # Presentations
 
 Reference for version 1 presentation JSON files. For a working sequence, follow
+[Create a declarative video](how-to-create-a-declarative-video.md) or
 [Compose a presentation](how-to-compose-presentations.md). Project registration
 belongs in [Configuration](configuration.md#declarative-presentations); scene
 content belongs in [Scenes](scenes.md#visual-scenes-and-editorial-content).
@@ -205,8 +206,13 @@ geometry, or caption set changes. A broken static promise prints
 when the count is positive. A geometry change that comes and goes between
 the two samples stays under the static promise.
 Layered eligibility needs constant slot geometry (integer or fractional)
-and radii whose computed value is a single `px` token; percent radii, scroll that changes per frame, and blend/transition
-chunks stay on the screenshot path. On both paths the track image sits in an
+and radii whose computed value is a single `px` token. Percent radii and scroll
+that changes per frame use screenshots. A fade between two events declared
+`static`, with no slotted tracks or visible captions, captures each event once
+and blends the stills in FFmpeg. Stable push and wipe events use `xfade` under
+the same constraints and with frame-aligned timing. Other transition chunks use
+screenshots.
+On both paths the track image sits in an
 integer-pixel rectangle inside the slot (`contain`/`cover`/`fill`; blend and
 morph still use `object-fit`).
 `decoder-start-seconds`
@@ -230,6 +236,8 @@ chunk's Chromium frame loop; it does not mean the encoder is the bottleneck. On 
 a geometry probe; `composite-seconds` is the FFmpeg overlay encode and is not
 included in `encode-seconds`. A layered chunk records two screenshot samples
 unless a static event reuses a still from an earlier chunk on that worker.
+Animated overlays record one transparent screenshot per output frame while
+video stays in FFmpeg, counted by `animated-overlay-frames`.
 
 Visual reproducibility assumes fixed inputs, browser, fonts and tool versions;
 MP4 byte identity across environments is not promised. Prepared FFV1 tracks use
@@ -244,15 +252,20 @@ frames; a full segment-cache hit copies the stored H.264 without Chromium.
 `backstage cache prune` drops least-recently-used track, audio and segment
 entries (default 10G).
 Project `render.threads` sets FFmpeg counts for that prepare and for
-libx264; each chunk encoder uses `max(1, encode/workers)` threads and runs at
+the chunk encoder (`render.encoder`: `libx264`, or `vaapi` for the GPU);
+each chunk encoder uses `max(1, encode/workers)` threads and runs at
 the same time as that chunk's Chromium frame loop, not after it.
 `render.workers` is Chromium concurrency (one browser per worker). `0`,
 `null` or an omitted key picks `max(1, min(NumCPU/2, memoryBudget/2GiB,
-nMiss))` where `memoryBudget` is MemAvailable minus a 2 GiB host reserve.
-An explicit `N` runs `N` workers, capped at the number of chunks that miss
-the segment cache. Chunks are cut at event boundaries and then into pieces of
-at most `max(16, 2*fps)` frames, measured from the event start and then clipped
-to the render interval, so a preview that covers whole interior pieces shares
+ceil(missFrames/max(16, 2*fps))))` where `memoryBudget` is MemAvailable minus
+a 2 GiB host reserve and `missFrames` counts frames in chunks that miss the
+segment cache. An explicit `N` runs `N` workers, capped at the number of those
+chunks. Each worker takes a contiguous run of missed chunks, split so the
+largest frame total is as small as possible. Browsers start while tracks are
+prepared, and the mix runs alongside the chunks. Chunks are cut at event boundaries and into pieces of at
+most `max(16, 2*fps)` frames, measured from the event start. Transition ends
+and caption visibility changes split those pieces further, without leaving
+a piece shorter than 3 frames, before they are clipped to the render interval, so a preview that covers whole interior pieces shares
 those cache keys with a full export. Chunks share prepared tracks and the mix,
 encode H.264 with `-video_track_timescale <fps>`, and join with the concat
 demuxer `-c copy` when there is more than one file. A worker keeps its browser
@@ -278,3 +291,301 @@ the error prints `failed`; chunks cancelled because of it or because of
 Ctrl-C print `interrupted`.
 
 See [Templates](templates.md) for visual slots and animation timing.
+## Editorial graphics and recorded timing
+
+Recording facts include `steps`, with each action's label, resolved target,
+start/end seconds and key commands. The take manifest points to this facts file;
+the timeline is stored once and remains attached to the published generation.
+Actions without labels are recorded but cannot be addressed by name.
+
+Timeline, independent audio and presentation-clock caption `at` values accept
+seconds or an anchor:
+
+```json
+{"at": {"step": "open-settings", "track": "demo", "edge": "end", "offset": 0.5}}
+```
+
+Use `cue` instead of `step` for narration cues. `edge` defaults to `start`.
+An omitted `track` selects the sole matching track; `scene` can narrow that
+selection. The anchor follows source cuts and playback rates. Offset is applied
+in presentation seconds. Missing timings, excluded steps, repeated occurrences
+and ambiguous tracks fail compilation. Old takes need to be recorded again to
+provide step timings. A cue anchor still works from the scene's narration.
+
+An optional `theme` sets `font`, hexadecimal `background`, `foreground` and
+`accent`, pixel `min-font`, `title-size`, `text-size`, `caption-size`,
+`seconds-per-word`, `cta-duration`, and `ease`. Defaults are system sans-serif,
+26 px minimum, 72/36/32 px sizes, 0.3 seconds per word, 3.5 readable seconds for
+a CTA and cubic `ease-out`. Other easings are `linear` and `ease-in-out`.
+
+Events can declare a `card`, alone or over a layout or visual scene:
+
+```json
+{"at": 0, "card": {"type": "statement", "title": "Repeated manual editing", "strike": true}}
+```
+
+Card types are `title`, `statement`, `lower-third`, `badge` and `cta`. Fields
+are `title`, `subtitle`, `text`, project-relative `logo`, `url`, `strike` (only
+statements), and `entrance`. Cards require sufficient reading time after their
+entrance. An entrance has `effect`, `duration` and `ease`; effects are `rise`,
+`fade`, `type`, `scale` and `none`, with a default duration of 0.35 seconds.
+Captions also accept `entrance` and pixel `font-size`. A declared theme or
+caption animation enables minimum font and reading-time validation for captions.
+Unstyled captions retain the template's slot typography.
+
+All motion uses render time, including previews and seeks. With stable chrome
+and video slots, independent moving graphics use an animated alpha layer.
+Other motion uses Chromium frames; stable intervals use `layered` when eligible.
+Custom template `render(context)` receives `theme` and the shared `motion`
+functions. See [`examples/visual`](../examples/visual/cards.json) for all five
+card types without recording or a custom HTML template.
+
+Measure a fixed 60-second variant with fresh caches using
+`python3 examples/visual/benchmark.py /path/to/backstage` from the repository
+root. The script reuses the example's card definitions and reports three runs
+and their median from render facts. On the development machine, the 1280×720,
+30 fps example rendered 1,800 frames in 6.247, 5.901 and 5.435 seconds, with
+32 layered chunks each time. These measurements cover the five card types and
+their entrances together; they do not measure a camera or video-slot animation.
+## Transition effects
+
+`transition.effect` accepts `fade`, `morph`, `slide`, `push`, `wipe`, `zoom`
+and `blur`. Slide, push and wipe accept `direction`: `left` (default), `right`,
+`up` or `down`, describing the direction of motion. Slide moves the incoming
+event over the outgoing event; push moves both. Wipe reveals the incoming event
+from the opposite edge. The transition applies to HTML, video slots, captions
+and cards together. Motion is linear over the declared duration.
+
+Static fade, push and wipe events without video slots or visible captions use
+FFmpeg composition when their HTML and graphics are stable. Push and wipe use
+`xfade`. Slide, zoom, blur, morph and dynamic content use Chromium frames.
+Transitions preserve their progress when a preview starts midway through them.
+
+## Narration, music and sound effects
+
+Set `audio[].role` to `music`, `narration` or `effect`. Cue audio is narration
+by default. Music with `"duck": true` is compressed automatically by audible
+narration, with a 20 ms attack and 250 ms release. Music keeps its configured
+volume outside speech. Multiple voice clips share one narration bus; effects
+do not trigger ducking. Without narration, music plays normally.
+
+An event's `"sound": {"file": "audio/reveal.wav", "volume": 0.4}` starts at
+the event boundary, including a transition or card entrance. For a sound tied
+to a recorded action, use ordinary effect audio with an `at` step reference.
+All effects use the existing audio mixer, sample timing, preview trimming and
+cache. Sound effects extending past the presentation end are trimmed.
+
+### Source camera
+
+A track's `camera.keyframes` crops its source video inside the assigned slot.
+Each `region` uses normalized source coordinates (`x`, `y`, `w`, `h` in 0..1),
+with a maximum 16× zoom. Keyframe `at` uses the presentation clock and also
+accepts step/cue references. The first region takes effect at its own time;
+the source remains full frame before it. `ease` defaults to `cut`: the previous
+region holds until the next keyframe. Explicit `linear`, `ease-out` or
+`ease-in-out` interpolates from the previous keyframe to this keyframe.
+Moving regions must preserve their aspect ratio; cuts can change it.
+
+```json
+"camera": {"keyframes": [
+  {"at": 0, "region": {"x": 0, "y": 0, "w": 1, "h": 1}},
+  {"at": 2, "region": {"x": 0.25, "y": 0.25, "w": 0.5, "h": 0.5}},
+  {"at": 4, "region": {"x": 0.5, "y": 0.5, "w": 0.5, "h": 0.5}, "ease": "ease-out"}
+]}
+```
+
+An event can override cameras by track ID:
+`"camera": {"demo": {"keyframes": [...]}}`. An empty keyframe list resets
+that event to the full source. Slot borders, cards and captions remain at their
+original size. Smooth cameras use FFmpeg zoom/pan expressions on the layered
+path and the same render clock in Chromium. Transitions and chunks containing
+an aspect-changing cut use frames when a stable image mask is unavailable.
+Frozen tracks still support camera movement after the source video ends.
+Zooms above 10× use frames because FFmpeg clamps its zoom/pan filter at 10×.
+
+`"camera": "follow"` builds cut keyframes from recorded step regions, mapped
+through the track's cuts and rates. A keyframe can also use `"step": "open"`
+in place of `region`. These require actual normalized `region` metadata in the
+take's step facts and fail clearly when it is missing. Coordinates are never
+inferred from the step's name or target.
+
+With `record.observations: true`, a host Ghostty stage records the resolved
+target pane from tmux's cell positions and pixel sizes. The stage uses a known
+zero-padding content origin; monitor scale and status-line placement are applied
+before normalizing coordinates. When those metrics are unavailable or the
+viewport cannot be matched, the observed window region is retained. Guest
+observations use the active window. Rotation, reflection and DPI scale are
+mapped to the selected recorder's output coordinates.
+
+See `examples/visual/camera.json`. Put a recording at `examples/visual/demo.mp4`
+(or generate an eight-second test fixture with FFmpeg), then run
+`backstage --project examples/visual render camera`.
+
+### Visible actions
+
+`actions` selects evidence from a track's step facts. It follows the source
+cuts and playback rates, including repeated source segments:
+
+```json
+"actions": [{
+  "track": "demo",
+  "keys": true,
+  "highlight": "outline",
+  "cursor": true
+}]
+```
+
+`step` optionally selects one labeled action. `keys` shows the recorded key
+sequence or typed input for the action, using theme typography. `highlight`
+accepts `outline` or `spotlight` and uses the recorded source region. An explicit
+normalized `region` can highlight a particular field instead of its window.
+`duration` optionally overrides the mapped action interval, in presentation
+seconds. `sound` accepts the same file and volume fields as event sounds.
+
+Cursor highlights use recorded normalized pointer coordinates; a recorded
+`click: true` adds a 350 ms pulse. Missing pointer observations disable the
+cursor effect. Selecting all steps skips missing regions; selecting a particular
+step with a highlight requires either a recorded or explicit region. Invalid
+recorded coordinates fail validation. No position or click is inferred from
+key names, text or targets. The built-in observer records a `pointer-trace`
+array once per take, containing recording-clock `at` times and normalized
+`pointer` positions, or `null` for gaps. Real mouse presses set `click: true`
+when the account can read its pointer devices. Keyboard events are not stored.
+The renderer interpolates adjacent positions at most 120 ms apart, hides gaps,
+and maps the trace through cuts, repeats and playback rates. `step` limits a
+trace to that action's original interval; `duration` affects action labels and
+highlights. Facts without a trace retain the action-boundary pointer behavior.
+
+Overlays stay inside their source slot and follow its camera crop. Stable
+keystrokes, outlines, spotlights and pointer markers use layered composition.
+A click pulse or an overlay that follows a moving camera uses an animated
+alpha layer when the template and camera support layered composition, and
+frames otherwise. `examples/visual/actions.json` expects an original `demo.mp4` and its
+`demo.facts.json` sidecar containing recorded steps.
+
+### Optional Remotion bridge
+
+Run `backstage export-remotion NAME --out exports/react` to create a portable
+Remotion project. `--aspect` accepts the same three aspect ratios as rendering.
+The destination must be new; failed or cancelled exports remove their temporary
+files. Published take generations remain protected.
+
+The export contains original takes and facts, prepared lossless H.264 tracks,
+mixed audio, and `backstage.json` version 1. Step and narration cue intervals
+are mapped through the selected cuts and playback rates, including repeats.
+Original source intervals and rates remain available beside presentation times.
+Preparation and audio mixing reuse the native pipeline. Shared originals and
+facts are copied once. No Node dependency is added to ordinary recording or
+rendering.
+
+Inside the export, run `npm install`, then `npm run studio` or `npm run render`.
+Edit `stage.jsx` to render actual React application components using its active
+`steps`, `cues`, `event` and `time` props. The sample displays video slots, basic
+cards, cues and keys. Existing HTML templates, visual scenes, transitions,
+camera crops and action graphics are metadata for the React integration, not
+automatically reproduced by that sample. Use the native renderer to retain
+those visuals. See the generated README for the bundle contract.
+
+### Release structure and aspect ratios
+
+`release` builds the recurring statement → title → recorded demos → CTA
+structure without a handwritten timeline. Use it instead of `timeline`.
+`statements` is a list of short pain statements, `title` and `cta` use ordinary
+card fields, and `demos` selects existing tracks:
+
+```json
+"release": {
+  "statements": ["Too many clicks"],
+  "title": {"title": "Meet the update", "subtitle": "A simpler workflow"},
+  "demos": [{"track": "demo", "duration": 8, "title": "See it work"}],
+  "cta": {"title": "Try it today", "url": "example.com"}
+}
+```
+
+Card durations derive from theme reading times, entrance motion and an
+eight-frame fade. Demos start their tracks at their own cut; use separate track
+instances for multiple demos of the same source. Track cuts, camera anchors,
+audio and action overlays use those starts. The CTA fills the remaining
+presentation duration. A total duration that cannot fit the content and CTA is
+an error. The expanded timeline uses the ordinary graphics and render caches.
+
+`render`, `preview` and `lint` accept `--aspect 16:9`, `--aspect 9:16` or
+`--aspect 1:1`. Source coordinates and timing stay unchanged. Rectangle outputs
+retain the original long edge; a square uses its short edge. Dimensions are
+even. The built-in release layout uses `cover` for portrait and square output,
+so camera regions or recorded follow regions determine the visible UI; wide
+output contains the source. Other templates keep their own responsive CSS.
+
+```bash
+backstage --project examples/visual render release --aspect 16:9 --out exports/release-wide.mp4
+backstage --project examples/visual render release --aspect 9:16 --out exports/release-vertical.mp4
+backstage --project examples/visual render release --aspect 1:1 --out exports/release-square.mp4
+```
+
+See `examples/visual/release.json`. Use `lint` with the same aspect before an
+export to check its typography and reading time.
+
+### Animated graphics composition
+
+With video slots, when a template declares stable chrome and slot geometry,
+moving editorial
+cards, captions and action overlays are captured once per frame into a
+transparent PNG layer for that chunk. FFmpeg composes that sequence over the
+prepared video tracks. Video frames stay out of Chromium. Stable chunks keep
+the existing two-still path. Template animation, changing slot geometry,
+transitions and unsupported camera chunks retain the frames path.
+
+The temporary sequence is removed after composition or cancellation. Segment
+caching and preview timing use the same keys and clock as ordinary rendering.
+Facts and timing summaries report `animated-overlay-frames` so this path is
+visible in measurements.
+
+## JSON compositions
+
+A visual scene can declare `composition` instead of `entry`. Backstage supplies
+the renderer, so the project needs no HTML entry, JavaScript, React or build step.
+Static stylesheets, images and fonts stay local resources.
+
+```json
+{
+  "type": "visual",
+  "duration": 3,
+  "composition": {
+    "width": 1920,
+    "height": 1080,
+    "nodes": [{
+      "tag": "div",
+      "text": "A simpler workflow",
+      "style": {"position": "absolute", "left": "80px", "top": "300px", "fontSize": "80px"},
+      "animate": [{
+        "property": "opacity",
+        "keyframes": [{"at": 0, "value": "0", "ease": "ease-out"}, {"at": 0.5, "value": "1"}]
+      }]
+    }]
+  }
+}
+```
+
+`width` and `height` define the composition's coordinate system, uniformly scaled
+to fit the output. `stylesheets` is an optional list of project-relative CSS
+files; their own font and image URLs remain relative to those files. Each node
+supports `tag` (default `div`), `text`, string-valued `attributes`, `style`,
+`children`, `start`, `end` and `animate`. Use `img` with a project-relative `src`,
+SVG elements for vector graphics, and `#text` for mixed text inside children.
+Text and children are mutually exclusive. Scripts, embedded documents, event
+handlers and external links are rejected.
+
+Every `start`, `end` and keyframe `at` is in seconds on the scene clock, including
+nested nodes. Visibility starts inclusively and ends exclusively; omitting
+`end` keeps a node until the scene ends. A hidden node occupies no layout space.
+Each animated property has at least two strictly increasing keyframes with
+string CSS values. `ease` belongs to the interval starting at that keyframe and
+defaults to `linear`; CSS easing keywords, `steps(...)` and `cubic-bezier(...)`
+are supported. Values hold before the first and after the last keyframe.
+One property can have only one animation per node. The renderer evaluates
+paused Web Animations from the render clock, making backward seeks deterministic.
+CSS variables can be set through `style`, including names starting with `--`.
+
+Add the visual scene to a normal presentation timeline. The existing resource
+sandbox, cache invalidation, captions, audio mixer and frame renderer apply to
+these scenes. See [the declarative example](../examples/visual/scenes/declarative.json).

@@ -68,17 +68,6 @@ func (m *Manager) scanPending() (pendingScan, error) {
 	return scan, nil
 }
 
-func (m *Manager) listPending() ([]pendingCapture, error) {
-	scan, err := m.scanPending()
-	if err != nil {
-		return nil, err
-	}
-	if len(scan.Unread) > 0 {
-		return nil, fmt.Errorf("pending %s: unreadable", scan.Unread[0])
-	}
-	return scan.Found, nil
-}
-
 func (m *Manager) pendingProtects(p pendingCapture) []string {
 	return []string{p.Disk, p.NVRAM, p.Keys, m.Store.imageJSON(p.ID), m.Store.pendingJSON(p.ID)}
 }
@@ -110,21 +99,6 @@ func (m *Manager) pendingStageMissing(p pendingCapture) (bool, error) {
 		return true, nil
 	}
 	return false, err
-}
-
-func mappingPointsAt(r *Record, id string) bool {
-	if r == nil || id == "" {
-		return false
-	}
-	if r.Source.Image == id {
-		return true
-	}
-	for _, got := range r.Snapshots {
-		if got == id {
-			return true
-		}
-	}
-	return false
 }
 
 // recoverPending applies the three Recover cases for this stage's markers.

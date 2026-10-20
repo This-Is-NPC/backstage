@@ -8,17 +8,27 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
 1. Load the project, strict version 1 presentation JSON and referenced scenes.
 2. Probe sources and compile track spans, cue placement and selected audio.
 3. Shared prepare: lossless FFV1 tracks (`-g 1`, in parallel up to the CPU
-   count) and the stereo 48 kHz mix. Hits come from
+   count) and the stereo 48 kHz mix. Both start after the segment cache
+   lookup in step 4 and run while workers start Chromium. A worker waits for
+   the tracks before its first chunk; only the final mux waits for the mix. A
+   prepare or mix failure cancels the workers and is returned as is. Hits come from
    `${UserCacheDir}/backstage/render` (hardlink into the work dir, copy on
    `EXDEV`). Work files that came from the cache are read-only (0444); the
    render must never open `track-N.mkv` or `mix.wav` for writing.
 4. Deterministic chunks: cut at every event boundary (`intervalFrames(e.At)`),
    then into pieces of at most `minChunkFrames = max(16, 2*fps)` measured from
-   the event start, then clip to `[first, end)`. A piece that contains frames
+   the event start. Split those pieces at transition ends and caption visibility
+   changes, skipping any cut that would leave fewer than `minSegmentFrames = 3`
+   frames on either side, then clip to `[first, end)`. A split piece that the
+   clip shortens below 3 frames merges into its neighbor. The H.264 encoders
+   give shorter encodes no B-frame DTS delay, and concatenating segments with and without
+   that delay produces irregular timestamps. A piece that contains frames
    of event *i*'s incoming transition also hashes event *i−1*. Each chunk key
-   (kind `segments`, `.mp4`) is SHA-256 of a v1 JSON object: size, fps, scale,
+   (kind `segments`, `.mp4`) is SHA-256 of a JSON object: size, fps, scale,
    `[first,end)`, encoder args without `-threads` or the output path, FFmpeg
-   and browser versions (browser once per render), SHA-256 of the three
+   and browser versions (browser once per render), the VAAPI driver line when
+   `render.encoder` is `vaapi` (`probeEncoder` encodes one frame at the render
+   size before any chunk and fails the render if the device refuses), SHA-256 of the three
    embedded `web/` files, the event block (Event JSON, parameters, narration,
    intersecting captions, entry content hash, slotted tracks with
    `trackCacheKey`, `[from,to]`, `on-end`, `duration`), and for a
@@ -34,7 +44,10 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    mux, facts. A single-chunk render with no audio copies the cache entry to a
    new 0644 file before rename, so the export is never a hardlink of the cache.
 5. Misses are partitioned into `N` contiguous slices (`N` from
-   `resolveWorkers`: CPU/2, memory/2 GiB, number of misses). Each worker
+   `resolveWorkers`: CPU/2, memory/2 GiB and `ceil(missFrames/minChunkFrames)`
+   when automatic, then at most the number of misses). `splitByFrames` picks
+   the slices with the smallest maximum frame total and, when fewer slices
+   reach it, splits the largest multi-chunk slice until there are `N`. Each worker
    starts one Chromium for its life and keeps track decoders open across
    consecutive chunks. Chromium runs with `--disable-partial-raster` so the
    anti-aliased edge of a rounded slot is identical from one screenshot to
@@ -44,7 +57,12 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    `index == d.frame+1` (the next frame after the last `get`), or `d.done`
    (hold after EOF). Otherwise it closes and reopens at `index` with input
    `-ss`. The frame loop only calls `decoders[id].get`. The frames seam skips
-   the geometry probe. A chunk that is not a transition, is at scale 1, keeps
+   the geometry probe. A transition fade between two events declared `static`,
+   with no slotted tracks or visible captions, can capture each event once
+   and blend those stills in FFmpeg. This path checks both events for active
+   animation and dynamic media and has its own segment cache recipe. Other
+   transition chunks use the frame loop. A chunk that is not a transition, is
+   at scale 1, keeps
    constant slot geometry (each of x,y,w,h equal across the chunk within
    1e-3; fractional `%` layouts are eligible), equal borders and equal corner
    radii whose computed values are a single `px` token (percent and two-value
@@ -55,7 +73,11 @@ engine. Existing `produce` behavior is separate and continues to record scenes.
    host and an above still with a transparent host once, and run one FFmpeg
    graph (input `-ss` at `(S-0.5)/fps` plus relative `trim=start_frame=0`,
    scale `flags=area`, rounded-rect∩image mask, overlay `eof_action=repeat`,
-   libx264 tail, `-frames:v`). The track image is an integer-pixel rectangle
+   stills read once at `-framerate fps` and repeated by
+   `loop=loop=-1:size=1,settb=1/fps,setpts=N` (integer timestamps; `N/fps/TB`
+   truncates to duplicate stamps at 10 fps), as in the static fade,
+   encoder tail, `-frames:v`; `vaapi` opens the device before the inputs and
+   ends the graph with `format=nv12,hwupload`). The track image is an integer-pixel rectangle
    inside the snapped slot on both paths. When the event's template declares
    `static` for that layout (or `static: true` on a visual scene), the same
    overlay graph runs after probes at the chunk's **first and last** frames.
@@ -208,15 +230,44 @@ draft scale, deterministic chunks (composed pixels at fade/caption/visual
 boundaries, coded exports, concat timestamps, PSNR/xcorr against one worker,
 fail/cancel leftovers, automatic worker counts, segment cache cold/warm and
 invalidation), and one-worker ffmpeg args
-(mix in shared prepare, `-video_track_timescale fps` on the chunk encoder).
+(one shared mix, `-video_track_timescale fps` on the chunk encoder).
 The generator uses tones and numbered
 frames, so no VM, speech provider or externally recorded footage is required.
 
-The quality gate builds govulncheck with Go 1.26.8 because Go 1.25's `go/types`
-panics while analyzing chromedp's JSON dependency. The scanner still loads the
-project using its Go environment; the project targets Go 1.25.13. The first run
-requires downloading the scanner toolchain. Source-level vulnerability analysis
-remains enabled. See [the upstream issue](https://github.com/golang/go/issues/73871).
+The project and release builds require Go 1.26.10. The quality gate runs the
+pinned govulncheck and deadcode tools on that supported toolchain, without a
+separate scanner runtime. The scanner is installed into a temporary directory.
+Go 1.26.10 includes the current security fixes for this release branch; see the
+[official release history](https://go.dev/doc/devel/release#go1.26.10).
 
 Public contracts: [Presentations](../presentations.md), [Templates](../templates.md)
 and [Scenes](../scenes.md).
+
+`remotion.go` exports an optional portable React project. It shares track
+preparation, audio mixing, output protection and source-span mapping with the
+native renderer. Original media/facts are deduplicated; prepared streams retain
+their decoded pixels in lossless H.264. Step/cue times are already resolved,
+including repeated cuts. The exported `stage.jsx` receives those intervals as
+active props; it does not reconstruct timings or duplicate native HTML layout
+rendering. Existing destinations are refused and cancellation removes temporary
+exports. Integration coverage checks native browser playback as well as exact
+prepared frame PTS and pixels.
+
+## Declarative visual compositions
+
+A visual scene can own a `composition` instead of an HTML entry. Scene
+validation checks the element tags, attributes, visibility intervals and CSS
+property keyframes. `timelineEvents` resolves local stylesheet and image paths
+on a copy, then selects the embedded `composition.html` renderer. The runtime
+passes the composition through the same scene context as HTML visuals.
+
+The renderer creates HTML/SVG nodes once, applies scene-clock visibility and
+creates paused Web Animations. The common runtime assigns their current time on
+every draw, including backward seeks. No project script or application bundle
+is evaluated. Composition coordinates scale uniformly to the output viewport.
+
+Segment entry hashes include the authored composition data; embedded renderer
+hashes include `composition.html`. Stylesheets, fonts and images loaded through
+the event asset route enter the existing resource manifest, so changes invalidate
+cached chunks and appear in export facts. The original scene object retains its
+portable project-relative resource paths.

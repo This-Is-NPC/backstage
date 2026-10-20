@@ -20,14 +20,14 @@ func TestProducePublishesRawTakeNotRetime(t *testing.T) {
 	pr := testProducer(t, 2)
 	restore := stubRunOK(t, "raw")
 	defer restore()
-	retimeClip = func(clip string, _ []scene.Segment, _ string) (string, error) {
+	retimeClip = func(_ context.Context, clip string, _ []scene.Segment, _ scene.RenderCfg, _ func()) (string, error) {
 		out := clip + ".retime"
 		if err := os.WriteFile(out, []byte("retimed"), 0o644); err != nil {
 			return "", err
 		}
 		return out, nil
 	}
-	defer func() { retimeClip = Retime }()
+	defer func() { retimeClip = retime }()
 
 	sg := segment{kind: "scene", name: "alpha", speed: []scene.Segment{{Rate: 10}}}
 	if err := pr.recordScene(0, sg); err != nil {

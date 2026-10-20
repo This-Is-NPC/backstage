@@ -1,11 +1,14 @@
 package scene
 
-import "path/filepath"
+import (
+	"path/filepath"
+
+	"github.com/This-Is-NPC/backstage/internal/encode"
+)
 
 // Step is one ordered action in a scene.
 //
-// JSON keys mirror the legacy runner: action, target, value, commands, args,
-// delay-before, delay-after, key-delay, hold, step.
+// Fields declare input, delays and an optional label for presentation timing.
 type Step struct {
 	Action      string   `json:"action"`
 	Target      string   `json:"target,omitempty"`
@@ -16,18 +19,19 @@ type Step struct {
 	DelayAfter  float64  `json:"delay-after,omitempty"`
 	KeyDelay    float64  `json:"key-delay,omitempty"`
 	Hold        float64  `json:"hold,omitempty"`
-	StepID      any      `json:"step,omitempty"` // free-form label, used only in logs
+	StepID      any      `json:"step,omitempty"` // label used in logs and recorded timing references
 }
 
 // Scene is a recordable script: a layout to stage plus ordered steps.
 //
 // Reset is a pointer so an omitted value defaults to true (ResetEnabled).
 type Scene struct {
-	Type      string                `json:"type,omitempty"`
-	Entry     string                `json:"entry,omitempty"`
-	Duration  float64               `json:"duration,omitempty"`
-	Narration Narration             `json:"narration,omitempty"`
-	Audio     map[string]SceneAudio `json:"audio,omitempty"`
+	Type        string                `json:"type,omitempty"`
+	Entry       string                `json:"entry,omitempty"`
+	Composition *Composition          `json:"composition,omitempty"`
+	Duration    float64               `json:"duration,omitempty"`
+	Narration   Narration             `json:"narration,omitempty"`
+	Audio       map[string]SceneAudio `json:"audio,omitempty"`
 
 	Name   string `json:"name,omitempty"`
 	Layout string `json:"layout"`
@@ -172,25 +176,18 @@ type VMEnd struct {
 	Group    string `json:"group,omitempty"`
 }
 
-// RenderThreads is used by presentation render. produce ignores these keys.
-// Zero or omitted values mean the presentation renderer picks a default.
-// Negative values are a config error. Very large values are accepted as written.
-type RenderThreads struct {
-	Prepare int `json:"prepare,omitempty"`
-	Filter  int `json:"filter,omitempty"`
-	Encode  int `json:"encode,omitempty"`
-}
+// RenderThreads is the shared FFmpeg thread budget. Zero values use host defaults.
+type RenderThreads = encode.Threads
 
-// RenderCfg is the target geometry for a stitched production. Zero w/h means the
-// monitor's native resolution; zero fps falls back to record.fps.
-// Workers is parallel presentation render chunks; zero or omitted means the
-// renderer picks a default. produce ignores Workers and Threads.
+// RenderCfg selects geometry, concurrency and the shared H.264 encoder.
+// Zero dimensions use native resolution; zero fps falls back to record.fps.
 type RenderCfg struct {
 	W       int           `json:"w,omitempty"`
 	H       int           `json:"h,omitempty"`
 	FPS     int           `json:"fps,omitempty"`
 	Workers int           `json:"workers,omitempty"`
 	Threads RenderThreads `json:"threads,omitempty"`
+	Encoder string        `json:"encoder,omitempty"`
 }
 
 // ResolveRenderDims returns the (fps, w, h) a transition should target, applying
@@ -280,9 +277,10 @@ func (p *Project) ScenePath(name string) string {
 
 // RecordCfg targets the recorder: which monitor, fps, and output subdir.
 type RecordCfg struct {
-	Monitor string `json:"monitor,omitempty"`
-	FPS     int    `json:"fps,omitempty"`
-	Out     string `json:"out,omitempty"`
+	Observations bool   `json:"observations,omitempty"`
+	Monitor      string `json:"monitor,omitempty"`
+	FPS          int    `json:"fps,omitempty"`
+	Out          string `json:"out,omitempty"`
 }
 
 // PopupCfg sizes the instruction popup, sets its typing speed, and optionally
@@ -340,8 +338,9 @@ type Pane struct {
 // It lives here (not in the stage driver) so pane targeting and staging share
 // one type without importing each other.
 type Manifest struct {
-	Panes map[string]string `json:"panes"`
-	Order []string          `json:"order"` // pane names in layout order
+	Panes         map[string]string `json:"panes"`
+	Order         []string          `json:"order"`                    // pane names in layout order
+	ContentOrigin *[2]int           `json:"content-origin,omitempty"` // terminal pixels relative to the window
 }
 
 // Pane resolves a target name to a tmux pane id, trying each candidate in turn

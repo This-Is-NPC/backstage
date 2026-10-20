@@ -34,20 +34,21 @@ type namedBytes struct {
 
 // renderTimings is the presentation sidecar object. It is not facts.Timings.
 type renderTimings struct {
-	RendererStartSeconds float64            `json:"renderer-start-seconds"`
-	DecoderStartSeconds  float64            `json:"decoder-start-seconds"`
-	PrepareTrackSeconds  map[string]float64 `json:"prepare-track-seconds,omitempty"`
-	AudioSeconds         *float64           `json:"audio-seconds,omitempty"`
-	AudioPartSeconds     []namedSeconds     `json:"audio-part-seconds,omitempty"`
-	Decode               framePhase         `json:"decode"`
-	Transfer             framePhase         `json:"transfer"`
-	Draw                 framePhase         `json:"draw"`
-	Screenshot           framePhase         `json:"screenshot"`
-	EncodeWrite          framePhase         `json:"encode-write"`
-	Probe                framePhase         `json:"probe"`
-	LayeredChunks        int                `json:"layered-chunks"`
-	CompositeSeconds     float64            `json:"composite-seconds"`
-	StaticViolations     int                `json:"static-violations,omitempty"`
+	RendererStartSeconds  float64            `json:"renderer-start-seconds"`
+	DecoderStartSeconds   float64            `json:"decoder-start-seconds"`
+	PrepareTrackSeconds   map[string]float64 `json:"prepare-track-seconds,omitempty"`
+	AudioSeconds          *float64           `json:"audio-seconds,omitempty"`
+	AudioPartSeconds      []namedSeconds     `json:"audio-part-seconds,omitempty"`
+	Decode                framePhase         `json:"decode"`
+	Transfer              framePhase         `json:"transfer"`
+	Draw                  framePhase         `json:"draw"`
+	Screenshot            framePhase         `json:"screenshot"`
+	EncodeWrite           framePhase         `json:"encode-write"`
+	Probe                 framePhase         `json:"probe"`
+	LayeredChunks         int                `json:"layered-chunks"`
+	AnimatedOverlayFrames int                `json:"animated-overlay-frames,omitempty"`
+	CompositeSeconds      float64            `json:"composite-seconds"`
+	StaticViolations      int                `json:"static-violations,omitempty"`
 	// EncodeSeconds is the longest frames-path chunk encoder Start to Wait.
 	EncodeSeconds   float64          `json:"encode-seconds"`
 	MuxSeconds      *float64         `json:"mux-seconds,omitempty"`
@@ -189,8 +190,11 @@ func (t renderTimings) progressLine(frames int) string {
 		prep += s
 	}
 	extra := ""
+	if t.AnimatedOverlayFrames > 0 {
+		extra = fmt.Sprintf(" animated-overlay-frames=%d", t.AnimatedOverlayFrames)
+	}
 	if t.StaticViolations > 0 {
-		extra = fmt.Sprintf(" static-violations=%d", t.StaticViolations)
+		extra += fmt.Sprintf(" static-violations=%d", t.StaticViolations)
 	}
 	return fmt.Sprintf(">> render timings: total=%.3f renderer-start=%.3f decoder-start=%.3f prepare=%.3f audio=%.3f encode=%.3f concat=%.3f mux=%.3f workers=%d frames=%d decode-p95=%.3f transfer-p95=%.3f draw-p95=%.3f screenshot-p95=%.3f encode-write-p95=%.3f probe-p95=%.3f composite=%.3f layered=%d cache-hits=%d cache-misses=%d%s\n",
 		t.TotalSeconds, t.RendererStartSeconds, t.DecoderStartSeconds, prep, audio, t.EncodeSeconds, concat, mux, t.Workers, frames,

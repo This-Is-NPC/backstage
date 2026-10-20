@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -291,16 +292,40 @@ func TestTrackTrimFreeze(t *testing.T) {
 	}
 }
 
-func TestX264EncodeTail(t *testing.T) {
-	p := &Plan{FPS: 12}
-	got := x264EncodeTail(p, 3, "out.mp4")
-	want := []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "3", "-video_track_timescale", "12", "out.mp4"}
-	if !stringSliceEqual(got, want) {
-		t.Fatalf("%v", got)
+func TestEncodeTailPerEncoder(t *testing.T) {
+	cases := []struct {
+		encoder string
+		want    []string
+		init    []string
+		vf      string
+	}{
+		{"", []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "3", "-video_track_timescale", "12", "out.mp4"}, nil, ""},
+		{"libx264", []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-threads", "3", "-video_track_timescale", "12", "out.mp4"}, nil, ""},
+		{"vaapi", []string{"-an", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "20", "-threads", "3", "-video_track_timescale", "12", "out.mp4"}, []string{"-init_hw_device", "vaapi=va", "-filter_hw_device", "va"}, "format=nv12,hwupload"},
 	}
-	frames := encoderArgs(p, renderOpts{Scale: 1}, 3, "out.mp4")
-	if !stringSliceEqual(frames[len(frames)-len(want):], want) {
-		t.Fatalf("frames tail %v", frames)
+	for _, c := range cases {
+		p := &Plan{FPS: 12, Project: &scene.Project{Render: scene.RenderCfg{Encoder: c.encoder}}}
+		if got := encodeTail(p, 3, "out.mp4"); !stringSliceEqual(got, c.want) {
+			t.Fatalf("%q tail %v", c.encoder, got)
+		}
+		frames := encoderArgs(p, renderOpts{Scale: 1}, 3, "out.mp4")
+		if !stringSliceEqual(frames[len(frames)-len(c.want):], c.want) {
+			t.Fatalf("%q frames tail %v", c.encoder, frames)
+		}
+		if !stringSliceEqual(frames[:len(c.init)], c.init) {
+			t.Fatalf("%q frames init %v", c.encoder, frames)
+		}
+		wantVF := []string{draftCropFilter()}
+		if c.vf != "" {
+			wantVF = append(wantVF, c.vf)
+		}
+		draft := encoderArgs(p, renderOpts{Scale: 0.5}, 3, "out.mp4")
+		if i := slices.Index(draft, "-vf"); i < 0 || draft[i+1] != strings.Join(wantVF, ",") {
+			t.Fatalf("%q draft filter %v", c.encoder, draft)
+		}
+		if i := slices.Index(frames, "-vf"); (i >= 0) != (c.vf != "") || i >= 0 && frames[i+1] != c.vf {
+			t.Fatalf("%q frames filter %v", c.encoder, frames)
+		}
 	}
 }
 
@@ -333,12 +358,15 @@ func TestLayerGraphOverlayAtContentOrigin(t *testing.T) {
 		CX: 12, CY: 22, CW: 76, CH: 56,
 		InnerRadius: 14,
 	}
-	g := layerGraph([]slotBox{box}, [][2]int{{320, 180}}, []int{4}, 10, "out")
+	g := layerGraph([]slotBox{box}, [][2]int{{320, 180}}, []int{4}, 10, "out", false)
 	if !strings.Contains(g, "overlay=12:22:") {
 		t.Fatalf("want overlay at content origin\n%s", g)
 	}
 	if strings.Contains(g, "overlay=10:20:") {
 		t.Fatalf("overlay at box origin\n%s", g)
+	}
+	if n := strings.Count(g, stillHold(10)); n != 3 {
+		t.Fatalf("below, mask and above should each be held once, got %d\n%s", n, g)
 	}
 }
 
@@ -611,13 +639,9 @@ func TestLayerCaptionChangeIsFrames(t *testing.T) {
 	resetSeams()
 	defer resetSeams()
 	html := replaceFit(layerFillHTML, "fill")
-	plan := layerSlotPlan(t, 320, 180, 10, 2, "single", html, []Caption{
-		{Scene: "explain", Cue: "cue", Clock: "presentation", At: 0, Duration: 1, Slot: "subtitle"},
-		{Scene: "explain", Cue: "cue", Clock: "presentation", At: 1, Duration: 1, Slot: "subtitle"},
-	})
-	// two captions need two cue texts; writeVisual-style scene already has one cue.
-	if err := os.WriteFile(filepath.Join(plan.Project.Dir, "scenes", "explain.json"), []byte(`{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"cue","start":0,"end":1,"text":"ONE"}]}}`), 0o600); err != nil {
-		t.Fatal(err)
+	plan := layerCaptionSwapPlan(t, html, 0.1)
+	if len(planChunks(plan, 0, plan.Frames)) != 1 {
+		t.Fatalf("chunks %+v", planChunks(plan, 0, plan.Frames))
 	}
 	var log bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -628,6 +652,54 @@ func TestLayerCaptionChangeIsFrames(t *testing.T) {
 	if bytes.Contains(log.Bytes(), []byte("layered\n")) {
 		t.Fatal(log.String())
 	}
+}
+
+func TestLayerCaptionChangeSplitsChunks(t *testing.T) {
+	requireRenderTest(t)
+	resetSeams()
+	defer resetSeams()
+	html := replaceFit(layerFillHTML, "fill")
+	plan := layerCaptionSwapPlan(t, html, 1)
+	chunks := planChunks(plan, 0, plan.Frames)
+	if len(chunks) != 2 || chunks[1].First != 10 {
+		t.Fatalf("chunks %+v", chunks)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	paths := map[string]string{}
+	var log bytes.Buffer
+	for _, mode := range []string{"frames", "auto"} {
+		layerMode = mode
+		useTempCache(t)
+		paths[mode] = filepath.Join(t.TempDir(), mode+".mp4")
+		out := io.Writer(io.Discard)
+		if mode == "auto" {
+			out = &log
+		}
+		if err := Render(ctx, plan, paths[mode], out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, ch := range chunks {
+		if !strings.Contains(log.String(), fmt.Sprintf(">> chunk-%d layered\n", ch.Index)) {
+			t.Fatalf("chunk %d not layered:\n%s", ch.Index, log.String())
+		}
+	}
+	minY, avgY, err := videoPSNR(paths["frames"], paths["auto"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minY < 40 || avgY < 45 {
+		t.Fatalf("PSNR-Y min=%.2f avg=%.2f", minY, avgY)
+	}
+}
+
+func layerCaptionSwapPlan(t *testing.T, html string, swap float64) *Plan {
+	t.Helper()
+	return layerSlotPlanScene(t, 320, 180, 10, 2, "single", html, []Caption{
+		{Scene: "explain", Cue: "one", Clock: "presentation", At: 0, Duration: swap, Slot: "subtitle"},
+		{Scene: "explain", Cue: "two", Clock: "presentation", At: swap, Duration: 2 - swap, Slot: "subtitle"},
+	}, `{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"one","start":0,"end":1,"text":"ONE"},{"id":"two","start":1,"end":2,"text":"TWO"}]}}`)
 }
 
 func TestLayerZOrderMatchesDraw(t *testing.T) {

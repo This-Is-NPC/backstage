@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1075,4 +1076,30 @@ func TestSnapshotRemovePendingFailureIsWarning(t *testing.T) {
 	if _, err := os.Stat(m.Store.pendingJSON(id)); !os.IsNotExist(err) {
 		t.Fatal("Recover left marker")
 	}
+}
+
+func (m *Manager) listPending() ([]pendingCapture, error) {
+	scan, err := m.scanPending()
+	if err != nil {
+		return nil, err
+	}
+	if len(scan.Unread) > 0 {
+		return nil, fmt.Errorf("pending %s: unreadable", scan.Unread[0])
+	}
+	return scan.Found, nil
+}
+
+func mappingPointsAt(r *Record, id string) bool {
+	if r == nil || id == "" {
+		return false
+	}
+	if r.Source.Image == id {
+		return true
+	}
+	for _, got := range r.Snapshots {
+		if got == id {
+			return true
+		}
+	}
+	return false
 }

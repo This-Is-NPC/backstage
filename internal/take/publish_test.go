@@ -30,14 +30,14 @@ func writeSession(t *testing.T, s *Session, body string) {
 	if err := os.WriteFile(s.Clip(), []byte(body+"-clip"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.FactsFile(), []byte(body+"-facts"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(filepath.Dir(s.Clip()), factsName), []byte(body+"-facts"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestPublishThenOpenReadsGeneration(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestPublishThenOpenReadsGeneration(t *testing.T) {
 
 func TestInterruptBlockedDuringCommitCriticalSection(t *testing.T) {
 	p, paths := testProject(t)
-	first, err := Begin(p, "demo")
+	first, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestInterruptBlockedDuringCommitCriticalSection(t *testing.T) {
 	if _, err := first.Publish(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	next, err := Begin(p, "demo")
+	next, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestConcurrentInterruptLeavesValidTakeOrAttempt(t *testing.T) {
 	for _, step := range steps {
 		t.Run(step, func(t *testing.T) {
 			p, paths := testProject(t)
-			first, err := Begin(p, "demo")
+			first, err := BeginContext(context.Background(), p, "demo")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -124,7 +124,7 @@ func TestConcurrentInterruptLeavesValidTakeOrAttempt(t *testing.T) {
 			if _, err := first.Publish(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			next, err := Begin(p, "demo")
+			next, err := BeginContext(context.Background(), p, "demo")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -182,7 +182,7 @@ func assertPublishedOrAttempt(t *testing.T, p *scene.Project, paths Paths, s *Se
 
 func TestPublishFailureBeforeManifestBecomesAttempt(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestPublishFailureBeforeManifestBecomesAttempt(t *testing.T) {
 
 func TestWriteStablePathDoesNotChangeGeneration(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestWriteStablePathDoesNotChangeGeneration(t *testing.T) {
 
 func TestPublisherWaitsForSceneLock(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestPublisherWaitsForSceneLock(t *testing.T) {
 
 func TestPublishLockWaitCancelledBecomesAttempt(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestPublishLockWaitCancelledBecomesAttempt(t *testing.T) {
 
 func TestFailedTakeStaysOffStablePath(t *testing.T) {
 	p, paths := testProject(t)
-	ok, err := Begin(p, "demo")
+	ok, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestFailedTakeStaysOffStablePath(t *testing.T) {
 	if _, err := ok.Publish(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	bad, err := Begin(p, "demo")
+	bad, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestBeginDoesNotWaitForSceneLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeFile(held)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestBeginDoesNotWaitForSceneLock(t *testing.T) {
 
 func TestInterruptBeforeCommitMovesToAttempts(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestInterruptBeforeCommitMovesToAttempts(t *testing.T) {
 
 func TestInterruptAfterCommitRemovesTempsOnly(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}

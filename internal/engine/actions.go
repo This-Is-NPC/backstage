@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/facts"
+	"github.com/This-Is-NPC/backstage/internal/pane"
 	"github.com/This-Is-NPC/backstage/internal/prompter"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 	"github.com/This-Is-NPC/backstage/internal/transition"
@@ -16,6 +18,29 @@ func (e *Engine) runStep(i int, st scene.Step) error {
 
 	if st.DelayBefore > 0 {
 		e.sleep(st.DelayBefore)
+	}
+	if !e.recordingStarted.IsZero() {
+		visual := facts.VisualState{}
+		if observer, ok := e.pane.(pane.Observer); ok && e.Project != nil && e.Project.Record.Observations {
+			visual = observer.Observe(target)
+		}
+		start := time.Since(e.recordingStarted).Seconds()
+		defer func() {
+			id := ""
+			if st.StepID != nil {
+				id = fmt.Sprint(st.StepID)
+			}
+			var keys []string
+			if action == "keys" {
+				keys = st.Commands
+			} else if (action == "type" || action == "run") && st.Value != "" {
+				keys = []string{st.Value}
+				if action == "run" {
+					keys = append(keys, "enter")
+				}
+			}
+			e.steps = append(e.steps, facts.Step{ID: id, Action: action, Target: target, Start: start, End: time.Since(e.recordingStarted).Seconds(), Keys: keys, Region: visual.Region, Pointer: visual.Pointer})
+		}()
 	}
 
 	var err error

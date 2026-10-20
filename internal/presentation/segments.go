@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
+	"github.com/This-Is-NPC/backstage/internal/encode"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 )
 
@@ -22,6 +24,7 @@ type segmentKeyV1 struct {
 	First   int               `json:"first"`
 	End     int               `json:"end"`
 	Encode  []string          `json:"encode"`
+	Device  string            `json:"device,omitempty"`
 	FFmpeg  string            `json:"ffmpeg"`
 	Browser string            `json:"browser"`
 	Web     map[string]string `json:"web"`
@@ -31,6 +34,10 @@ type segmentKeyV1 struct {
 }
 
 type eventKeyV1 struct {
+	Actions    []ActionSpan      `json:"actions,omitempty"`
+	Camera     map[string]Camera `json:"camera,omitempty"`
+	Theme      *Theme            `json:"theme,omitempty"`
+	Card       *Card             `json:"card,omitempty"`
 	At         string            `json:"at"`
 	Layout     string            `json:"layout"`
 	Slots      map[string]string `json:"slots"`
@@ -44,8 +51,9 @@ type eventKeyV1 struct {
 }
 
 type transitionKeyV1 struct {
-	Effect   string `json:"effect"`
-	Duration string `json:"duration"`
+	Effect    string `json:"effect"`
+	Duration  string `json:"duration"`
+	Direction string `json:"direction,omitempty"`
 }
 
 type overlapKeyV1 struct {
@@ -56,13 +64,16 @@ type overlapKeyV1 struct {
 }
 
 type textKeyV1 struct {
-	At   string `json:"at"`
-	End  string `json:"end"`
-	Text string `json:"text"`
-	Slot string `json:"slot"`
+	Entrance Motion  `json:"entrance,omitempty"`
+	FontSize float64 `json:"font-size,omitempty"`
+	At       string  `json:"at"`
+	End      string  `json:"end"`
+	Text     string  `json:"text"`
+	Slot     string  `json:"slot"`
 }
 
 type segmentTrackV1 struct {
+	Camera   Camera `json:"camera"`
 	Key      string `json:"key"`
 	From     int    `json:"from"`
 	To       int    `json:"to"`
@@ -75,6 +86,7 @@ type segmentCache struct {
 	plan    *Plan
 	project *scene.Project
 	browser string
+	device  string
 	web     map[string]string
 }
 
@@ -83,12 +95,13 @@ type chunkJob struct {
 	key string
 }
 
-func newSegmentCache(cache *renderCache, p *Plan, browser string) *segmentCache {
+func newSegmentCache(cache *renderCache, p *Plan, browser, device string) *segmentCache {
 	return &segmentCache{
 		cache:   cache,
 		plan:    p,
 		project: p.Project,
 		browser: browser,
+		device:  device,
 		web:     embeddedWebHashes(),
 	}
 }
@@ -99,7 +112,7 @@ func (s *segmentCache) dest(key string) string {
 
 func embeddedWebHashes() map[string]string {
 	out := map[string]string{}
-	for _, name := range []string{"runtime.html", "template.html", "visual.html"} {
+	for _, name := range []string{"runtime.html", "template.html", "visual.html", "graphics.js", "composition.html"} {
 		b, err := web.ReadFile("web/" + name)
 		if err != nil {
 			panic(err)
@@ -110,28 +123,38 @@ func embeddedWebHashes() map[string]string {
 	return out
 }
 
-func x264CodecArgs() []string {
-	return []string{"-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"}
-}
-
-func x264EncodeTail(p *Plan, encodeThreads int, out string) []string {
-	return append(x264CodecArgs(), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
-}
-
-func x264BaseArgs(p *Plan, opts renderOpts) []string {
-	args := []string{"-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-"}
-	if opts.Scale != 1 {
-		args = append(args, "-vf", draftCropFilter())
+func (p *Plan) encoder() encode.Encoder {
+	if p.Project == nil {
+		return ""
 	}
-	return append(args, x264CodecArgs()...)
+	return encode.Encoder(p.Project.Render.Encoder)
+}
+
+func encodeTail(p *Plan, encodeThreads int, out string) []string {
+	return append(p.encoder().Args(), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
+}
+
+func framesBaseArgs(p *Plan, opts renderOpts) []string {
+	args := append(p.encoder().Init(), "-v", "error", "-y", "-f", "image2pipe", "-framerate", strconv.Itoa(p.FPS), "-i", "-")
+	var vf []string
+	if opts.Scale != 1 {
+		vf = append(vf, draftCropFilter())
+	}
+	if up := p.encoder().Upload(); up != "" {
+		vf = append(vf, up)
+	}
+	if len(vf) > 0 {
+		args = append(args, "-vf", strings.Join(vf, ","))
+	}
+	return append(args, p.encoder().Args()...)
 }
 
 func segmentEncodeArgs(p *Plan, opts renderOpts) []string {
-	return append(x264BaseArgs(p, opts), "-video_track_timescale", strconv.Itoa(p.FPS))
+	return append(framesBaseArgs(p, opts), "-video_track_timescale", strconv.Itoa(p.FPS))
 }
 
 func encoderArgs(p *Plan, opts renderOpts, encodeThreads int, out string) []string {
-	return append(x264BaseArgs(p, opts), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
+	return append(framesBaseArgs(p, opts), "-threads", strconv.Itoa(encodeThreads), "-video_track_timescale", strconv.Itoa(p.FPS), out)
 }
 
 func textSpanKeys(spans []TextSpan, first, end, fps int) []textKeyV1 {
@@ -140,7 +163,7 @@ func textSpanKeys(spans []TextSpan, first, end, fps int) []textKeyV1 {
 	var out []textKeyV1
 	for _, s := range spans {
 		if s.At < chunkEnd && s.End > chunkStart {
-			out = append(out, textKeyV1{At: num(s.At), End: num(s.End), Text: s.Text, Slot: s.Slot})
+			out = append(out, textKeyV1{At: num(s.At), End: num(s.End), Text: s.Text, Slot: s.Slot, Entrance: s.Entrance, FontSize: s.FontSize})
 		}
 	}
 	return out
@@ -188,6 +211,9 @@ func (s *segmentCache) eventEntryHash(e Event) (string, error) {
 		if sc == nil {
 			return "", fmt.Errorf("unknown visual scene %q", e.Scene)
 		}
+		if sc.Composition != nil {
+			return hashJSON(sc.Composition), nil
+		}
 		abs, err := s.plan.Project.InputPath(sc.Entry)
 		if err != nil {
 			return "", err
@@ -219,7 +245,8 @@ func (s *segmentCache) slottedTrackKeys(e Event, first, end int) ([]segmentTrack
 			return nil, err
 		}
 		out = append(out, segmentTrackV1{
-			Key:      trackCacheKey(src, tr.Segments, s.plan.FPS, ffv1GOP, s.cache.ffmpeg),
+			Camera:   tr.Camera,
+			Key:      trackCacheKey(src, tr.Segments, s.plan.FPS, s.cache.ffmpeg),
 			From:     trackFrame(tr, first, s.plan.FPS),
 			To:       trackFrame(tr, end-1, s.plan.FPS),
 			OnEnd:    tr.OnEnd,
@@ -245,11 +272,14 @@ func (s *segmentCache) eventKey(e Event, first, end int) (eventKeyV1, error) {
 		}
 	}
 	return eventKeyV1{
+		Actions: s.plan.Actions,
+		Camera:  e.Camera,
+		Theme:   s.plan.Document.Theme, Card: e.Card,
 		At:         num(e.At),
 		Layout:     e.Layout,
 		Slots:      e.Slots,
 		Scene:      e.Scene,
-		Transition: transitionKeyV1{Effect: e.Transition.Effect, Duration: num(e.Transition.Duration)},
+		Transition: transitionKeyV1{Effect: e.Transition.Effect, Duration: num(e.Transition.Duration), Direction: e.Transition.Direction},
 		Parameters: s.plan.Document.Parameters,
 		Narration:  narration,
 		Text:       textSpanKeys(s.plan.Text, first, end, s.plan.FPS),
@@ -275,10 +305,16 @@ func (s *segmentCache) cacheKey(opts renderOpts, ch chunkRange) (string, error) 
 		First:   ch.First,
 		End:     ch.End,
 		Encode:  segmentEncodeArgs(p, opts),
+		Device:  s.device,
 		FFmpeg:  s.cache.ffmpeg,
 		Browser: s.browser,
 		Web:     s.web,
 		Event:   ev,
+	}
+	if opts.Scale == 1 {
+		if _, _, ok := stillTransitionTimes(p, ch); ok {
+			key.V = cacheKeyVersion + "-still-transition-1"
+		}
 	}
 	if chunkTransition(p, ch) {
 		prev, err := s.eventKey(p.Document.Timeline[ch.Event-1], ch.First, ch.End)

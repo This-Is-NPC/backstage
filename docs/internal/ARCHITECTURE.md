@@ -30,8 +30,10 @@ and removed (phases 0–1 are done; see the phase table).
 ## Presentation composition
 
 The implemented `internal/presentation` package is separate from recording
-drivers. It compiles existing media and scene editorial content into a timeline,
-then composes HTML/SVG through Chromium and encodes with FFmpeg. See
+drivers. It compiles native JSON visuals, existing media and scene editorial
+content into a timeline, then composes HTML/SVG through Chromium and encodes
+with FFmpeg. Native composition scenes use an embedded renderer, with no
+project-specific JavaScript or React dependency. See
 [Presentation implementation](presentations.md) for its pipeline, preview,
 cancellation and validation. The Wails desktop described below remains future work.
 

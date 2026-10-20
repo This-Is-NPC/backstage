@@ -1,5 +1,5 @@
 [tools]
-go = "1.25.13"
+go = "1.26.10"
 golangci-lint = "latest"
 "go:golang.org/x/vuln/cmd/govulncheck" = "latest"
 
@@ -69,7 +69,7 @@ run = '''
 source="{{config_root}}/agents/skills/backstage"
 target="$HOME/.agents/skills/backstage"
 
-for page in SKILL.md scenes.md vm-stage.md producing.md; do
+for page in SKILL.md scenes.md vm-stage.md producing.md presentations.md declarative.md; do
   test -f "$source/$page" || { echo "the skill is missing $page" >&2; exit 1; }
 done
 

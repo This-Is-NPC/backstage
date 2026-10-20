@@ -108,6 +108,15 @@ real time, because that is where the result arrives.
 Backstage writes a second file and leaves the recording as it is. Ask for
 another rate tomorrow, and no new recording is necessary.
 
+CPU retiming can generate several stretches in one FFmpeg invocation while
+keeping each stretch's frame selection and timestamps. The batch is limited by
+host CPU and memory availability. Explicit encoding/filter thread limits and
+VAAPI keep one stretch per invocation. The stretches are joined without another
+encode; production normalization runs afterwards.
+An interrupted retime removes its temporary pieces and preserves any previous
+retimed export. The completed output replaces that export only after the join
+succeeds.
+
 ### Each stretch starts where the last one ended
 
 A production states no start. The last stretch runs to the end of the clip, and
@@ -174,7 +183,15 @@ next machine. Hold the card for four seconds. Fade it in and out.
 
 ## What this does not do
 
-- **It does not know when each caption belongs.** Backstage does not yet write
-  the time of each step beside the clip. Write those times yourself, or keep
-  the narration inside the take.
+- **`produce` does not place captions.** Recordings include step times in their
+  `.facts.json` sidecars. Use step references in
+  [declarative presentations](how-to-compose-presentations.md) to position captions.
 - **`produce` does not lay clips side by side.** Use [declarative presentations](how-to-compose-presentations.md) with `backstage render` to compose existing recordings into multiple screens.
+## Production timing
+
+Every successful production writes an adjacent `.facts.json` file with
+`production-phases`. The values are wall seconds for recording (including take
+publication and teardown), retiming, transitions, normalization, concat and the
+whole command. The terminal prints the same phase summary. See
+[`examples/production`](../examples/production/README.md) for a repeatable
+benchmark that replaces desktop recording with deterministic footage.

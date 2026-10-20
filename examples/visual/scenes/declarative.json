@@ -1,0 +1,24 @@
+{
+  "type": "visual",
+  "duration": 4,
+  "composition": {
+    "width": 1280,
+    "height": 720,
+    "nodes": [{
+      "style": {"position": "absolute", "inset": "0", "background": "#11111a", "color": "#e4e8f7", "fontFamily": "sans-serif"},
+      "children": [{
+        "tag": "h1",
+        "text": "Everything on the timeline",
+        "style": {"position": "absolute", "left": "80px", "top": "180px", "fontSize": "54px"},
+        "animate": [
+          {"property": "opacity", "keyframes": [{"at": 0, "value": "0", "ease": "ease-out"}, {"at": 0.5, "value": "1"}]},
+          {"property": "transform", "keyframes": [{"at": 0, "value": "translateY(24px)", "ease": "ease-out"}, {"at": 0.5, "value": "translateY(0px)"}]}
+        ]
+      }, {
+        "text": "Elements, timing and motion are scene data.",
+        "start": 0.5,
+        "style": {"position": "absolute", "left": "80px", "top": "340px", "fontSize": "32px"}
+      }]
+    }]
+  }
+}

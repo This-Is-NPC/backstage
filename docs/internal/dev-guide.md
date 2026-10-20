@@ -2,14 +2,32 @@
 
 ## Local Checks
 
-Backstage uses a local-first merge gate. The source of truth is:
+Use Go 1.26.10, matching `go.mod`, mise and release CI. Backstage uses a
+local-first merge gate. The source of truth is:
 
 ```bash
 mise run check
 ```
 
 That task runs the same gate as `make check`: build, vet, tests, golangci-lint,
-govulncheck, and the tool-agnostic production-code scan.
+govulncheck, dead-code analysis, the tool-agnostic production-code scan and skill
+installation checks.
+
+For changes to rendering or recording evidence, enable the real media and
+desktop checks after completing the implementation:
+
+```bash
+BACKSTAGE_RENDER_TEST=1 BACKSTAGE_DESKTOP_TEST=1 make check
+go test -race ./internal/engine ./internal/pane ./internal/guest ./internal/recorder
+```
+
+Render checks need Chromium, FFmpeg and ffprobe. Desktop checks need a running
+Hyprland session and their capture/input tools; they create temporary outputs
+and a button-only test device, clean them up, and do not move the user's cursor.
+The libvirt integration test is separate: set `BACKSTAGE_FRAMEBUFFER_DOMAIN`
+only to a running test guest owned by the caller. It never boots or changes the
+domain. Benchmark recipes and accepted/rejected optimizations are documented
+in [Rendering and performance decisions](performance.md).
 
 Enable the tracked pre-push hook once per clone:
 

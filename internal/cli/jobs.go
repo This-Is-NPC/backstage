@@ -1201,23 +1201,6 @@ func (p *execProc) Signal(sig os.Signal) error {
 	return p.cmd.Process.Signal(sig)
 }
 
-type signalProc struct {
-	done chan error
-	mu   sync.Mutex
-	sigs int
-}
-
-func (p *signalProc) Wait() error {
-	return <-p.done
-}
-
-func (p *signalProc) Signal(os.Signal) error {
-	p.mu.Lock()
-	p.sigs++
-	p.mu.Unlock()
-	return nil
-}
-
 func writeProgress(w io.Writer, status, phase string) {
 	if w == nil {
 		return

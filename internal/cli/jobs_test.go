@@ -249,8 +249,9 @@ func TestSameStageNeverOverlaps(t *testing.T) {
 }
 
 func TestSchedulerSameStageSkipRestore(t *testing.T) {
-	machine.SetBootGuest(func(*guest.Guest, time.Duration) error { return nil })
-	t.Cleanup(func() { machine.SetBootGuest(nil) })
+	prevBoot := machine.BootGuest
+	machine.BootGuest = func(*guest.Guest, time.Duration) error { return nil }
+	t.Cleanup(func() { machine.BootGuest = prevBoot })
 
 	m, r := cliLiveStage(t)
 	store := m.Store
@@ -1530,4 +1531,21 @@ func saveStageSpec(t *testing.T, store *machine.Store, name string, cpus int, me
 	if err := store.Save(r); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type signalProc struct {
+	done chan error
+	mu   sync.Mutex
+	sigs int
+}
+
+func (p *signalProc) Wait() error {
+	return <-p.done
+}
+
+func (p *signalProc) Signal(os.Signal) error {
+	p.mu.Lock()
+	p.sigs++
+	p.mu.Unlock()
+	return nil
 }

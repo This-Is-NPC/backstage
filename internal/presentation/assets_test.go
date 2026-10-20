@@ -14,11 +14,18 @@ import (
 )
 
 func TestAssetRelFromRequestRefusesOutsideRoute(t *testing.T) {
-	prefix := "/token/"
-	if event, rel, ok := eventAssetRel(prefix, "/token/event-0/asset/templates/a.css"); !ok || event != 0 || rel != "templates/a.css" {
+	route := func(urlPath string) (int, string, bool) {
+		event, inner, ok := parseEventRest(strings.TrimPrefix(urlPath, "/token/"))
+		if !ok {
+			return 0, "", false
+		}
+		rel, ok := assetRelFromInner(inner)
+		return event, rel, ok
+	}
+	if event, rel, ok := route("/token/event-0/asset/templates/a.css"); !ok || event != 0 || rel != "templates/a.css" {
 		t.Fatalf("ok path: %d %q %v", event, rel, ok)
 	}
-	if event, rel, ok := eventAssetRel(prefix, "/token/event-2/asset/logo.png"); !ok || event != 2 || rel != "logo.png" {
+	if event, rel, ok := route("/token/event-2/asset/logo.png"); !ok || event != 2 || rel != "logo.png" {
 		t.Fatalf("event path: %d %q %v", event, rel, ok)
 	}
 	for _, url := range []string{
@@ -30,7 +37,7 @@ func TestAssetRelFromRequestRefusesOutsideRoute(t *testing.T) {
 		"/token/event-0/foo/../asset/a.css",
 		"/token/event-x/asset/a.css",
 	} {
-		if _, _, ok := eventAssetRel(prefix, url); ok {
+		if _, _, ok := route(url); ok {
 			t.Fatalf("%s remapped", url)
 		}
 	}

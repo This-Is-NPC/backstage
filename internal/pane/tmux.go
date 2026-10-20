@@ -20,7 +20,9 @@ type Driver interface {
 // Tmux drives panes via tmux send-keys, resolving target names through the
 // manifest (empty/unknown target falls back to the first pane).
 type Tmux struct {
-	Manifest *scene.Manifest
+	Manifest    *scene.Manifest
+	Monitor     string
+	WindowClass string
 	// runEnterGap is the pause between typing a command and pressing Enter.
 	runEnterGap time.Duration
 }

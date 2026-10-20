@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +39,7 @@ func TestTakesPruneMovesAbandonedClip(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &scene.Project{Dir: dir, Record: scene.RecordCfg{Out: "recordings"}}
-	s, err := take.Begin(p, "demo")
+	s, err := take.BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}

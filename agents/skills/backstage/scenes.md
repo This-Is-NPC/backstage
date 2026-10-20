@@ -78,10 +78,12 @@ the stage opens for you.
 
 ## Visual Scenes And Narration
 
-A visual scene declares `type: "visual"`, a leaf-relative HTML `entry` (`..`
-may reach a file in the workspace) and a
-positive `duration`. It does not accept VM, recording layout, steps or reset
-configuration. Use it as a presentation event, not with play or rehearse.
+A visual scene declares `type: "visual"`, a positive `duration`, and exactly
+one of a native JSON `composition` or an HTML `entry`. Entry paths are
+leaf-relative; `..` may reach a file in the workspace. It does not accept VM,
+recording layout, steps or reset configuration. Use it as a presentation event,
+not with play or rehearse. See [declarative.md](declarative.md) for elements,
+visibility and keyframes without a project-specific renderer.
 
 Both scene types can declare `narration: {language, cues}`. Each cue has a unique
 `id`, `start`, `end`, nonempty `text` and optional project-relative `audio` file.

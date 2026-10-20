@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/This-Is-NPC/backstage/internal/facts"
 	"github.com/This-Is-NPC/backstage/internal/scene"
 	"github.com/This-Is-NPC/backstage/internal/take"
 )
@@ -40,14 +41,14 @@ func TestLoadAndPruneDoNotDeadlock(t *testing.T) {
 		Layouts:       map[string]scene.Layout{"solo": {Panes: []scene.Pane{{Name: "t"}}}, "single": {Panes: []scene.Pane{{Name: "t"}}}},
 		Presentations: map[string]scene.PresentationRef{"show": {File: "show.json"}},
 	}
-	s, err := take.Begin(p, "alpha")
+	s, err := take.BeginContext(context.Background(), p, "alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(s.Clip(), []byte("alpha"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.FactsFile(), []byte(`{"result":"ok"}`), 0o644); err != nil {
+	if err := os.WriteFile(facts.Path(s.Clip()), []byte(`{"result":"ok"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Publish(context.Background()); err != nil {

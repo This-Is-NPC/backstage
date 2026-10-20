@@ -150,11 +150,12 @@ func enginePlay(t *testing.T, dir string, m *machine.Manager) *Engine {
 
 func TestProducerTakeThenConsumerSkipsRestore(t *testing.T) {
 	var boots atomic.Int32
-	machine.SetBootGuest(func(*guest.Guest, time.Duration) error {
+	prevBoot := machine.BootGuest
+	machine.BootGuest = func(*guest.Guest, time.Duration) error {
 		boots.Add(1)
 		return nil
-	})
-	t.Cleanup(func() { machine.SetBootGuest(nil) })
+	}
+	t.Cleanup(func() { machine.BootGuest = prevBoot })
 
 	m, initial := liveManaged(t)
 	dir := t.TempDir()

@@ -51,16 +51,17 @@ func writeVisual(t *testing.T, dir string) {
 	}
 }
 
-func captionSwapPlan(t *testing.T) *Plan {
+// captionPlan shows caption ONE for half seconds, then TWO for half seconds.
+func captionPlan(t *testing.T, half float64) *Plan {
 	t.Helper()
 	p := writeFixture(t, Document{
 		Version:  1,
-		Duration: 0.4,
+		Duration: 2 * half,
 		Render:   scene.RenderCfg{W: 160, H: 90, FPS: 10},
 		Timeline: []Event{{At: 0, Scene: "explain"}},
 		Captions: []Caption{
-			{Scene: "explain", Cue: "one", Clock: "presentation", At: 0, Duration: 0.2, Slot: "subtitle"},
-			{Scene: "explain", Cue: "two", Clock: "presentation", At: 0.2, Duration: 0.2, Slot: "subtitle"},
+			{Scene: "explain", Cue: "one", Clock: "presentation", At: 0, Duration: half, Slot: "subtitle"},
+			{Scene: "explain", Cue: "two", Clock: "presentation", At: half, Duration: half, Slot: "subtitle"},
 		},
 	})
 	if err := os.WriteFile(filepath.Join(p.Dir, "scenes", "explain.json"), []byte(`{"type":"visual","entry":"visual.html","duration":10,"narration":{"cues":[{"id":"one","start":0,"end":1,"text":"ONE"},{"id":"two","start":1,"end":2,"text":"TWO"}]}}`), 0o600); err != nil {
@@ -120,7 +121,7 @@ func TestPreviewIntervalExactPixels(t *testing.T) {
 		from, to float64
 	}{
 		{"fade", multiTrackPlan(t), 0.22, 0.35},
-		{"caption", captionSwapPlan(t), 0.2, 0.35},
+		{"caption", captionPlan(t, 0.2), 0.2, 0.35},
 		{"freeze", freezeTailPlan(t), 0.4, 0.6},
 	}
 	for _, c := range cases {
@@ -333,7 +334,7 @@ func TestScaleOneKeepsTodayEncodeArgs(t *testing.T) {
 func TestCodedFrameInterval(t *testing.T) {
 	requireRenderTest(t)
 	useTempCache(t)
-	plan := codedFramePlan(t)
+	plan := codedPlan(t, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	opts := PreviewOpts{From: 0.25, To: 0.75, Scale: 1}
@@ -455,7 +456,7 @@ func TestCountPacketsOnlyPastEndRender(t *testing.T) {
 	t.Cleanup(func() { observeCountPackets = nil })
 	var mid []string
 	observeCountPackets = func(path string) { mid = append(mid, path) }
-	if err := writePreview(ctx, codedFramePlan(t), filepath.Join(t.TempDir(), "mid.mp4"), io.Discard, PreviewOpts{From: 0.25, To: 0.75, Scale: 1}); err != nil {
+	if err := writePreview(ctx, codedPlan(t, 1), filepath.Join(t.TempDir(), "mid.mp4"), io.Discard, PreviewOpts{From: 0.25, To: 0.75, Scale: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if len(mid) != 0 {
@@ -463,7 +464,7 @@ func TestCountPacketsOnlyPastEndRender(t *testing.T) {
 	}
 	var last []string
 	observeCountPackets = func(path string) { last = append(last, path) }
-	if err := writePreview(ctx, codedFramePlan(t), filepath.Join(t.TempDir(), "last.mp4"), io.Discard, PreviewOpts{From: 11.0 / 12.0, To: 1, Scale: 1}); err != nil {
+	if err := writePreview(ctx, codedPlan(t, 1), filepath.Join(t.TempDir(), "last.mp4"), io.Discard, PreviewOpts{From: 11.0 / 12.0, To: 1, Scale: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if len(last) != 0 {
@@ -553,21 +554,21 @@ func resampleTailPlan(t *testing.T, onEnd string) *Plan {
 	return plan
 }
 
-func codedFramePlan(t *testing.T) *Plan {
+func codedPlan(t *testing.T, seconds float64) *Plan {
 	t.Helper()
 	p := writeFixture(t, Document{
 		Version:  1,
-		Duration: 1,
+		Duration: seconds,
 		Render:   scene.RenderCfg{W: 320, H: 180, FPS: 12},
 		Sources:  map[string]Source{"cam": {File: "coded.mp4"}},
 		Tracks:   map[string]Track{"cam": {Source: "cam"}},
 		Timeline: []Event{{At: 0, Layout: "single", Slots: map[string]string{"center": "cam"}}},
-		Audio:    []Audio{{ID: "noise", File: "noise.wav", From: 0, To: 1}},
+		Audio:    []Audio{{ID: "noise", File: "noise.wav", From: 0, To: seconds}},
 	})
-	writeCodedMP4(t, filepath.Join(p.Dir, "coded.mp4"), 320, 180, 12, 1)
+	writeCodedMP4(t, filepath.Join(p.Dir, "coded.mp4"), 320, 180, 12, seconds)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=sin(2*PI*(200+1800*t)*t):s=48000:d=1", "-ac", "2", "-c:a", "pcm_s16le", filepath.Join(p.Dir, "noise.wav")); err != nil {
+	if err := run(ctx, "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc=sin(2*PI*(200+1800*t)*t):s=48000:d="+num(seconds), "-ac", "2", "-c:a", "pcm_s16le", filepath.Join(p.Dir, "noise.wav")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(p.Dir, "full.html"), []byte(fullBleedTemplate), 0o600); err != nil {

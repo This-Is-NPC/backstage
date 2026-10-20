@@ -1,7 +1,8 @@
 # Backstage documentation
 
 Backstage records a real workflow as a video. You write the workflow once. You
-play it again when the product changes.
+play it again when the product changes. It also renders authored visuals from
+JSON elements and keyframes, with optional recordings, captions and audio.
 
 ## Tasks
 
@@ -12,13 +13,14 @@ Read the page for the task you must do.
 - [Create and manage VM stages](how-to-manage-vm-stages.md)
 - [Compose clips into one video](how-to-compose-a-production.md)
 - [Compose a presentation from existing recordings](how-to-compose-presentations.md)
+- [Create a declarative video](how-to-create-a-declarative-video.md)
 
 ## References
 
 - [Scenes](scenes.md) — the scene file and its actions
 - [Configuration](configuration.md) — `backstage.json`
 - [CLI](cli.md) — the commands
-- [Presentations](presentations.md) — timeline, tracks, audio and captions
+- [Presentations](presentations.md) — JSON compositions, cards, timeline, cameras, actions, audio and captions
 - [Templates](templates.md) — HTML/CSS/SVG slots and animation
 - [Design](design.md) — the parts, and why they are separate
 
@@ -30,5 +32,6 @@ Read the page for the task you must do.
 
 - [Architecture](internal/ARCHITECTURE.md)
 - [Presentation implementation](internal/presentations.md)
+- [Rendering and performance decisions](internal/performance.md)
 - [Developer guide](internal/dev-guide.md)
 - [Requirements](internal/requirements.md)

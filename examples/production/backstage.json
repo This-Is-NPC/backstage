@@ -1,0 +1,56 @@
+{
+  "record": {
+    "out": "recordings",
+    "fps": 30
+  },
+  "render": {
+    "w": 1280,
+    "h": 720,
+    "fps": 30
+  },
+  "layouts": {
+    "solo": {
+      "panes": [
+        {
+          "name": "terminal"
+        }
+      ]
+    }
+  },
+  "transitions": {
+    "break": {
+      "cmd": "ffmpeg -v error -y -f lavfi -i color=c=black:s={{w}}x{{h}}:r={{fps}}:d=1 -an -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p '{{out}}'"
+    }
+  },
+  "productions": {
+    "benchmark": {
+      "scenes": [
+        "plain",
+        {
+          "scene": "speed",
+          "speed": [
+            {
+              "until": "2",
+              "rate": 1
+            },
+            {
+              "until": "6",
+              "rate": 2,
+              "badge": "2x"
+            },
+            {
+              "rate": 1
+            }
+          ]
+        },
+        "final"
+      ],
+      "transitions": [
+        {
+          "after": "speed",
+          "use": "break"
+        }
+      ]
+    }
+  }
+}

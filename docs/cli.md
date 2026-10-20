@@ -16,7 +16,8 @@ backstage <command> [args]
 | `backstage setup --stage LAYOUT` | stage a layout only, no recording |
 | `backstage kill` | tear down the stage and dismiss any popup |
 | `backstage stage --help` | create and manage shared VM stages, snapshots and clones |
-| `backstage render NAME` | compose existing media into an MP4 |
+| `backstage render NAME` | compose native visuals and existing media into an MP4 |
+| `backstage export-remotion NAME` | export takes, resolved timing and an editable React project |
 | `backstage preview NAME` | render a temporary preview and open playback controls |
 | `backstage template init NAME` | create an editable presentation template |
 | `backstage config show` | print the merged configuration and the file each key came from |
@@ -320,8 +321,11 @@ See also: [Writing scenes](scenes.md) · [Configuration](configuration.md).
 backstage render NAME [--check] [--out FILE] [--project DIR]
 ```
 
-Composes existing media using the named project presentation. It never records
-scenes, runs hooks or starts VMs. Missing input files are errors.
+Composes native JSON visuals, cards, custom HTML and optional existing media
+using the named project presentation. It never records scenes, runs hooks or
+starts VMs. Missing input files are errors. See
+[Create a declarative video](how-to-create-a-declarative-video.md) for a project
+without recordings or a custom renderer.
 
 | Flag | Effect |
 | --- | --- |
@@ -333,8 +337,10 @@ Output defaults to the presentation's `out`, then `exports/NAME.mp4`. A companio
 HTML can still fail at a later frame after `--check` succeeds. Failed exports do
 not replace an existing MP4. Project `render.workers` is Chromium concurrency
 (one browser per worker); chunks are cut deterministically at event boundaries
-and then into pieces of at most `max(16, 2*fps)` frames. `0` picks a default
-from CPU, memory and the number of segment-cache misses. Ctrl-C cancels every
+and into pieces of at most `max(16, 2*fps)` frames. Transition ends and caption
+visibility changes split those pieces further, never leaving a piece shorter
+than 3 frames. `0` picks a default
+from CPU, memory and the frames that miss the segment cache. Ctrl-C cancels every
 chunk, removes intermediates, and leaves an existing MP4 in place. Progress is
 human lines only (`>> chunk-N …` and `>> render k/n frames`).
 
@@ -382,3 +388,14 @@ by defaults are marked `[default]`. Use it to debug an inheritance chain.
 See [Compose a presentation](how-to-compose-presentations.md) for the workflow,
 [Presentations](presentations.md) for the JSON, and [Templates](templates.md) for
 custom HTML. Rendering requires Chromium, FFmpeg and ffprobe, not a VM.
+## lint
+
+`backstage lint PRESENTATION` validates media and templates, then applies the
+visual rubric: minimum font size, reading time and CTA duration. It reports
+caption fonts from the actual loaded HTML, including custom templates, without
+exporting a video. A theme can raise or lower the minimums. Cards and explicitly
+styled captions are also checked during ordinary presentation loading.
+Arbitrary composition and HTML/SVG text still needs visual review.
+
+Presentation `render`, `preview` and `lint` accept `--aspect 16:9`, `9:16` or
+`1:1`. Use `render --out` to keep separate exports of the same document.

@@ -427,25 +427,16 @@ func (m *Manager) Start(ctx context.Context, r *Record) (*guest.Guest, error) {
 	if err := m.clearAtState(r); err != nil {
 		return nil, err
 	}
-	if err := bootGuest(g, 5*time.Minute); err != nil {
+	if err := BootGuest(g, 5*time.Minute); err != nil {
 		return nil, err
 	}
 	return g, nil
 }
 
-var bootGuest = func(g *guest.Guest, patience time.Duration) error {
+// BootGuest boots a started stage's guest. Tests in other packages replace it
+// to skip the VM boot and must restore the previous value.
+var BootGuest = func(g *guest.Guest, patience time.Duration) error {
 	return g.Start(patience)
-}
-
-// SetBootGuest is a test hook that replaces guest boot. A nil fn restores the real Start.
-func SetBootGuest(fn func(*guest.Guest, time.Duration) error) {
-	if fn == nil {
-		bootGuest = func(g *guest.Guest, patience time.Duration) error {
-			return g.Start(patience)
-		}
-		return
-	}
-	bootGuest = fn
 }
 
 func ParseSize(s string) (uint64, error) {

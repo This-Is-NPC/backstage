@@ -1,6 +1,7 @@
 package production
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -39,7 +40,7 @@ func TestPlanOrder(t *testing.T) {
 func TestPlanNoTrailingTransition(t *testing.T) {
 	// a transition after the last scene has no "next" → dropped.
 	prod := scene.Production{
-		Scenes: refs("a", "b"),
+		Scenes:      refs("a", "b"),
 		Transitions: []scene.TransitionUse{{After: "b", Use: "fade"}},
 	}
 	segs := plan(prod)
@@ -82,7 +83,7 @@ func TestTransitionRenderModeSelection(t *testing.T) {
 
 func TestPlanIntroTransition(t *testing.T) {
 	prod := scene.Production{
-		Scenes: refs("a", "b"),
+		Scenes:      refs("a", "b"),
 		Transitions: []scene.TransitionUse{{After: "", Use: "intro"}, {After: "a", Use: "fade"}},
 	}
 	segs := plan(prod)
@@ -337,7 +338,7 @@ func TestConcatFinalInterruptPreservesExistingOutput(t *testing.T) {
 	}
 	defer func() { newInterruptGuard = oldGuard }()
 
-	err := concatFinal([]string{clip}, out, dir, nil)
+	err := concatFinal(context.Background(), []string{clip}, out, dir, nil)
 	if !errors.Is(err, engine.ErrCommandInterrupted) {
 		t.Fatalf("concatFinal error = %v, want %v", err, engine.ErrCommandInterrupted)
 	}

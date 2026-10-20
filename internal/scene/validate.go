@@ -59,6 +59,11 @@ func (p *Project) ValidateConfig() error {
 	if p.Render.Workers < 0 {
 		return fmt.Errorf("render.workers must not be negative")
 	}
+	switch p.Render.Encoder {
+	case "", "libx264", "vaapi":
+	default:
+		return fmt.Errorf("render.encoder must be libx264 or vaapi")
+	}
 	return p.validateStateGroups()
 }
 
@@ -142,14 +147,20 @@ func (s *Scene) Validate(p *Project) error {
 		ids[cue.ID] = true
 	}
 	if s.Type == "visual" {
-		if s.Duration <= 0 || s.Entry == "" {
-			return fmt.Errorf("visual scene requires entry and positive duration")
+		if s.Duration <= 0 || (s.Entry == "") == (s.Composition == nil) {
+			return fmt.Errorf("visual scene requires positive duration and exactly one of entry or composition")
 		}
 		if s.VM != "" || s.VMStart != nil || s.VMEnd != nil || s.Layout != "" || len(s.Steps) != 0 || s.Recorder != "" || s.Fresh || s.Reset != nil {
 			return fmt.Errorf("visual scene cannot declare recording configuration")
 		}
+		if s.Composition != nil {
+			return s.Composition.validate(p, s.Duration)
+		}
 		_, err := p.InputPath(s.Entry)
 		return err
+	}
+	if s.Composition != nil {
+		return fmt.Errorf("composition requires a visual scene")
 	}
 
 	if err := s.ValidateVMStart(p); err != nil {
@@ -177,7 +188,15 @@ func (s *Scene) Validate(p *Project) error {
 	if len(s.Steps) == 0 {
 		return fmt.Errorf("scene %q: no steps", s.Name)
 	}
+	stepLabels := map[string]bool{}
 	for i, st := range s.Steps {
+		if st.StepID != nil {
+			label := fmt.Sprint(st.StepID)
+			if label == "" || stepLabels[label] {
+				return fmt.Errorf("scene %q: empty or duplicate step label %q", s.Name, label)
+			}
+			stepLabels[label] = true
+		}
 		if st.Action == "" {
 			return fmt.Errorf("scene %q: step %d has no action", s.Name, i+1)
 		}

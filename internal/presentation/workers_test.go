@@ -9,7 +9,7 @@ import (
 
 func mustWorkers(t *testing.T, cfg, nMiss int) int {
 	t.Helper()
-	w, err := resolveWorkers(cfg, nMiss)
+	w, err := resolveWorkers(cfg, nMiss, nMiss*minChunkFrames(10), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,35 +90,76 @@ func TestResolveWorkersAutoMisses(t *testing.T) {
 	}
 }
 
+func TestResolveWorkersAutoFrames(t *testing.T) {
+	resetSeams()
+	defer resetSeams()
+	workerNumCPU = func() int { return 12 }
+	workerMemAvail = func() (uint64, error) { return 100 << 30, nil }
+	for _, tc := range []struct{ nMiss, frames, want int }{
+		{7, 96, 4},
+		{7, 72, 3},
+		{7, 73, 4},
+		{2, 5, 1},
+	} {
+		w, err := resolveWorkers(0, tc.nMiss, tc.frames, 12)
+		if err != nil || w != tc.want {
+			t.Fatalf("%d misses, %d frames: w=%d err=%v want %d", tc.nMiss, tc.frames, w, err, tc.want)
+		}
+	}
+	if w, err := resolveWorkers(7, 7, 72, 12); err != nil || w != 7 {
+		t.Fatalf("explicit ignores frames: w=%d err=%v", w, err)
+	}
+}
+
 func TestResolveWorkersMemAvailError(t *testing.T) {
 	resetSeams()
 	defer resetSeams()
 	boom := errors.New("meminfo: boom")
 	workerMemAvail = func() (uint64, error) { return 0, boom }
-	w, err := resolveWorkers(0, 90)
+	w, err := resolveWorkers(0, 90, 900, 10)
 	if w != 0 || !errors.Is(err, boom) {
 		t.Fatalf("auto w=%d err=%v", w, err)
 	}
-	w, err = resolveWorkers(3, 90)
+	w, err = resolveWorkers(3, 90, 900, 10)
 	if err != nil || w != 3 {
 		t.Fatalf("explicit still works: w=%d err=%v", w, err)
 	}
 }
 
-func TestSplitIndexSlices(t *testing.T) {
-	got := splitIndexSlices(10, 3)
-	want := [][2]int{{0, 4}, {4, 7}, {7, 10}}
-	if len(got) != len(want) {
-		t.Fatalf("%+v", got)
+func TestSplitByFrames(t *testing.T) {
+	jobs := func(sizes ...int) []chunkJob {
+		var out []chunkJob
+		at := 0
+		for i, n := range sizes {
+			out = append(out, chunkJob{chunkRange: chunkRange{Index: i, First: at, End: at + n}})
+			at += n
+		}
+		return out
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("%d: %+v want %+v", i, got[i], want[i])
+	for _, tc := range []struct {
+		sizes   []int
+		workers int
+		want    [][2]int
+	}{
+		{[]int{12, 12, 6, 18, 6, 18, 24}, 4, [][2]int{{0, 2}, {2, 4}, {4, 6}, {6, 7}}},
+		{[]int{6, 6, 6, 6, 6, 18, 24}, 3, [][2]int{{0, 4}, {4, 6}, {6, 7}}},
+		{[]int{24, 24, 24, 24}, 4, [][2]int{{0, 1}, {1, 2}, {2, 3}, {3, 4}}},
+		{[]int{5, 15, 20}, 3, [][2]int{{0, 1}, {1, 2}, {2, 3}}},
+		{[]int{10, 10, 10, 10}, 1, [][2]int{{0, 4}}},
+		{[]int{10, 10}, 5, [][2]int{{0, 1}, {1, 2}}},
+	} {
+		got := splitByFrames(jobs(tc.sizes...), tc.workers)
+		if len(got) != len(tc.want) {
+			t.Fatalf("%v/%d: got %v want %v", tc.sizes, tc.workers, got, tc.want)
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%v/%d: got %v want %v", tc.sizes, tc.workers, got, tc.want)
+			}
 		}
 	}
-	got = splitIndexSlices(4, 1)
-	if len(got) != 1 || got[0] != [2]int{0, 4} {
-		t.Fatalf("%+v", got)
+	if got := splitByFrames(nil, 3); got != nil {
+		t.Fatalf("no jobs: %v", got)
 	}
 }
 
@@ -160,6 +201,84 @@ func TestPlanChunksAnchoredThenClipped(t *testing.T) {
 	}
 }
 
+func TestPlanChunksCaptionVisibilityCuts(t *testing.T) {
+	p := &Plan{
+		FPS:      10,
+		Document: Document{Duration: 4, Timeline: []Event{{At: 0}, {At: 2}}},
+		Text: []TextSpan{
+			{At: 0.5, End: 1.05, Text: "first"},
+			{At: 1.05, End: 2.5, Text: "second"},
+			{At: 3.3, End: 3.3, Text: "invisible"},
+		},
+	}
+	want := []chunkRange{
+		{0, 0, 5, 0},
+		{1, 5, 11, 0},
+		{2, 11, 20, 0},
+		{3, 20, 25, 1},
+		{4, 25, 40, 1},
+	}
+	got := planChunks(p, 0, 40)
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chunk %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	preview := planChunks(p, 7, 30)
+	if len(preview) != 4 || preview[0] != (chunkRange{0, 7, 11, 0}) || preview[1] != (chunkRange{1, 11, 20, 0}) || preview[2] != (chunkRange{2, 20, 25, 1}) || preview[3] != (chunkRange{3, 25, 30, 1}) {
+		t.Fatalf("preview %+v", preview)
+	}
+}
+
+func TestPlanChunksCaptionBoundaryAfterRoundedFrame(t *testing.T) {
+	p := &Plan{
+		FPS:      10,
+		Document: Document{Duration: 4, Timeline: []Event{{At: 0}}},
+		Text:     []TextSpan{{At: 1.00000000001, End: 2, Text: "caption"}},
+	}
+	got := planChunks(p, 0, 40)
+	want := []chunkRange{{0, 0, 11, 0}, {1, 11, 20, 0}, {2, 20, 40, 0}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chunk %d: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestPlanChunksNoShortCutPieces(t *testing.T) {
+	p := &Plan{
+		FPS:      10,
+		Document: Document{Duration: 4, Timeline: []Event{{At: 0}}},
+		Text: []TextSpan{
+			{At: 1, End: 1.1, Text: "short"},
+			{At: 1.9, End: 3, Text: "late"},
+		},
+	}
+	for _, tc := range []struct {
+		first, end int
+		want       []chunkRange
+	}{
+		{0, 40, []chunkRange{{0, 0, 10, 0}, {1, 10, 20, 0}, {2, 20, 30, 0}, {3, 30, 40, 0}}},
+		{9, 31, []chunkRange{{0, 9, 20, 0}, {1, 20, 31, 0}}},
+	} {
+		got := planChunks(p, tc.first, tc.end)
+		if len(got) != len(tc.want) {
+			t.Fatalf("[%d,%d) got %+v, want %+v", tc.first, tc.end, got, tc.want)
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Fatalf("[%d,%d) chunk %d: got %+v, want %+v", tc.first, tc.end, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
 func TestChunkEncodeThreads(t *testing.T) {
 	if chunkEncodeThreads(8, 2) != 4 {
 		t.Fatal(chunkEncodeThreads(8, 2))
@@ -185,7 +304,34 @@ func TestChunkTransition(t *testing.T) {
 		{At: 6, Transition: Transition{Effect: "morph", Duration: 0.5}},
 	}}}
 	chunks := planChunks(p, 0, 80)
-	if chunkTransition(p, chunks[0]) || !chunkTransition(p, chunks[1]) || chunkTransition(p, chunks[2]) || !chunkTransition(p, chunks[3]) {
-		t.Fatalf("%+v t0=%v t1=%v t2=%v t3=%v", chunks, chunkTransition(p, chunks[0]), chunkTransition(p, chunks[1]), chunkTransition(p, chunks[2]), chunkTransition(p, chunks[3]))
+	want := []chunkRange{{0, 0, 20, 0}, {1, 20, 25, 1}, {2, 25, 40, 1}, {3, 40, 60, 1}, {4, 60, 65, 2}, {5, 65, 80, 2}}
+	if len(chunks) != len(want) {
+		t.Fatalf("got %+v, want %+v", chunks, want)
+	}
+	for i := range want {
+		if chunks[i] != want[i] || chunkTransition(p, chunks[i]) != (i == 1 || i == 4) {
+			t.Fatalf("chunk %d: %+v, transition=%v", i, chunks[i], chunkTransition(p, chunks[i]))
+		}
+	}
+}
+
+func TestPlanChunksTransitionAndCaptionCuts(t *testing.T) {
+	p := &Plan{
+		FPS: 10,
+		Document: Document{Duration: 4, Timeline: []Event{
+			{At: 0},
+			{At: 2, Transition: Transition{Effect: "fade", Duration: 0.5}},
+		}},
+		Text: []TextSpan{{At: 2.5, End: 2.8, Text: "caption"}},
+	}
+	got := planChunks(p, 0, 40)
+	want := []chunkRange{{0, 0, 20, 0}, {1, 20, 25, 1}, {2, 25, 28, 1}, {3, 28, 40, 1}}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chunk %d: got %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

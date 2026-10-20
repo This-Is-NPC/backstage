@@ -61,7 +61,7 @@ func TestOpenInvalidManifestFails(t *testing.T) {
 
 func TestOpenManifestWithoutLockFails(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestOpenManifestWithoutLockFails(t *testing.T) {
 
 func TestOpenManifestWithoutLeaseFails(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestOpenManifestWithoutLeaseFails(t *testing.T) {
 
 func TestOpenReadOnlyOutput(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestOpenReadOnlyOutput(t *testing.T) {
 
 func TestOpenRejectsEscapingSymlink(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func chmodTree(t *testing.T, root string, mode os.FileMode) {
 
 func TestOpenDoesNotRepairProjection(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestMissingManifestAndClip(t *testing.T) {
 
 func TestOpenRejectsNestedEscapingClip(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestOpenRejectsNestedEscapingClip(t *testing.T) {
 		t.Fatal(err)
 	}
 	man := Manifest{Version: 1, Generation: pub.Generation, Clip: "sub/x.mp4", Facts: factsName}
-	if err := writeJSON(paths.Manifest(), man); err != nil {
+	if err := writeJSONTracked(paths.Manifest(), man, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(p, "demo"); err == nil {
@@ -223,7 +223,7 @@ func TestOpenRejectsNestedEscapingClip(t *testing.T) {
 
 func TestOpenRejectsSceneDirSymlink(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestOpenRejectsSceneDirSymlink(t *testing.T) {
 
 func TestOpenRejectsInvalidGenerationID(t *testing.T) {
 	p, paths := testProject(t)
-	s, err := Begin(p, "demo")
+	s, err := BeginContext(context.Background(), p, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestOpenRejectsInvalidGenerationID(t *testing.T) {
 	if _, err := s.Publish(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeJSON(paths.Manifest(), Manifest{Version: 1, Generation: "not-an-id", Clip: clipName, Facts: factsName}); err != nil {
+	if err := writeJSONTracked(paths.Manifest(), Manifest{Version: 1, Generation: "not-an-id", Clip: clipName, Facts: factsName}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Open(p, "demo"); err == nil {

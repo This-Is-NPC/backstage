@@ -160,6 +160,10 @@ func TestRenderRecordsTimingsAndBytes(t *testing.T) {
 		t.Fatalf("missing timings line:\n%s", log.String())
 	}
 	facts := readFactsMap(t, out)
+	inputs := asObject(t, facts["inputs"], "inputs")
+	if hash, ok := inputs["builtin:graphics.js"].(string); !ok || len(hash) != 64 {
+		t.Fatal("facts omit the graphics runtime hash")
+	}
 	for _, key := range []string{"version", "presentation", "configuration", "render", "inputs", "tools", "timings"} {
 		if _, ok := facts[key]; !ok {
 			t.Fatalf("facts missing %s", key)
